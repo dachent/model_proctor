@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kimi-router.local/cascade-schema.json",
+  "title": "Static cascade plan (cascade-state.json init payload)",
+  "description": "Planner task list consumed by `cascade.py init` / `cascade.py replan`. The controller's stdlib validator in cascade.py (validate_plan) is the executable authority; this schema is the documentation artifact and mirrors it exactly. See policy/STATIC_CASCADE_SPEC.md section 4.",
+  "type": "object",
+  "required": ["goal", "verifier_set", "tasks", "cost_ceiling_usd"],
+  "additionalProperties": true,
+  "properties": {
+    "goal": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Goal statement for the whole cascade."
+    },
+    "created_at": {
+      "type": "string",
+      "description": "ISO-8601 timestamp; the controller fills it if absent."
+    },
+    "k3_direct_cost_estimate_usd": {
+      "type": ["number", "null"],
+      "description": "Planner self-estimate; logged as a calibration data point only, NEVER used as the cost ceiling (spec section 7)."
+    },
+    "cost_ceiling_usd": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "User-supplied per-goal ceiling until metered history exists. The controller derives cost_warning_usd = 0.5x ceiling; dispatch stops at the ceiling."
+    },
+    "cost_used_usd": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Optional starting cost (normally 0; maintained afterwards by evals/meter.py)."
+    },
+    "verifier_set": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Workspace-relative paths of the FROZEN verifier set (test paths, lint/type configs). Every file must exist at init; sha256 hashes are snapshotted and ANY later change is an automatic reject + escalate (spec section 6)."
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/task" }
+    }
+  },
+  "$defs": {
+    "task": {
+      "type": "object",
+      "required": ["task_id", "objective", "verification", "scope"],
+      "additionalProperties": true,
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique within the plan."
+        },
+        "objective": { "type": "string", "minLength": 1 },
+        "executor": {
+          "type": "string",
+          "enum": ["flash", "pro", "k27", "k3"],
+          "default": "flash",
+          "description": "flash->ds-flash-worker, pro->ds-pro-worker, k27->k27-worker (delegate profiles, must exist in the agents config), k3->native orchestrator subagent."
+        },
+        "pro_reason": {
+          "type": ["string", "null"],
+          "description": "REQUIRED non-empty when executor is 'pro' (spec section 3): no deterministic verifier, cross-file reasoning, or prior flash failure on the same subsystem."
+        },
+        "verification": {
+          "type": "object",
+          "description": "Exactly one of the two shapes.",
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["deterministic"],
+              "properties": {
+                "deterministic": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Command the controller re-runs itself (shell=False, POSIX-shlex split; use forward slashes and quote paths on Windows). Worker-reported output is never trusted."
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": ["qc_review"],
+              "properties": { "qc_review": { "const": true } },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "scope": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Workspace-relative paths the task may touch; used for packet text and post-hoc diff inspection (containment itself is delegate's allowed_workspace_roots)."
+        },
+        "criticality": {
+          "type": "string",
+          "enum": ["normal", "high"],
+          "default": "normal",
+          "description": "high adds +1 executor-attempt cap (5->6) and +1 QC cap (2->3)."
+        },
+        "vision": {
+          "type": "boolean",
+          "default": false,
+          "description": "Planner-set vision marker (spec 9.1 v3.1). Vision-bearing tasks (vision: true OR image-file extensions in scope: .png .jpg .jpeg .gif .bmp .webp .tiff) require a vision-capable executor: k27 or k3. flash/pro are text-only and are rejected at init and again at dispatch."
+        },
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2,
+          "default": 2,
+          "description": "Per-rung attempt budget; resets on each escalation (spec section 5)."
+        }
+      }
+    }
+  }
+}

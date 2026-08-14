@@ -1,0 +1,162 @@
+{
+  "allowed_workspace_roots": [
+    "C:/Users/BorisVaisman/OneDrive - Fertility Specialists Network/Documents/Playground",
+    "C:/Dev/bootstrap-state/kimi-router",
+    "C:/Users/BorisVaisman/V Capital/investing - Documents/_quant_engine"
+  ],
+  "max_task_bytes": 262144,
+  "max_timeout_seconds": 7200,
+  "default_kill_grace_seconds": 5,
+  "max_stdout_bytes": 65536,
+  "max_stderr_bytes": 65536,
+  "agents": {
+    "k27-scout": {
+      "command": [
+        "C:/Users/BorisVaisman/.kimi-code/bin/kimi.exe",
+        "-m",
+        "fireworks/kimi-k2p7-code",
+        "-p"
+      ],
+      "prompt_delivery": "argument",
+      "resume_args": [
+        "-r",
+        "{session_id}"
+      ],
+      "default_timeout": 900,
+      "minimum_timeout": 60,
+      "maximum_timeout": 3600,
+      "environment_allowlist": [
+        "HOME"
+      ],
+      "environment": {},
+      "required_environment": [],
+      "write_allowed": false
+    },
+    "ds-flash-worker": {
+      "command": [
+        "C:/Users/BorisVaisman/.kimi-code/bin/kimi.exe",
+        "-m",
+        "fireworks/deepseek-v4-flash",
+        "-p"
+      ],
+      "prompt_delivery": "argument",
+      "resume_args": [
+        "-r",
+        "{session_id}"
+      ],
+      "default_timeout": 1800,
+      "minimum_timeout": 60,
+      "maximum_timeout": 3600,
+      "environment_allowlist": [
+        "HOME"
+      ],
+      "environment": {},
+      "required_environment": [],
+      "write_allowed": true
+    },
+    "glm-worker": {
+      "command": [
+        "C:/Users/BorisVaisman/.kimi-code/bin/kimi.exe",
+        "-m",
+        "fireworks/glm-5p2",
+        "-p"
+      ],
+      "prompt_delivery": "argument",
+      "resume_args": [
+        "-r",
+        "{session_id}"
+      ],
+      "default_timeout": 1800,
+      "minimum_timeout": 60,
+      "maximum_timeout": 3600,
+      "environment_allowlist": [
+        "HOME"
+      ],
+      "environment": {},
+      "required_environment": [],
+      "write_allowed": false
+    },
+    "codex-advisor": {
+      "command": [
+        "C:/Program Files/nodejs/node.exe",
+        "C:/Users/BorisVaisman/AppData/Roaming/npm/node_modules/@openai/codex/bin/codex.js",
+        "exec",
+        "--sandbox",
+        "read-only",
+        "-"
+      ],
+      "prompt_delivery": "stdin",
+      "default_timeout": 1200,
+      "minimum_timeout": 60,
+      "maximum_timeout": 3600,
+      "environment_allowlist": [
+        "HOME"
+      ],
+      "environment": {},
+      "required_environment": [],
+      "write_allowed": false
+    },
+    "claude-advisor": {
+      "command": [
+        "C:/Users/BorisVaisman/.local/bin/claude.exe",
+        "-p",
+        "--permission-mode",
+        "plan"
+      ],
+      "prompt_delivery": "stdin",
+      "default_timeout": 1200,
+      "minimum_timeout": 60,
+      "maximum_timeout": 3600,
+      "environment_allowlist": [
+        "HOME"
+      ],
+      "environment": {},
+      "required_environment": [],
+      "write_allowed": false
+    },
+    "ds-pro-worker": {
+      "command": [
+        "C:/Users/BorisVaisman/.kimi-code/bin/kimi.exe",
+        "-m",
+        "fireworks/deepseek-v4-pro",
+        "-p"
+      ],
+      "prompt_delivery": "argument",
+      "resume_args": [
+        "-r",
+        "{session_id}"
+      ],
+      "default_timeout": 1800,
+      "minimum_timeout": 60,
+      "maximum_timeout": 3600,
+      "environment_allowlist": [
+        "HOME"
+      ],
+      "environment": {},
+      "required_environment": [],
+      "write_allowed": true
+    },
+    "k27-worker": {
+      "command": [
+        "C:/Users/BorisVaisman/.kimi-code/bin/kimi.exe",
+        "-m",
+        "fireworks/kimi-k2p7-code",
+        "-p"
+      ],
+      "prompt_delivery": "argument",
+      "resume_args": [
+        "-r",
+        "{session_id}"
+      ],
+      "default_timeout": 900,
+      "minimum_timeout": 60,
+      "maximum_timeout": 3600,
+      "environment_allowlist": [
+        "HOME"
+      ],
+      "environment": {},
+      "required_environment": [],
+      "write_allowed": true
+    }
+  }
+}

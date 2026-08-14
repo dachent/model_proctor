@@ -1,0 +1,7 @@
+.orchestrator/tmp/
+cascade/tests/tmp/
+evals/results.jsonl
+evals/blinding-key.json
+evals/scorecard.md
+__pycache__/
+*.pyc

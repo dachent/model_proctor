@@ -1,0 +1,76 @@
+{
+  "allowed_workspace_roots": [
+    "C:/Dev/workspaces"
+  ],
+  "max_task_bytes": 262144,
+  "max_timeout_seconds": 7200,
+  "default_kill_grace_seconds": 5,
+  "max_stdout_bytes": 65536,
+  "max_stderr_bytes": 65536,
+  "max_log_bytes": 67108864,
+  "agents": {
+    "example-coder": {
+      "command": [
+        "C:/absolute/path/to/cli.exe",
+        "--non-interactive"
+      ],
+      "prompt_delivery": "stdin",
+      "resume_args": ["--resume", "{session_id}"],
+      "default_timeout": 1800,
+      "minimum_timeout": 60,
+      "maximum_timeout": 3600,
+      "environment_allowlist": [
+        "PATH",
+        "USERPROFILE",
+        "HOME",
+        "LANG",
+        "TERM",
+        "EXAMPLE_API_KEY"
+      ],
+      "environment": {
+        "EXAMPLE_NON_SECRET": "value"
+      },
+      "required_environment": [
+        "EXAMPLE_API_KEY"
+      ],
+      "write_allowed": false
+    },
+    "example-reviewer": {
+      "command": [
+        "C:/absolute/path/to/review-cli.exe",
+        "--non-interactive",
+        "--read-only"
+      ],
+      "prompt_delivery": "file",
+      "default_timeout": 1200,
+      "minimum_timeout": 60,
+      "maximum_timeout": 3600,
+      "environment_allowlist": [
+        "PATH",
+        "USERPROFILE",
+        "HOME",
+        "LANG",
+        "TERM"
+      ],
+      "environment": {},
+      "required_environment": [],
+      "write_allowed": false
+    },
+    "example-grok": {
+      "command": [
+        "C:/absolute/path/to/grok-cli.exe",
+        "--non-interactive"
+      ],
+      "prompt_delivery": "stdin",
+      "default_timeout": 1200,
+      "minimum_timeout": 60,
+      "maximum_timeout": 3600,
+      "environment_passthrough": true,
+      "environment": {},
+      "required_environment": [
+        "XAI_API_KEY"
+      ],
+      "write_allowed": false
+    }
+  }
+}

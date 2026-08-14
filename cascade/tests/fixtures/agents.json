@@ -1,0 +1,15 @@
+{
+  "allowed_workspace_roots": [],
+  "max_task_bytes": 262144,
+  "max_timeout_seconds": 7200,
+  "default_kill_grace_seconds": 5,
+  "max_stdout_bytes": 65536,
+  "max_stderr_bytes": 65536,
+  "agents": {
+    "ds-flash-worker": { "command": ["python", "fake"], "prompt_delivery": "argument", "default_timeout": 60, "minimum_timeout": 10, "maximum_timeout": 120 },
+    "ds-pro-worker": { "command": ["python", "fake"], "prompt_delivery": "argument", "default_timeout": 60, "minimum_timeout": 10, "maximum_timeout": 120 },
+    "k27-worker": { "command": ["python", "fake"], "prompt_delivery": "argument", "default_timeout": 60, "minimum_timeout": 10, "maximum_timeout": 120 },
+    "codex-advisor": { "command": ["python", "fake"], "prompt_delivery": "stdin", "default_timeout": 60, "minimum_timeout": 10, "maximum_timeout": 120 },
+    "claude-advisor": { "command": ["python", "fake"], "prompt_delivery": "stdin", "default_timeout": 60, "minimum_timeout": 10, "maximum_timeout": 120 }
+  }
+}
