@@ -122,7 +122,7 @@ Each case has a `hidden_test` — a check whose existence is **not visible in th
 
 - Python 3.10.5 (stdlib only, no third-party packages)
 - Git Bash on Windows 11
-- `kimi.exe` at `C:/Users/BorisVaisman/.kimi-code/bin/kimi.exe` (v0.31.0)
+- `kimi.exe` on PATH or at `%USERPROFILE%\.kimi-code\bin\kimi.exe` (v0.31.0+)
 - Skills directories `evals/skills/A`, `evals/skills/B`, `evals/skills/C` (A is empty; B and C you author)
 
 ### 1. Self-test (no kimi invocations, no cost)
@@ -168,7 +168,7 @@ Writes `scorecard.md` with blinded labels, per-case medians, per-category aggreg
 
 ## Run directories
 
-Fixture run dirs live **outside OneDrive** to avoid sync contention:
+Fixture run dirs live **outside cloud-synced folders** (e.g., OneDrive) to avoid sync contention. Default:
 
 ```
 C:/Dev/bootstrap-state/kimi-router/evals/runs/<case_id>/<config>/<rep>/

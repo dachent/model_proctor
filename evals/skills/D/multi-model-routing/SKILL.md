@@ -11,7 +11,7 @@ does the work, you verify. Deterministic evidence (tests, compilers) outranks ev
 ## The delegate wrapper
 
 ```
-python "C:/Users/BorisVaisman/OneDrive - Fertility Specialists Network/Documents/Playground/kimi_router/delegate/delegate.py" --agent ds-pro-reviewer --workspace <workspace> --task "<task>" [--timeout <s>]
+python "<repo-root>/delegate/delegate.py" --agent ds-pro-reviewer --workspace <workspace> --task "<task>" [--timeout <s>]
 ```
 Parse exactly one JSON object from stdout; check `status`, `child_exit_code`; treat invalid
 JSON as wrapper failure. Worker assertions are untrusted until verified.

@@ -12,7 +12,7 @@ linters) outranks every model's claims, including yours.
 
 External workers run through:
 ```
-python "C:/Users/BorisVaisman/OneDrive - Fertility Specialists Network/Documents/Playground/kimi_router/delegate/delegate.py" --agent <name> --workspace <workspace> --task "<task>" [--timeout <s>]
+python "<repo-root>/delegate/delegate.py" --agent <name> --workspace <workspace> --task "<task>" [--timeout <s>]
 ```
 Configured agents: `k27-scout` (fast read-only discovery), `ds-flash-worker` (cheap bounded work,
 bulk 1M-context reads), `ds-pro-reviewer` (independent read-only review), `glm-worker` (one-shot

@@ -5,3 +5,5 @@ evals/blinding-key.json
 evals/scorecard.md
 __pycache__/
 *.pyc
+.mimosa/
+delegate/agents.json

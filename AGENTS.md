@@ -19,7 +19,7 @@ workers (fast scouts, cheap workers, independent reviewers, read-only advisors).
   `install.py`.
 - `policy/delegation-policy.md` — the K3 orchestration policy (routing decision procedure, fire
   rules, task packet schema, budgets, stopping rules, final acceptance gate). The production skill
-  installed to `%USERPROFILE%\.kimi-code\skills\multi-model-routing\` is generated from this.
+  installed to `%USERPROFILE%\.kimi-code\skills\static-cascade\` is derived from this hierarchy.
 - `evals/` — benchmark harness: `cases.yaml` (20 pre-registered cases, tune/holdout split),
   `fixtures/` (deterministic project generators), `run_eval.py` (A/B/C runner), `report.py`
   (scorecard), `skills/{A,B,C}/` (config isolation skill dirs for `--skills-dir`).
@@ -45,9 +45,13 @@ workers (fast scouts, cheap workers, independent reviewers, read-only advisors).
   use `New-CentralGitRepo.ps1` (centralized Git policy); never raw `git init`.
 - Durable installs follow workstation policy: tools to `C:\Tools\kimi-router\`, skills to
   `%USERPROFILE%\.kimi-code\skills\`, each with explicit user confirmation.
-- Eval fixture runs live outside OneDrive at `C:\Dev\bootstrap-state\kimi-router\evals\runs\`.
+- Eval fixture runs live outside cloud-synced folders (default: `C:\Dev\bootstrap-state\kimi-router\evals\runs\`).
 - When delegating coding work from this project, follow `policy/delegation-policy.md`.
 - All work on this tool is managed via the GitHub Issues backlog at
   `dachent/robot_lockstep_ballast` (owner directive 2026-08-14): every unit of work is an issue with
   a `[AREA-NNN]` key, `priority:now|next|parked` labels, a `## Blocked by` section, and a non-empty
   `## Final evidence and handoff` before closing. Parked items carry an explicit activation trigger.
+
+## Status
+
+Research artifact frozen at commit 6095695 (2026-08-13). Governance decision: dachent/robot_lockstep_ballast #16. Installed skill: `static-cascade`.

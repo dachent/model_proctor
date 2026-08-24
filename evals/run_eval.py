@@ -16,7 +16,7 @@ FIXTURES_DIR = os.path.join(SCRIPT_DIR, "fixtures")
 CASES_PATH = os.path.join(SCRIPT_DIR, "cases.yaml")
 RESULTS_PATH = os.path.join(SCRIPT_DIR, "results.jsonl")
 BLINDING_PATH = os.path.join(SCRIPT_DIR, "blinding-key.json")
-KIMI_EXE = r"C:\Users\BorisVaisman\.kimi-code\bin\kimi.exe"
+KIMI_EXE = os.path.join(os.getenv("USERPROFILE", ""), ".kimi-code", "bin", "kimi.exe")
 RUNS_BASE = r"C:\Dev\bootstrap-state\kimi-router\evals\runs"
 
 DEFAULT_REPS = 3
