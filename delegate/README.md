@@ -36,6 +36,13 @@ The wrapper loads `agents.json` from:
 
 See `agents.example.json` for the full annotated schema. Key fields:
 
+**Regenerating a live config (durability doctrine):** `agents.json` is deliberately untracked —
+it contains machine-local absolute paths. It is disposable: to recreate it, copy
+`agents.example.json` to `agents.json`, fill in the real CLI paths / `allowed_workspace_roots` /
+agent roster for the machine, then run `python scripts/install.py` to install and ACL-harden it.
+No other state is required.
+
+
 | Field | Description |
 |---|---|
 | `allowed_workspace_roots` | List of root directories that workspaces must be contained within |

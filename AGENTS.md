@@ -22,8 +22,10 @@ workers (fast scouts, cheap workers, independent reviewers, read-only advisors).
   installed to `%USERPROFILE%\.kimi-code\skills\static-cascade\` is derived from this hierarchy.
 - `evals/` — benchmark harness: `cases.yaml` (20 pre-registered cases, tune/holdout split),
   `fixtures/` (deterministic project generators), `run_eval.py` (A/B/C runner), `report.py`
-  (scorecard), `skills/{A,B,C}/` (config isolation skill dirs for `--skills-dir`).
-- `.orchestrator/tmp/` — session scratch (canaries, review packets, diagnostics). Not durable.
+  (scorecard), `skills/{A,B,C}/` (config isolation skill dirs for `--skills-dir`), and the tracked
+  evidence set (`results.jsonl`, `results-metered.jsonl`, `blinding-key.json`, `scorecard.md`).
+- `.orchestrator/tmp/` — session scratch. Ephemeral by doctrine: deleted 2026-08-25 (DOC-002,
+  issue #25); anything worth keeping must be committed or filed as an issue first.
 
 ## Commands
 
@@ -40,6 +42,10 @@ workers (fast scouts, cheap workers, independent reviewers, read-only advisors).
 
 ## Conventions
 
+- **Durability doctrine (owner directive 2026-08-25):** everything on `C:\` is ephemeral. Only
+  content stored on GitHub is durable or referenceable; anything else must be
+  cloneable/reproducible/derivable from the repo. Session scratch, run envelopes, and local configs
+  either get committed, get filed into issues, or are treated as disposable.
 - Python 3.10, standard library only everywhere.
 - No git mutations without explicit user confirmation. Repository creation on this workstation must
   use `New-CentralGitRepo.ps1` (centralized Git policy); never raw `git init`.
