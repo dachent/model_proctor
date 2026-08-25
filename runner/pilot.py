@@ -109,7 +109,7 @@ def sweep_orphan_homes(max_age_s=3600):
 
 
 def run_case(case, out_root, dry_run, lane_override=None, max_dispatches=None,
-             rep=None, keep_homes=False):
+             rep=None, keep_homes=False, agent_map=None):
     ws = out_root / case["id"]
     if lane_override:
         ws = ws / lane_override
@@ -167,8 +167,10 @@ def run_case(case, out_root, dry_run, lane_override=None, max_dispatches=None,
             run_runner("init", "--workspace", str(ws), "--task", str(task_path))
             summary["switched_to"] = recommendation["to_lane"]
         started = time.time()
-        rc, disp = run_runner("dispatch", "--workspace", str(ws),
-                              "--task", str(task_path),
+        disp_argv = ["dispatch", "--workspace", str(ws), "--task", str(task_path)]
+        if agent_map:
+            disp_argv += ["--agent-map", agent_map]
+        rc, disp = run_runner(*disp_argv,
                               timeout=task["budget"]["timeout_s"] + 300)
         summary["attempts"].append({
             "agent": disp.get("agent"), "lane": disp.get("lane"),
@@ -237,6 +239,11 @@ def main():
                         help="per-case dispatch cap (1 = fixed arm, no rescue)")
     parser.add_argument("--log", default=str(PILOT_LOG),
                         help="summary JSONL to append to")
+    parser.add_argument("--agent-map", default=None,
+                        help="JSON file overriding the lane->agent map "
+                             "(e.g. challenger arm on an existing lane)")
+    parser.add_argument("--arm-name", default=None,
+                        help="label recorded as the arm in the summary")
     parser.add_argument("--keep-kimi-home", action="store_true",
                         help="do not delete the temporary KIMI_CODE_HOME after the run")
     args = parser.parse_args()
@@ -264,9 +271,9 @@ def main():
                          lane_override=args.lane,
                          max_dispatches=args.max_dispatches,
                          rep=rep if args.reps > 1 else None,
-                         keep_homes=args.keep_kimi_home)
-            if args.lane:
-                s["arm"] = args.lane
+                         keep_homes=args.keep_kimi_home,
+                         agent_map=args.agent_map)
+            s["arm"] = args.arm_name or args.lane or "routed"
             summaries.append(s)
             print(json.dumps(s, sort_keys=True), flush=True)
 
