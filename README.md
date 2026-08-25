@@ -256,14 +256,16 @@ tasks the arms are quality-indistinguishable, so cost decides.
 
 | Role | Model | Basis |
 |---|---|---|
-| Default worker (bounded/substantial) | GPT-OSS-120B (`gpt-oss-worker`) | 29/30 hidden on v3 (one flake), $0.053/hidden-pass — 3.0× cheaper than K3, zero systematic discordance |
-| Second (equal quality, ~1.8× faster wall) | GLM-5.2 (`glm-worker`) | 30/30 hidden on v3, $0.097/hidden-pass |
+| Default worker (bounded/substantial) | DeepSeek V4 Flash 0731 (`ds-flash-worker`) | 30/30 hidden on v3, $0.012/hidden-pass — beat GPT-OSS in the 0731 challenger arm (2026-08-25) |
+| Cheap second / fallback | GPT-OSS-120B (`gpt-oss-worker`) | 29/30 hidden on v3 (one flake), $0.014/hidden-pass at corrected prices |
+| Substantial second (equal quality, faster wall) | GLM-5.2 (`glm-worker`) | 30/30 hidden on v3, $0.097/hidden-pass |
 | Marathon / open-ended | Kimi K3 (`k3-worker`) | **Hypothesis only — see Open gaps below** |
 | Cheap scout (vision, misc.) | Kimi K2.7 (`k27-scout`) | Carried from the frozen roster; live |
 | Advisors (read-only, closed triggers) | Codex CLI / Claude CLI | Flat-rate; trigger set in issue #8 — **not yet wired into the runner** (see Open gaps) |
 
-Retired: DeepSeek V4 Flash (404 on Fireworks since 2026-08-25, see #23). DS-Pro is a benchmark
-challenger, not a rung.
+Catalog note: Fireworks moves models to dated snapshot ids — the undated
+`deepseek-v4-flash` alias 404s while `deepseek-v4-flash-0731` is the live deployment
+(probed 2026-08-25, see #23). Roster ids are pinned and re-probed at experiment time.
 
 ---
 

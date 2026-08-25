@@ -57,10 +57,11 @@ STATE_DIR = ".runner"
 LANES = ("flash", "glm", "k3")
 
 # lane -> agent name in delegate's agents.json (roster names per README history).
-# flash lane: gpt-oss-120b — deepseek-v4-flash retired on Fireworks (404,
-# probed 2026-08-25); gpt-oss-120b is the live cheap-worker substitute.
+# flash lane: ds-flash-worker (deepseek-v4-flash-0731 dated snapshot) — restored
+# after the 0731 challenger arm beat gpt-oss-120b on the v3 corpus: 30/30 hidden
+# vs 29/30, $0.0120 vs $0.0143 per hidden-pass (2026-08-25, #23).
 DEFAULT_AGENT_MAP = {
-    "flash": "gpt-oss-worker",
+    "flash": "ds-flash-worker",
     "glm": "glm-worker",
     "k3": "k3-worker",
 }
