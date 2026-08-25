@@ -49,6 +49,7 @@ CATEGORY_FEATURES = {
     "simple_fix":  {"bounded": True, "known_location": True, "objective_acceptance": True},
     "debugging":   {"bounded": True, "known_location": True, "objective_acceptance": True},
     "security":    {"bounded": True, "known_location": True, "objective_acceptance": True},
+    "quality":     {"bounded": True, "known_location": True, "objective_acceptance": True},
     "exploration": {"unfamiliar_repo": True, "objective_acceptance": True},
     "mechanical":  {"multi_module": True, "objective_acceptance": True},
     "multifile":   {"multi_module": True, "objective_acceptance": True},
@@ -78,8 +79,10 @@ def find_wires(session_ids, not_before):
     return sorted(set(wires))
 
 
-def run_case(case, out_root, dry_run):
+def run_case(case, out_root, dry_run, lane_override=None, max_dispatches=None):
     ws = out_root / case["id"]
+    if lane_override:
+        ws = out_root / f"{case['id']}" / lane_override
     ws.mkdir(parents=True, exist_ok=True)
     gen = FIXTURES / f"gen_{case['fixture']}.py"
     subprocess.run([sys.executable, str(gen), str(ws)], check=True,
@@ -91,9 +94,11 @@ def run_case(case, out_root, dry_run):
         "features": dict(CATEGORY_FEATURES[case["category"]]),
         "scope": ["."],
         "verifier": {"argv": ["{python}", "check.py"]},
-        "budget": {"max_dispatches": 3, "max_stagnant": 3,
+        "budget": {"max_dispatches": max_dispatches or 3, "max_stagnant": 3,
                    "timeout_s": min(case["timeout_seconds"] * 2, 600)},
     }
+    if lane_override:
+        task["lane"] = lane_override
     task_path = ws / "task.json"
     task_path.write_text(json.dumps(task, indent=2), encoding="utf-8")
 
@@ -173,6 +178,12 @@ def main():
     parser.add_argument("--cases", default=None, help="comma-separated case ids")
     parser.add_argument("--out-dir", default=DEFAULT_OUT)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--lane", choices=("flash", "glm", "k3"), default=None,
+                        help="force this lane for every case (fixed-arm mode)")
+    parser.add_argument("--max-dispatches", type=int, default=None,
+                        help="per-case dispatch cap (1 = fixed arm, no rescue)")
+    parser.add_argument("--log", default=str(PILOT_LOG),
+                        help="summary JSONL to append to")
     args = parser.parse_args()
 
     cases = {c["id"]: c for c in json.loads(CASES.read_text(encoding="utf-8"))}
@@ -183,12 +194,15 @@ def main():
     summaries = []
     for cid in ids:
         print(f"=== {cid} ===", flush=True)
-        s = run_case(cases[cid], out_root, args.dry_run)
+        s = run_case(cases[cid], out_root, args.dry_run,
+                     lane_override=args.lane, max_dispatches=args.max_dispatches)
+        if args.lane:
+            s["arm"] = args.lane
         summaries.append(s)
         print(json.dumps(s, sort_keys=True), flush=True)
 
     if not args.dry_run:
-        with open(PILOT_LOG, "a", encoding="utf-8") as f:
+        with open(args.log, "a", encoding="utf-8") as f:
             for s in summaries:
                 f.write(json.dumps(s, sort_keys=True) + "\n")
         n = len(summaries)
@@ -198,7 +212,7 @@ def main():
                    for s in summaries)
         print(f"\npilot: {ok}/{n} accepted, {hidden}/{n} hidden-pass, "
               f"total metered cost ${cost:.4f}")
-        print(f"summary appended to {PILOT_LOG}")
+        print(f"summary appended to {args.log}")
 
 
 if __name__ == "__main__":

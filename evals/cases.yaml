@@ -243,5 +243,115 @@
     "invariants": [],
     "timeout_seconds": 900,
     "initially_failing": true
+  },
+  {
+    "id": "q1_lru_cache",
+    "category": "quality",
+    "set": "v2",
+    "fixture": "q1_lru_cache",
+    "task_prompt": "Implement the LRUCache class in cache.py. LRUCache(capacity) creates a cache with the given capacity (capacity >= 1). get(key) returns the cached value, or -1 if the key is absent, and a successful get refreshes the entry's recency. put(key, value) inserts or updates an entry; put on an existing key updates the value and refreshes its recency. When the cache is full, put evicts the least-recently-used entry. Both get and put must run in O(1) average time. Run: python check.py to verify your work.",
+    "acceptance": {"command": "python check.py", "expect_exit": 0},
+    "hidden_test": {"command": "python hidden_check.py", "expect_exit": 0},
+    "timeout_seconds": 240,
+    "initially_failing": true
+  },
+  {
+    "id": "q2_interval_merge",
+    "category": "quality",
+    "set": "v2",
+    "fixture": "q2_interval_merge",
+    "task_prompt": "Implement merge(intervals) in intervals.py. intervals is a list of [a, b] closed intervals with a <= b, and the input may be unsorted. Merge intervals that overlap OR touch: [1, 2] and [2, 3] merge to [1, 3]. Return the merged intervals as a list of [a, b] lists sorted by start. The input list must not be mutated. Empty input returns []. Run: python check.py to verify your work.",
+    "acceptance": {"command": "python check.py", "expect_exit": 0},
+    "hidden_test": {"command": "python hidden_check.py", "expect_exit": 0},
+    "timeout_seconds": 240,
+    "initially_failing": true
+  },
+  {
+    "id": "q3_json_patch",
+    "category": "quality",
+    "set": "v2",
+    "fixture": "q3_json_patch",
+    "task_prompt": "Implement apply_patch(doc, ops) in patch.py, applying a restricted JSON Patch subset. ops is a list of operation dicts, each with keys op (one of add, remove, replace), path (an RFC 6901 JSON Pointer), and value (required for add and replace). Pointer segments unescape ~0 to ~ and ~1 to /. For arrays, the index - means append (valid for add only). remove of a non-existent path raises KeyError. apply_patch returns a NEW document and never mutates the input. Run: python check.py to verify your work.",
+    "acceptance": {"command": "python check.py", "expect_exit": 0},
+    "hidden_test": {"command": "python hidden_check.py", "expect_exit": 0},
+    "timeout_seconds": 240,
+    "initially_failing": true
+  },
+  {
+    "id": "q4_retry_decorator",
+    "category": "quality",
+    "set": "v2",
+    "fixture": "q4_retry_decorator",
+    "task_prompt": "Implement retry(max_attempts=3, exceptions=(Exception,), backoff=0) in retry.py, a decorator factory. The wrapped function is called up to max_attempts times. Only exceptions that are instances of exceptions are retried; any other exception propagates immediately on first raise. After attempts are exhausted, the LAST raised exception is re-raised as the identical exception object. Before retry number i (1-based) it sleeps backoff * 2**(i-1) seconds. The wrapped function's __name__ and __doc__ are preserved. Run: python check.py to verify your work.",
+    "acceptance": {"command": "python check.py", "expect_exit": 0},
+    "hidden_test": {"command": "python hidden_check.py", "expect_exit": 0},
+    "timeout_seconds": 240,
+    "initially_failing": true
+  },
+  {
+    "id": "q5_topk_stream",
+    "category": "quality",
+    "set": "v2",
+    "fixture": "q5_topk_stream",
+    "task_prompt": "Implement the TopK class in topk.py. TopK(k) tracks the k largest values added so far; k may be 0, in which case result() always returns []. add(x) adds a value. result() returns the k largest values added so far as a list sorted descending; equal values are ordered by insertion (earlier first). result() may be called any number of times interleaved with add() and must reflect all adds so far. Run: python check.py to verify your work.",
+    "acceptance": {"command": "python check.py", "expect_exit": 0},
+    "hidden_test": {"command": "python hidden_check.py", "expect_exit": 0},
+    "timeout_seconds": 240,
+    "initially_failing": true
+  },
+  {
+    "id": "q6_config_precedence",
+    "category": "quality",
+    "set": "v2",
+    "fixture": "q6_config_precedence",
+    "task_prompt": "Implement load_config(defaults, file_cfg, env, cli) in config.py. All four arguments are dicts, and values in file_cfg, env and cli are strings. Precedence is cli > env > file_cfg > defaults. Any key in file_cfg, env or cli that is NOT present in defaults raises ValueError. String values are coerced to the type of the corresponding default, supporting str, int and bool: bool accepts true/false case-insensitive, and int is parsed from decimal strings. Return the merged dict. Run: python check.py to verify your work.",
+    "acceptance": {"command": "python check.py", "expect_exit": 0},
+    "hidden_test": {"command": "python hidden_check.py", "expect_exit": 0},
+    "timeout_seconds": 240,
+    "initially_failing": true
+  },
+  {
+    "id": "q7_dag_topo",
+    "category": "quality",
+    "set": "v2",
+    "fixture": "q7_dag_topo",
+    "task_prompt": "Implement topo_sort(nodes, edges) in dag.py. nodes is a list of names and edges is a list of (from, to) tuples. Return a valid topological ordering of all nodes. When several nodes are simultaneously available, choose the lexicographically smallest name first, so the output is fully deterministic. A cycle raises ValueError. An edge referencing an unknown node raises ValueError. Empty nodes returns []. Run: python check.py to verify your work.",
+    "acceptance": {"command": "python check.py", "expect_exit": 0},
+    "hidden_test": {"command": "python hidden_check.py", "expect_exit": 0},
+    "timeout_seconds": 240,
+    "initially_failing": true
+  },
+  {
+    "id": "q8_text_justify",
+    "category": "quality",
+    "set": "v2",
+    "fixture": "q8_text_justify",
+    "task_prompt": "Implement justify(words, width) in justify.py, returning a list of strings. Pack as many words per line as possible, greedily. For non-last lines with more than one word, distribute spaces so gaps differ by at most one space and left gaps receive the extra space. Every returned line is exactly width characters long. A line containing a single word is left-justified (padded on the right). The last line is left-justified with single spaces between words. A word longer than width raises ValueError. Run: python check.py to verify your work.",
+    "acceptance": {"command": "python check.py", "expect_exit": 0},
+    "hidden_test": {"command": "python hidden_check.py", "expect_exit": 0},
+    "timeout_seconds": 240,
+    "initially_failing": true
+  },
+  {
+    "id": "q9_rate_limiter",
+    "category": "quality",
+    "set": "v2",
+    "fixture": "q9_rate_limiter",
+    "task_prompt": "Implement the RateLimiter class in limiter.py. RateLimiter(limit, window_seconds) allows at most limit calls per sliding window of window_seconds seconds. allow(t) takes a float timestamp t in seconds: it returns True and records the call when fewer than limit calls were allowed within the sliding interval (t - window_seconds, t]; a call exactly at t - window_seconds counts as expired. Otherwise it returns False. Only allowed calls are recorded. Calls may arrive with any t, not necessarily non-decreasing. Run: python check.py to verify your work.",
+    "acceptance": {"command": "python check.py", "expect_exit": 0},
+    "hidden_test": {"command": "python hidden_check.py", "expect_exit": 0},
+    "timeout_seconds": 240,
+    "initially_failing": true
+  },
+  {
+    "id": "q10_parse_expr",
+    "category": "quality",
+    "set": "v2",
+    "fixture": "q10_parse_expr",
+    "task_prompt": "Implement evaluate(expr) in expr.py, evaluating an arithmetic expression string. Support + - * / with standard precedence, parentheses, unary minus, and arbitrary whitespace. Return the result as a float. Division by zero raises ZeroDivisionError. A malformed expression raises ValueError. Run: python check.py to verify your work.",
+    "acceptance": {"command": "python check.py", "expect_exit": 0},
+    "hidden_test": {"command": "python hidden_check.py", "expect_exit": 0},
+    "timeout_seconds": 240,
+    "initially_failing": true
   }
 ]
