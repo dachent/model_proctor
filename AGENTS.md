@@ -17,6 +17,11 @@ workers (fast scouts, cheap workers, independent reviewers, read-only advisors).
 - `scripts/` — `extract_log.py` (deterministic wire.jsonl fact extractor + coverage
   manifest; verifier-class, hash-frozen per goal), tests in `scripts/tests/`,
   `install.py`.
+- `runner/` — the MVP-001 thin control plane (`runner.py`): frozen task-start lane
+  selection, delegate-wrapper dispatch, leader-side verification with tree-bound
+  receipts and a config-surface manifest, stagnation switching, append-only task
+  records. Smoke suite in `runner/tests/` (S1–S6 + git-root cases). Designs out the
+  frozen cascade's trust-boundary defects (#17–#20) rather than patching them.
 - `policy/delegation-policy.md` — the K3 orchestration policy (routing decision procedure, fire
   rules, task packet schema, budgets, stopping rules, final acceptance gate). The production skill
   installed to `%USERPROFILE%\.kimi-code\skills\static-cascade\` is derived from this hierarchy.
@@ -32,6 +37,7 @@ workers (fast scouts, cheap workers, independent reviewers, read-only advisors).
 - Wrapper tests: `python -m unittest discover -s delegate/tests -v`
 - Cascade tests: `python -m unittest discover -s cascade/tests -v`
 - Extractor tests: `python -m unittest discover -s scripts/tests -v`
+- Runner smoke suite (MVP-001): `python -m unittest discover -s runner/tests -v`
 - Delegate a task: `python delegate/delegate.py --agent <name> --workspace <path> --task "<text>"`
 - Cascade extras: `python cascade/cascade.py commit-green|rollback --workspace <w> --task <id>`,
   `handoff --workspace <w>`, `record-decision --workspace <w> --decision ... --rationale ... --source user|leader`

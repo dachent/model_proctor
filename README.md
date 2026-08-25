@@ -217,7 +217,13 @@ Start here: [Issues](../../issues).
 
 ## Status
 
-Working software, dogfooded daily against a real financial-controls codebase. The controller,
-wrapper, and extractor are test-covered (169 tests total) and installed via `scripts/install.py`.
-The benchmark suite is retained as regression infrastructure — its negative result is part of this
-repo's value.
+Research artifact frozen at 6095695 (2026-08-13); governance: issue #16 — the bespoke cascade
+carries no production authority. The wrapper, controller, and extractor are test-covered and
+installed via `scripts/install.py`. The benchmark suite is retained as regression
+infrastructure — its negative result is part of this repo's value.
+
+The live experiment path is `runner/` (MVP-001, issue #27): a thin task-owning control plane
+with tree-bound acceptance receipts, config-surface verification, and stagnation switching —
+designing out the frozen cascade's #17–#20 defects instead of patching them. Policy:
+`skill/task-router/SKILL.md` (installed alongside `static-cascade`). Smoke suite:
+`python -m unittest discover -s runner/tests -v`.
