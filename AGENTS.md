@@ -25,7 +25,8 @@ workers (fast scouts, cheap workers, independent reviewers, read-only advisors).
 - `policy/delegation-policy.md` — the K3 orchestration policy (routing decision procedure, fire
   rules, task packet schema, budgets, stopping rules, final acceptance gate). The production skill
   installed to `%USERPROFILE%\.kimi-code\skills\static-cascade\` is derived from this hierarchy.
-- `evals/` — benchmark harness: `cases.yaml` (20 pre-registered cases, tune/holdout split),
+- `evals/` — benchmark harness: `cases.yaml` (42 cases: 20 v1 tune/holdout + 2 showcase +
+  10 v2 + 10 v3 quality sets),
   `fixtures/` (deterministic project generators), `run_eval.py` (A/B/C runner), `report.py`
   (scorecard), `skills/{A,B,C}/` (config isolation skill dirs for `--skills-dir`), and the tracked
   evidence set (`results.jsonl`, `results-metered.jsonl`, `blinding-key.json`, `scorecard.md`).

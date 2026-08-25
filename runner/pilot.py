@@ -79,10 +79,13 @@ def find_wires(session_ids, not_before):
     return sorted(set(wires))
 
 
-def run_case(case, out_root, dry_run, lane_override=None, max_dispatches=None):
+def run_case(case, out_root, dry_run, lane_override=None, max_dispatches=None,
+             rep=None):
     ws = out_root / case["id"]
     if lane_override:
-        ws = out_root / f"{case['id']}" / lane_override
+        ws = ws / lane_override
+    if rep is not None:
+        ws = ws / f"rep{rep}"
     ws.mkdir(parents=True, exist_ok=True)
     gen = FIXTURES / f"gen_{case['fixture']}.py"
     subprocess.run([sys.executable, str(gen), str(ws)], check=True,
@@ -110,6 +113,8 @@ def run_case(case, out_root, dry_run, lane_override=None, max_dispatches=None):
     t0 = time.time()
     summary = {"task_id": case["id"], "category": case["category"],
                "set": case["set"], "attempts": []}
+    if rep is not None:
+        summary["rep"] = rep
 
     rc, out = run_runner("init", "--workspace", str(ws), "--task", str(task_path))
     if rc != 0:
@@ -180,6 +185,8 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--lane", choices=("flash", "glm", "k3"), default=None,
                         help="force this lane for every case (fixed-arm mode)")
+    parser.add_argument("--reps", type=int, default=1,
+                        help="repetitions per case (fresh fixture workspace each)")
     parser.add_argument("--max-dispatches", type=int, default=None,
                         help="per-case dispatch cap (1 = fixed arm, no rescue)")
     parser.add_argument("--log", default=str(PILOT_LOG),
@@ -193,13 +200,17 @@ def main():
 
     summaries = []
     for cid in ids:
-        print(f"=== {cid} ===", flush=True)
-        s = run_case(cases[cid], out_root, args.dry_run,
-                     lane_override=args.lane, max_dispatches=args.max_dispatches)
-        if args.lane:
-            s["arm"] = args.lane
-        summaries.append(s)
-        print(json.dumps(s, sort_keys=True), flush=True)
+        for rep in range(1, args.reps + 1):
+            label = f"{cid} rep{rep}" if args.reps > 1 else cid
+            print(f"=== {label} ===", flush=True)
+            s = run_case(cases[cid], out_root, args.dry_run,
+                         lane_override=args.lane,
+                         max_dispatches=args.max_dispatches,
+                         rep=rep if args.reps > 1 else None)
+            if args.lane:
+                s["arm"] = args.lane
+            summaries.append(s)
+            print(json.dumps(s, sort_keys=True), flush=True)
 
     if not args.dry_run:
         with open(args.log, "a", encoding="utf-8") as f:

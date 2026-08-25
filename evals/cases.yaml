@@ -353,5 +353,115 @@
     "hidden_test": {"command": "python hidden_check.py", "expect_exit": 0},
     "timeout_seconds": 240,
     "initially_failing": true
+  },
+  {
+    "id": "q11_version_resolver",
+    "category": "quality",
+    "set": "v3",
+    "fixture": "q11_version_resolver",
+    "task_prompt": "Implement resolve(requirements, available) in resolver.py. requirements is a dict mapping package name to a constraint string; available maps package name to a list of version strings. A constraint string is a comma-separated list of clauses; each clause is one of the operators ==, >=, < or ~= followed by a version. ~= is the compatible-release operator: ~=X.Y means >=X.Y, <(X+1).0 and ~=X.Y.Z means >=X.Y.Z, <X.(Y+1).0. All clauses of a constraint must hold for a version to satisfy it. Versions are dot-separated non-negative integers compared numerically component by component (so 1.10 > 1.9); when two versions have different numbers of components the shorter one is padded with zeros (so 1.2 == 1.2.0). Resolution chooses the highest available version of each package that satisfies its constraint. If any package has no satisfying version (including a required package absent from available), raise ValueError naming the package. The result is a dict mapping every required package to its chosen version string; every required package must appear in the result. Run: python check.py to verify your work.",
+    "acceptance": {"command": "python check.py", "expect_exit": 0},
+    "hidden_test": {"command": "python hidden_check.py", "expect_exit": 0},
+    "timeout_seconds": 360,
+    "initially_failing": true
+  },
+  {
+    "id": "q12_streaming_median",
+    "category": "quality",
+    "set": "v3",
+    "fixture": "q12_streaming_median",
+    "task_prompt": "Implement the MedianTracker class in median.py. MedianTracker() creates an empty tracker. add(x) adds one numeric value; duplicate values are supported. remove(x) removes ONE instance of x and raises ValueError if x is not present. median() returns the current median; when the count of values is even it returns the LOWER of the two middle values; it raises ValueError when the tracker is empty. add, remove and median may be interleaved in any order. Run: python check.py to verify your work.",
+    "acceptance": {"command": "python check.py", "expect_exit": 0},
+    "hidden_test": {"command": "python hidden_check.py", "expect_exit": 0},
+    "timeout_seconds": 360,
+    "initially_failing": true
+  },
+  {
+    "id": "q13_mini_interpreter",
+    "category": "quality",
+    "set": "v3",
+    "fixture": "q13_mini_interpreter",
+    "task_prompt": "Implement run(program) in interp.py, an interpreter for a tiny language. program is a string of lines; each line is either an assignment '<name> = <expr>' or a print statement 'print <expr>' (a line whose first token is print). Blank lines and lines whose first non-space character is # are ignored. Expressions support integer literals, variable names (matching [A-Za-z_][A-Za-z0-9_]*), the binary operators + - * / with standard precedence (* and / bind tighter than + and -), parentheses, and unary minus. / is integer division truncated toward zero, so -7 / 2 == -3 and 7 / -2 == -3. Using an undefined variable raises NameError. Division by zero raises ZeroDivisionError. A line that is neither a valid assignment nor a valid print statement, or an expression with malformed syntax, raises ValueError. run returns the list of printed values as strings, in the order printed. Run: python check.py to verify your work.",
+    "acceptance": {"command": "python check.py", "expect_exit": 0},
+    "hidden_test": {"command": "python hidden_check.py", "expect_exit": 0},
+    "timeout_seconds": 360,
+    "initially_failing": true
+  },
+  {
+    "id": "q14_diff_apply",
+    "category": "quality",
+    "set": "v3",
+    "fixture": "q14_diff_apply",
+    "task_prompt": "Implement apply_patch(text, patch) in diff.py. text is split into lines on '\\n' and the result is the lines joined on '\\n'. patch consists of one or more hunks; a hunk starts with a header line '@@ <start> <count> @@' where start is a 1-based line number in the ORIGINAL text and count is the number of original lines the hunk covers. In a hunk body (all lines until the next header or end of patch), lines starting with '-' delete an original line, lines starting with '+' insert a new line, and lines starting with a single space are context lines; any other body line is malformed and raises ValueError. The context and deletion lines of a hunk, in order, must exactly equal the count original lines starting at start; any mismatch or a wrong number of consumed lines raises ValueError. A hunk replaces its original slice with the kept context and inserted lines, in order; with count 0 the '+' lines are inserted immediately before original line start (start may be one past the last line to append at the end). Hunks are given in ascending start order and never overlap; line numbers always refer to the ORIGINAL text, so earlier hunks must not shift where later hunks apply. apply_patch returns the patched string. Run: python check.py to verify your work.",
+    "acceptance": {"command": "python check.py", "expect_exit": 0},
+    "hidden_test": {"command": "python hidden_check.py", "expect_exit": 0},
+    "timeout_seconds": 360,
+    "initially_failing": true
+  },
+  {
+    "id": "q15_lru_ttl",
+    "category": "quality",
+    "set": "v3",
+    "fixture": "q15_lru_ttl",
+    "task_prompt": "Implement the LRUCache class in cache.py: LRUCache(capacity, ttl_seconds) with capacity >= 1 and ttl_seconds > 0. get(key, now=0.0) and put(key, value, now=0.0) take an optional float timestamp now in seconds (0.0 when omitted). An entry put at time t is live while now < t + ttl_seconds and is expired when now >= t + ttl_seconds; the TTL is anchored to the LAST put of that key. get does NOT extend the TTL, but a successful get DOES refresh the entry's LRU recency. get of an expired or missing key returns -1. Expired entries are treated as absent for capacity purposes: they are removed lazily and never force an eviction. When a put of a new key would exceed capacity, the least-recently-used LIVE entry is evicted. put on an existing key updates the value, refreshes recency, and re-anchors the TTL to the new put time. Run: python check.py to verify your work.",
+    "acceptance": {"command": "python check.py", "expect_exit": 0},
+    "hidden_test": {"command": "python hidden_check.py", "expect_exit": 0},
+    "timeout_seconds": 360,
+    "initially_failing": true
+  },
+  {
+    "id": "q16_calendar_scheduler",
+    "category": "quality",
+    "set": "v3",
+    "fixture": "q16_calendar_scheduler",
+    "task_prompt": "Implement schedule(events, day_start, day_end) in cal.py. Each event is a dict with keys name (str), duration (int minutes, > 0), priority (int; LOWER means more important), and not_before (int minutes since midnight). Place events greedily in priority order; break ties by earlier not_before, then by name in alphabetical order. Each event goes in its earliest fitting slot: the earliest start >= max(not_before, day_start) such that [start, start + duration) does not overlap any already-placed event and start + duration <= day_end. Back-to-back packing is allowed: an event may start exactly when another ends (end == next start is not an overlap). Events that cannot fit are dropped silently. Return a list of (name, start, end) tuples sorted by start. Run: python check.py to verify your work.",
+    "acceptance": {"command": "python check.py", "expect_exit": 0},
+    "hidden_test": {"command": "python hidden_check.py", "expect_exit": 0},
+    "timeout_seconds": 360,
+    "initially_failing": true
+  },
+  {
+    "id": "q17_json_diff",
+    "category": "quality",
+    "set": "v3",
+    "fixture": "q17_json_diff",
+    "task_prompt": "Implement diff(a, b) and apply_diff(a, ops) in jdiff.py for JSON-like structures (dicts, lists, strings, numbers, booleans, None). diff returns a list of ops, each a dict {\"op\": \"set\", \"path\": [...], \"value\": v} or {\"op\": \"delete\", \"path\": [...]}, where a path is a list of dict keys (strings) and list indices (ints). Dicts recurse: keys in both are recursed into, keys only in b produce set ops, keys only in a produce delete ops. Lists are compared element-wise by index: index i of a is diffed against index i of b; if b has extra elements they are added with set ops whose final path component is an index equal to the list length at apply time (a set at index == len(list) appends); if a has extra elements they are removed with delete ops emitted from the highest index downward. Scalars, and any value whose type differs from its counterpart, produce a single set op at that path when the values are not equal. Ops are emitted so that applying them in order transforms a into b, with dict keys processed in sorted order. diff returns [] when a == b. apply_diff(a, ops) returns the patched structure and must NOT mutate a; a delete op removes the dict key or list element at its path; apply_diff(a, diff(a, b)) == b must hold. Run: python check.py to verify your work.",
+    "acceptance": {"command": "python check.py", "expect_exit": 0},
+    "hidden_test": {"command": "python hidden_check.py", "expect_exit": 0},
+    "timeout_seconds": 360,
+    "initially_failing": true
+  },
+  {
+    "id": "q18_template_engine",
+    "category": "quality",
+    "set": "v3",
+    "fixture": "q18_template_engine",
+    "task_prompt": "Implement render(template, context) in tmpl.py. Literal text passes through unchanged. {{ name }} substitutes a value from context; whitespace inside the braces is ignored; dotted names do nested lookup ({{ user.name }} looks up context[\"user\"][\"name\"]); names are dot-separated identifiers. Substituted values are HTML-escaped: & -> &amp;, < -> &lt;, > -> &gt;, \" -> &quot;, ' -> &#x27; (& is escaped first); non-string values are converted with str() before escaping. {{{ name }}} substitutes the value WITHOUT escaping, with the same lookup rules. A missing key at any point of the lookup raises KeyError. A {{ or {{{ tag that is never closed raises ValueError; an empty or malformed name inside braces raises ValueError. Single braces and any other text are literal. Run: python check.py to verify your work.",
+    "acceptance": {"command": "python check.py", "expect_exit": 0},
+    "hidden_test": {"command": "python hidden_check.py", "expect_exit": 0},
+    "timeout_seconds": 360,
+    "initially_failing": true
+  },
+  {
+    "id": "q19_token_bucket",
+    "category": "quality",
+    "set": "v3",
+    "fixture": "q19_token_bucket",
+    "task_prompt": "Implement the TokenBucket class in bucket.py: TokenBucket(capacity, refill_per_second) with capacity > 0 and refill_per_second >= 0. The bucket starts FULL (it holds capacity tokens at time 0). Tokens refill continuously at refill_per_second tokens per second, up to but never above capacity. allow(t, cost=1.0) takes a float time t in seconds (calls arrive with non-decreasing t) and a possibly fractional cost. Whether or not the call is allowed, the stored level is first refilled for the elapsed time since the previous call: level = min(capacity, level + (t - t_prev) * refill_per_second). Then, if level >= cost, allow returns True and deducts cost; otherwise it returns False and deducts nothing. Run: python check.py to verify your work.",
+    "acceptance": {"command": "python check.py", "expect_exit": 0},
+    "hidden_test": {"command": "python hidden_check.py", "expect_exit": 0},
+    "timeout_seconds": 360,
+    "initially_failing": true
+  },
+  {
+    "id": "q20_csv_parse",
+    "category": "quality",
+    "set": "v3",
+    "fixture": "q20_csv_parse",
+    "task_prompt": "Implement parse(text) in csvparse.py, an RFC-4180-ish CSV parser returning a list of rows, each a list of field strings. Fields are separated by commas and rows by newlines. CRLF line endings are normalized: every '\\r\\n' is treated as '\\n' before parsing (a lone '\\r' elsewhere is an ordinary character). A trailing newline does NOT create an empty final row, so \"a\\n\" and \"a\" both parse to [[\"a\"]]; a blank line in the middle is a row containing one empty field. Empty input returns []. A field wrapped in double quotes may contain commas, newlines, and literal double quotes escaped as \"\" (two double-quote characters). A quoted field's closing quote must be immediately followed by a comma, a newline, or end of input; anything else raises ValueError. A quoted field that is never closed raises ValueError. Unquoted fields are taken verbatim: no trimming of whitespace, and a double quote inside an unquoted field is an ordinary character. Run: python check.py to verify your work.",
+    "acceptance": {"command": "python check.py", "expect_exit": 0},
+    "hidden_test": {"command": "python hidden_check.py", "expect_exit": 0},
+    "timeout_seconds": 360,
+    "initially_failing": true
   }
 ]
