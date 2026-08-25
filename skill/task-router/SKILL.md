@@ -1,11 +1,13 @@
 ---
 name: task-router
-description: vNext task-owning worker policy (MVP-001, issue #27) — classify a task into a frozen lane (Flash bounded / GLM substantial / K3 marathon), dispatch through runner/runner.py, verify with tree-bound receipts, switch on stagnation rather than fixed rungs. Use for substantial coding tasks when the runner is available. Do NOT use for trivial tasks (known location, one edit-test cycle) — execute those directly. Supersedes nothing yet; static-cascade remains the frozen reference. Requires runner/runner.py in the project.
+description: vNext task-owning worker policy (MVP-001, issue #27) — classify a task into a frozen lane (Flash bounded / GLM substantial / K3 marathon), dispatch through the installed runner (C:/Tools/model-proctor/runner.py), verify with tree-bound receipts, switch on stagnation rather than fixed rungs. Use for substantial coding tasks. Do NOT use for trivial tasks (known location, one edit-test cycle) — execute those directly. Supersedes nothing yet; static-cascade remains the frozen reference. Requires the model-proctor install (scripts/install.py).
 ---
 
 # Task Router Policy (vNext MVP)
 
-You are the leader. The deterministic control plane is `runner/runner.py` — prompts do not
+You are the leader. The deterministic control plane is the installed runner,
+`C:/Tools/model-proctor/runner.py` (repo copy: `runner/runner.py`; delegate transport and the
+agent roster live alongside it at `C:/Tools/model-proctor/`). Prompts do not
 enforce; the runner enforces. Deterministic evidence outranks every model, including you.
 Governance: issues #16 (measurement-first) and #26 (vNext hypothesis); this skill implements
 only the MVP slice (#27). STOP — one fixed worker wins — remains a legitimate outcome.
@@ -33,19 +35,19 @@ that is a planning consult, not a mandatory planner tax.
 1. **Write the task file**: `task.json` with `task_id`, `prompt`, `features`, `scope`
    (non-empty), `verifier.argv` (an argv ARRAY — never a shell string; use `{python}` for the
    interpreter), and `budget`.
-2. **Lane**: `python runner/runner.py lane --task task.json` — record the decision. Override
+2. **Lane**: `python C:/Tools/model-proctor/runner.py lane --task task.json` — record the decision. Override
    only by setting `lane` in the task file, and note why in the task record.
-3. **Init**: `python runner/runner.py init --workspace <w> --task task.json`. Refusal
+3. **Init**: `python C:/Tools/model-proctor/runner.py init --workspace <w> --task task.json`. Refusal
    (`workspace_is_not_repo_root`) is final — fix the workspace, never bypass.
-4. **Dispatch**: `python runner/runner.py dispatch --workspace <w> --task task.json`. The
+4. **Dispatch**: `python C:/Tools/model-proctor/runner.py dispatch --workspace <w> --task task.json`. The
    worker owns the engineering trajectory in its own session; you own state and acceptance.
-5. **Verify**: `python runner/runner.py verify --workspace <w> --task task.json`. The runner
+5. **Verify**: `python C:/Tools/model-proctor/runner.py verify --workspace <w> --task task.json`. The runner
    rejects verification if any verification-affecting file (conftest.py, pytest.ini,
    pyproject.toml, *.pth, ...) appeared or changed since init, then runs the verifier itself.
    Never trust worker-reported results.
-6. **Accept**: `python runner/runner.py accept --workspace <w> --task task.json`. A green
+6. **Accept**: `python C:/Tools/model-proctor/runner.py accept --workspace <w> --task task.json`. A green
    receipt stales automatically on any tree mutation — re-verify after every change.
-7. **Record**: `python runner/runner.py record --workspace <w> --task task.json [--wire
+7. **Record**: `python C:/Tools/model-proctor/runner.py record --workspace <w> --task task.json [--wire
    <wire.jsonl> --pricing evals/pricing.yaml]` — appends the append-only task record.
 
 ## Failure classes and switching (not a fixed ladder)
