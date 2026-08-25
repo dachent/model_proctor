@@ -1,4 +1,4 @@
-# robot_lockstep_ballast
+# kimi_router
 
 A static-cascade multi-model routing harness for [Kimi Code CLI](https://github.com/MoonshotAI/kimi-cli):
 fixed-role allocation decided once at plan time, enforced by a deterministic controller, with cheap

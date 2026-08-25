@@ -1,7 +1,7 @@
 # Verdict and path: session audit, containment, and development decision
 
 Date: 2026-08-23
-Repo: dachent/robot_lockstep_ballast (public)
+Repo: dachent/kimi_router (public; formerly dachent/robot_lockstep_ballast, renamed 2026-08-25)
 Signed-off-by: agent session (evidence at issues #15, #16, #17–#24)
 
 ---

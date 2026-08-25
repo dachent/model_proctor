@@ -61,10 +61,12 @@ workers (fast scouts, cheap workers, independent reviewers, read-only advisors).
 - Eval fixture runs live outside cloud-synced folders (default: `C:\Dev\bootstrap-state\kimi-router\evals\runs\`).
 - When delegating coding work from this project, follow `policy/delegation-policy.md`.
 - All work on this tool is managed via the GitHub Issues backlog at
-  `dachent/robot_lockstep_ballast` (owner directive 2026-08-14): every unit of work is an issue with
+  `dachent/kimi_router` (owner directive 2026-08-14; repo renamed from
+  `dachent/robot_lockstep_ballast` 2026-08-25, old URLs redirect): every unit of work is an
+  issue with
   a `[AREA-NNN]` key, `priority:now|next|parked` labels, a `## Blocked by` section, and a non-empty
   `## Final evidence and handoff` before closing. Parked items carry an explicit activation trigger.
 
 ## Status
 
-Research artifact frozen at commit 6095695 (2026-08-13). Governance decision: dachent/robot_lockstep_ballast #16. Installed skill: `static-cascade`.
+Research artifact frozen at commit 6095695 (2026-08-13). Governance decision: dachent/kimi_router #16. Installed skill: `static-cascade`.
