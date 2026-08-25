@@ -328,6 +328,7 @@ _ENVELOPE_KEYS = {
     "run_dir": (str, type(None)),
     "acl_warning": bool,
     "job_warning": bool,
+    "child_home": (str, type(None)),
     "error": (str, type(None)),
 }
 
@@ -1354,6 +1355,79 @@ class TestCLIContract(DelegateTestBase):
 def parse_json_result(stdout_text):
     lines = stdout_text.strip().split("\n")
     return json.loads(lines[-1])
+
+
+# ---------------------------------------------------------------------------
+# TOOL-013: per-dispatch KIMI_CODE_HOME isolation (issue #31)
+# ---------------------------------------------------------------------------
+
+_PRINT_KIMI_HOME = (
+    "import os\n"
+    "import sys\n"
+    "sys.stdin.read()\n"
+    "print(os.environ.get('KIMI_CODE_HOME', ''))\n"
+)
+
+
+class TestHomeIsolation(DelegateTestBase):
+    """Every dispatch gets a seeded, isolated KIMI_CODE_HOME; the envelope
+    reports it as child_home; the caller owns cleanup."""
+
+    def setUp(self):
+        super().setUp()
+        self.home_script = self._script("print_kimi_home", _PRINT_KIMI_HOME)
+        # Fake source home with config + credentials to seed from.
+        self.src_home = os.path.join(self.tmpdir, "src-home")
+        os.makedirs(os.path.join(self.src_home, "credentials"))
+        with open(os.path.join(self.src_home, "config.toml"), "w") as f:
+            f.write('default_model = "test"\n')
+        with open(os.path.join(self.src_home, "credentials", "cred.json"), "w") as f:
+            f.write("{}")
+        self._old_home = os.environ.get("KIMI_CODE_HOME")
+        self._old_noiso = os.environ.get("DELEGATE_NO_HOME_ISOLATION")
+        os.environ["KIMI_CODE_HOME"] = self.src_home
+        os.environ.pop("DELEGATE_NO_HOME_ISOLATION", None)
+
+    def tearDown(self):
+        if self._old_home is None:
+            os.environ.pop("KIMI_CODE_HOME", None)
+        else:
+            os.environ["KIMI_CODE_HOME"] = self._old_home
+        if self._old_noiso is None:
+            os.environ.pop("DELEGATE_NO_HOME_ISOLATION", None)
+        else:
+            os.environ["DELEGATE_NO_HOME_ISOLATION"] = self._old_noiso
+        for d in glob.glob(os.path.join(tempfile.gettempdir(),
+                                        "delegate-kimi-home-*")):
+            shutil.rmtree(d, ignore_errors=True)
+        super().tearDown()
+
+    def _run_home(self, agent_name="home-agent"):
+        cfg = self._config({agent_name: make_agent(self.home_script)})
+        out, err, rc = self._run(agent_name, task="hi", config=cfg)
+        return self._assert_result(out, err, rc, "completed", 0)
+
+    def test_isolated_seeded_home(self):
+        result = self._run_home()
+        child_home = result["child_home"]
+        self.assertIsNotNone(child_home)
+        # Child saw the isolated home, not the source.
+        self.assertEqual(result["stdout"].strip(), child_home)
+        self.assertNotEqual(os.path.normcase(child_home),
+                            os.path.normcase(self.src_home))
+        self.assertTrue(child_home.startswith(
+            os.path.join(tempfile.gettempdir(), "delegate-kimi-home-")))
+        # Seeded with config + credentials (an empty home fails auth).
+        self.assertTrue(os.path.isfile(os.path.join(child_home, "config.toml")))
+        self.assertTrue(os.path.isdir(os.path.join(child_home, "credentials")))
+
+    def test_isolation_opt_out(self):
+        os.environ["DELEGATE_NO_HOME_ISOLATION"] = "1"
+        result = self._run_home()
+        self.assertIsNone(result["child_home"])
+        # No injection, and KIMI_CODE_HOME is not in the agent's allowlist,
+        # so the child sees nothing (environment isolation governs inheritance).
+        self.assertEqual(result["stdout"].strip(), "")
 
 
 if __name__ == "__main__":

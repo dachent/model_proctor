@@ -366,6 +366,7 @@ def cmd_dispatch(args):
         "agent": agent, "status": envelope_status,
         "duration_seconds": envelope.get("duration_seconds", wall),
         "child_session_id": envelope.get("child_session_id"),
+        "child_home": envelope.get("child_home"),
         "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     })
     if envelope_status not in ("completed", "failed"):
@@ -380,6 +381,7 @@ def cmd_dispatch(args):
         "dispatched": True, "agent": agent, "lane": state["lane"],
         "envelope_status": envelope_status,
         "child_session_id": envelope.get("child_session_id"),
+        "child_home": envelope.get("child_home"),
         "failure_class": cls, "recommendation": rec,
     })
 

@@ -23,6 +23,7 @@ import json
 import math
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -623,6 +624,45 @@ def create_run_dir():
 
 
 # ---------------------------------------------------------------------------
+# Per-dispatch KIMI_CODE_HOME isolation (TOOL-013, issue #31)
+# ---------------------------------------------------------------------------
+
+_HOME_SEED_FILES = ("config.toml", "device_id", "region")
+_HOME_SEED_DIRS = ("credentials",)
+
+
+def create_isolated_home():
+    """Create a per-dispatch isolated KIMI_CODE_HOME. Returns the path, or None
+    when isolation is disabled (DELEGATE_NO_HOME_ISOLATION=1).
+
+    Kimi Code CLI auto-registers every CWD it runs in as a workspace and writes
+    sessions under KIMI_CODE_HOME; without isolation, every dispatched task
+    pollutes the user's real ~/.kimi-code (phantom workspaces, session bloat).
+    The isolated home is SEEDED with the operator's config and credentials —
+    an empty home fails auth (verified 2026-08-25, kimi 0.34.0).
+
+    Lifecycle: the CALLER owns the home after the run. Wire logs for cost
+    metering live under <home>/sessions/, so delegate never deletes it;
+    callers remove it after metering (see runner/pilot.py) and orphaned
+    delegate-kimi-home-* dirs are swept by the caller side.
+    """
+    if os.environ.get("DELEGATE_NO_HOME_ISOLATION"):
+        return None
+    src = os.environ.get("KIMI_CODE_HOME") or os.path.join(
+        os.environ.get("USERPROFILE", str(Path.home())), ".kimi-code")
+    home = tempfile.mkdtemp(prefix="delegate-kimi-home-")
+    for name in _HOME_SEED_FILES:
+        s = os.path.join(src, name)
+        if os.path.isfile(s):
+            shutil.copy2(s, os.path.join(home, name))
+    for name in _HOME_SEED_DIRS:
+        s = os.path.join(src, name)
+        if os.path.isdir(s):
+            shutil.copytree(s, os.path.join(home, name))
+    return home
+
+
+# ---------------------------------------------------------------------------
 # Output capture (reader threads)
 # ---------------------------------------------------------------------------
 
@@ -903,6 +943,11 @@ def _run_delegate_inner(args, start_time, agent_name):
 
     # Build child environment
     child_env = build_child_environment(agent)
+    # Per-dispatch isolated KIMI_CODE_HOME (TOOL-013). Injected directly by the
+    # parent — the agent allowlist governs inheritance, not wrapper invariants.
+    child_home = create_isolated_home()
+    if child_home is not None:
+        child_env["KIMI_CODE_HOME"] = child_home
 
     # Create run directory
     run_dir, acl_warning = create_run_dir()
@@ -933,7 +978,7 @@ def _run_delegate_inner(args, start_time, agent_name):
         )
     except (OSError, ValueError) as e:
         return _make_result("internal_error", error=f"Failed to launch child: {type(e).__name__}",
-                            agent=agent_name, run_dir=run_dir), EXIT_INTERNAL
+                            agent=agent_name, run_dir=run_dir, child_home=child_home), EXIT_INTERNAL
 
     # Anchor the deadline immediately after Popen so config/workspace/icacls
     # setup time does not eat the child's timeout budget.
@@ -1049,6 +1094,7 @@ def _run_delegate_inner(args, start_time, agent_name):
             acl_warning=acl_warning,
             job_warning=job_warning,
             child_session_id=extract_child_session_id(stdout_text, stderr_text),
+            child_home=child_home,
             error=_interrupt_condition,
         )
         _cleanup_handles(proc_handle, job)
@@ -1083,6 +1129,7 @@ def _run_delegate_inner(args, start_time, agent_name):
             acl_warning=acl_warning,
             job_warning=job_warning,
             child_session_id=extract_child_session_id(stdout_text, stderr_text),
+            child_home=child_home,
         )
         _cleanup_handles(proc_handle, job)
         return result, EXIT_TIMEOUT
@@ -1105,6 +1152,7 @@ def _run_delegate_inner(args, start_time, agent_name):
             run_dir=run_dir,
             acl_warning=acl_warning,
             job_warning=job_warning,
+            child_home=child_home,
             error=f"Reader thread error: {type(stdout_err or stderr_err).__name__}",
         )
         _cleanup_handles(proc_handle, job)
@@ -1127,6 +1175,7 @@ def _run_delegate_inner(args, start_time, agent_name):
         acl_warning=acl_warning,
         job_warning=job_warning,
         child_session_id=extract_child_session_id(stdout_text, stderr_text),
+        child_home=child_home,
     )
     _cleanup_handles(proc_handle, job)
     return result, EXIT_OK
@@ -1153,7 +1202,7 @@ def _make_result(status, agent=None, child_exit_code=None, duration=None,
                  stdout_text="", stderr_text="", stdout_trunc=False, stderr_trunc=False,
                  stdout_log_trunc=False, stderr_log_trunc=False,
                  run_dir=None, acl_warning=False, job_warning=False,
-                 child_session_id=None, error=None):
+                 child_session_id=None, child_home=None, error=None):
     """Build the JSON result envelope."""
     return {
         "schema_version": 1,
@@ -1161,6 +1210,7 @@ def _make_result(status, agent=None, child_exit_code=None, duration=None,
         "agent": agent,
         "child_exit_code": child_exit_code,
         "child_session_id": child_session_id,
+        "child_home": child_home,
         "duration_seconds": round(duration, 3) if duration is not None else None,
         "stdout": stdout_text,
         "stderr": stderr_text,

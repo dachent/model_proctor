@@ -80,6 +80,7 @@ No other state is required.
   "agent": "name",
   "child_exit_code": 0,
   "child_session_id": "session_9f3ab2c1-… or null",
+  "child_home": "C:/.../delegate-kimi-home-… or null",
   "duration_seconds": 12.345,
   "stdout": "bounded tail",
   "stderr": "bounded tail",
@@ -99,6 +100,7 @@ No other state is required.
 | `schema_version` | Envelope schema version (currently 1) |
 | `stdout_log_truncated` / `stderr_log_truncated` | The disk log (`stdout.log` / `stderr.log` in `run_dir`) hit `max_log_bytes` and stopped growing. Any extraction or verdict drawn from a truncated log is void until the evidence is re-acquired — raise `max_log_bytes` for log-heavy agents |
 | `child_session_id` | Session id scraped from the child's output tails (kimi `To resume this session:` footer), or `null` when none was printed. Feed it back via `--resume-from` |
+| `child_home` | The per-dispatch isolated `KIMI_CODE_HOME` (see "KIMI_CODE_HOME isolation"), or `null` when isolation is disabled. Caller-owned: meter from `<child_home>/sessions/`, then delete |
 | `acl_warning` | `icacls` hardening of the run directory failed (run continued; logs may inherit default ACLs) |
 | `job_warning` | Job Object creation/assignment failed; timeout falls back to `taskkill`-only tree kill (degraded — grandchildren created in the Popen→assign window may escape) |
 
@@ -244,6 +246,14 @@ Logs persist in the run directory until manually deleted. The `run_dir` field in
 ## Child CLI side effects
 
 Each CLI worker may keep its own state outside the wrapper's control. In particular, every headless `kimi -p` invocation creates a resumable session under the user's Kimi state directory and prints a `To resume this session:` footer on stderr (surfaced as `child_session_id` in the envelope; see "Session resume"). Worker sessions accumulate over time; prune them periodically if worker volume is high. The wrapper does not manage or delete child CLI sessions.
+
+### KIMI_CODE_HOME isolation (TOOL-013)
+
+Kimi Code CLI auto-registers every CWD it runs in as a workspace under the active `KIMI_CODE_HOME` — without isolation, every dispatched task pollutes the user's real `~/.kimi-code` (phantom workspaces, session-index bloat; observed 2026-08-25 after ~130 pilot dispatches).
+
+To prevent that, every dispatch gets a **per-dispatch isolated, seeded home**: `delegate` creates `delegate-kimi-home-*` in the temp dir, seeds it with `config.toml`, `device_id`, `region`, and `credentials/` from the operator's home (an empty home fails auth — verified), and injects it into the child environment directly (parent-injected invariants do not go through the agent's environment allowlist). The envelope's `child_home` field reports the path.
+
+**Lifecycle:** the caller owns the home after the run. Wire logs for cost metering live under `<child_home>/sessions/`, so `delegate` never deletes it — callers (e.g. `runner/pilot.py`) meter, then delete, and sweep orphaned `delegate-kimi-home-*` dirs. Set `DELEGATE_NO_HOME_ISOLATION=1` to disable (required for `--resume-from`, which needs the prior session's home).
 
 ## Tests
 

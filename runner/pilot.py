@@ -17,8 +17,10 @@ Stdlib only. Real dispatches spawn real CLIs and cost real tokens.
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -30,7 +32,12 @@ PRICING = ROOT / "evals" / "pricing.yaml"
 PILOT_LOG = ROOT / "evals" / "pilot-2026-08-25.jsonl"
 
 DEFAULT_OUT = r"C:\Dev\bootstrap-state\kimi-router\pilot"
-SESSIONS_ROOT = Path(os.environ["USERPROFILE"]) / ".kimi-code" / "sessions"
+def _sessions_root():
+    """Return the sessions directory, respecting KIMI_CODE_HOME if set."""
+    home = os.environ.get("KIMI_CODE_HOME")
+    if home:
+        return Path(home) / "sessions"
+    return Path(os.environ["USERPROFILE"]) / ".kimi-code" / "sessions"
 
 # 10 cases, 7 categories — tune-weighted for continuity with the 2026-07-30
 # pilot, plus holdout cases never run through any router.
@@ -64,23 +71,45 @@ def run_runner(*argv, timeout=900):
     return r.returncode, out
 
 
-def find_wires(session_ids, not_before):
-    """Locate wire.jsonl files for the given child session ids."""
+def find_wires(session_ids, not_before, homes=()):
+    """Locate wire.jsonl files for the given child session ids.
+
+    With TOOL-013 isolation (delegate.py injects a seeded per-dispatch
+    KIMI_CODE_HOME), wires live under <child_home>/sessions/; the env/default
+    home is only a fallback for isolation-disabled runs.
+    """
+    roots = [Path(h) / "sessions" for h in homes if h] + [_sessions_root()]
     wires = []
     for sid in session_ids:
         if not sid:
             continue
-        for p in SESSIONS_ROOT.glob(f"*/{sid}/agents/*/wire.jsonl"):
-            try:
-                if p.stat().st_mtime >= not_before - 5:
-                    wires.append(str(p))
-            except OSError:
+        for root in roots:
+            if not root.is_dir():
                 continue
+            for p in root.glob(f"*/{sid}/agents/*/wire.jsonl"):
+                try:
+                    if p.stat().st_mtime >= not_before - 5:
+                        wires.append(str(p))
+                except OSError:
+                    continue
     return sorted(set(wires))
 
 
+def sweep_orphan_homes(max_age_s=3600):
+    """Delete orphaned delegate-kimi-home-* temp dirs (crash leftovers)."""
+    removed = 0
+    for p in Path(tempfile.gettempdir()).glob("delegate-kimi-home-*"):
+        try:
+            if time.time() - p.stat().st_mtime > max_age_s:
+                shutil.rmtree(p, ignore_errors=True)
+                removed += 1
+        except OSError:
+            continue
+    return removed
+
+
 def run_case(case, out_root, dry_run, lane_override=None, max_dispatches=None,
-             rep=None):
+             rep=None, keep_homes=False):
     ws = out_root / case["id"]
     if lane_override:
         ws = ws / lane_override
@@ -123,6 +152,7 @@ def run_case(case, out_root, dry_run, lane_override=None, max_dispatches=None,
     summary["lane"] = out["lane"]
 
     session_ids = []
+    child_homes = []
     accepted = False
     recommendation = None
     for attempt in range(task["budget"]["max_dispatches"]):
@@ -142,6 +172,8 @@ def run_case(case, out_root, dry_run, lane_override=None, max_dispatches=None,
         })
         if disp.get("child_session_id"):
             session_ids.append(disp["child_session_id"])
+        if disp.get("child_home"):
+            child_homes.append(disp["child_home"])
         if rc != 0:
             break
         if disp.get("envelope_status") not in ("completed", "failed"):
@@ -164,7 +196,7 @@ def run_case(case, out_root, dry_run, lane_override=None, max_dispatches=None,
                             capture_output=True, timeout=120)
     summary["hidden_pass"] = hidden.returncode == 0
 
-    wires = find_wires(session_ids, t0)
+    wires = find_wires(session_ids, t0, homes=child_homes)
     summary["wire_files"] = len(wires)
     argv = ["record", "--workspace", str(ws), "--task", str(task_path)]
     if wires:
@@ -175,6 +207,15 @@ def run_case(case, out_root, dry_run, lane_override=None, max_dispatches=None,
         "dispatches", "accepted", "wall_time_seconds", "usage_records",
         "api_cost_usd", "tokens_by_model")}
     summary["wall_time_s"] = round(time.time() - t0, 1)
+    # TOOL-013: the caller owns isolated homes; metering is done, delete them.
+    if child_homes:
+        summary["child_homes_cleaned"] = 0
+        for h in child_homes:
+            if keep_homes:
+                summary.setdefault("child_homes_kept", []).append(h)
+            else:
+                shutil.rmtree(h, ignore_errors=True)
+                summary["child_homes_cleaned"] += 1
     return summary
 
 
@@ -191,12 +232,23 @@ def main():
                         help="per-case dispatch cap (1 = fixed arm, no rescue)")
     parser.add_argument("--log", default=str(PILOT_LOG),
                         help="summary JSONL to append to")
+    parser.add_argument("--keep-kimi-home", action="store_true",
+                        help="do not delete the temporary KIMI_CODE_HOME after the run")
     args = parser.parse_args()
 
     cases = {c["id"]: c for c in json.loads(CASES.read_text(encoding="utf-8"))}
     ids = args.cases.split(",") if args.cases else DEFAULT_CASES
     out_root = Path(args.out_dir)
     out_root.mkdir(parents=True, exist_ok=True)
+
+    # TOOL-013: isolation lives at the delegate chokepoint (per-dispatch seeded
+    # KIMI_CODE_HOME). A process-level os.environ set here cannot cross the
+    # delegate's environment allowlist — verified inert on 2026-08-25 — so the
+    # pilot only sweeps orphaned homes and cleans up per-dispatch ones after
+    # metering (see run_case).
+    swept = sweep_orphan_homes()
+    if swept:
+        print(f"swept {swept} orphaned delegate-kimi-home dir(s)", flush=True)
 
     summaries = []
     for cid in ids:
@@ -206,7 +258,8 @@ def main():
             s = run_case(cases[cid], out_root, args.dry_run,
                          lane_override=args.lane,
                          max_dispatches=args.max_dispatches,
-                         rep=rep if args.reps > 1 else None)
+                         rep=rep if args.reps > 1 else None,
+                         keep_homes=args.keep_kimi_home)
             if args.lane:
                 s["arm"] = args.lane
             summaries.append(s)
