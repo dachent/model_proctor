@@ -47,8 +47,10 @@ STATE_DIR = ".runner"
 LANES = ("flash", "glm", "k3")
 
 # lane -> agent name in delegate's agents.json (roster names per README history).
+# flash lane: gpt-oss-120b — deepseek-v4-flash retired on Fireworks (404,
+# probed 2026-08-25); gpt-oss-120b is the live cheap-worker substitute.
 DEFAULT_AGENT_MAP = {
-    "flash": "ds-flash-worker",
+    "flash": "gpt-oss-worker",
     "glm": "glm-worker",
     "k3": "k3-worker",
 }
@@ -538,7 +540,17 @@ def cmd_record(args):
         "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
     if args.wire:
-        records, totals = sum_usage_records(args.wire)
+        records = 0
+        totals = {}
+        for wire in args.wire:
+            n, t = sum_usage_records(wire)
+            records += n
+            for model, bucket in t.items():
+                agg = totals.setdefault(model, {"inputOther": 0, "output": 0,
+                                                "inputCacheRead": 0,
+                                                "inputCacheCreation": 0})
+                for k in agg:
+                    agg[k] += bucket[k]
         row["usage_records"] = records
         row["tokens_by_model"] = totals
         if args.pricing:
@@ -570,7 +582,8 @@ def main(argv=None):
             p.add_argument("--delegate", default=None)
             p.add_argument("--agent-map", default=None)
         if name == "record":
-            p.add_argument("--wire", default=None)
+            p.add_argument("--wire", nargs="+", default=None,
+                           help="one or more wire.jsonl files for usage metering")
             p.add_argument("--pricing", default=None)
     args = parser.parse_args(argv)
     return {
