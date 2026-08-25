@@ -171,8 +171,10 @@ Writes `scorecard.md` with blinded labels, per-case medians, per-category aggreg
 Fixture run dirs live **outside cloud-synced folders** (e.g., OneDrive) to avoid sync contention. Default:
 
 ```
-C:/Dev/bootstrap-state/kimi-router/evals/runs/<case_id>/<config>/<rep>/
+C:/Dev/bootstrap-state/model-proctor/evals/runs/<case_id>/<config>/<rep>/
 ```
+
+(Historical result rows cite the pre-rename `kimi-router` path — the evidence record is immutable.)
 
 Each run dir contains:
 - The regenerated fixture project

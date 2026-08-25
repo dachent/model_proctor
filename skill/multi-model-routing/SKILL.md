@@ -12,7 +12,7 @@ linters) outranks every model's claims, including yours.
 
 External workers run through:
 ```
-python "C:/Tools/kimi-router/delegate.py" --agent <name> --workspace <workspace> --task "<task>" [--timeout <s>]
+python "C:/Tools/model-proctor/delegate.py" --agent <name> --workspace <workspace> --task "<task>" [--timeout <s>]
 ```
 Configured agents: `k27-scout` (fast read-only discovery), `ds-flash-worker` (cheap bounded work,
 bulk 1M-context reads), `ds-pro-reviewer` (independent read-only review), `glm-worker` (one-shot

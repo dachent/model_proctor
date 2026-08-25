@@ -9,7 +9,7 @@ cloud-synced folders; the summary lands in evals/ as durable evidence.
 
 Usage:
     python runner/pilot.py [--cases id,id,...] [--dry-run]
-                           [--out-dir C:\\Dev\\bootstrap-state\\kimi-router\\pilot]
+                           [--out-dir C:\\Dev\\bootstrap-state\\model-proctor\\pilot]
 
 Stdlib only. Real dispatches spawn real CLIs and cost real tokens.
 """
@@ -31,7 +31,7 @@ CASES = ROOT / "evals" / "cases.yaml"  # JSON syntax
 PRICING = ROOT / "evals" / "pricing.yaml"
 PILOT_LOG = ROOT / "evals" / "pilot-2026-08-25.jsonl"
 
-DEFAULT_OUT = r"C:\Dev\bootstrap-state\kimi-router\pilot"
+DEFAULT_OUT = r"C:\Dev\bootstrap-state\model-proctor\pilot"
 def _sessions_root():
     """Return the sessions directory, respecting KIMI_CODE_HOME if set."""
     home = os.environ.get("KIMI_CODE_HOME")
