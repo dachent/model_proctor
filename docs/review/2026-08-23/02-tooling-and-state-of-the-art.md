@@ -1,7 +1,7 @@
 # Tooling and state of the art (condensed; full parked as #24)
 
 Date: 2026-08-23
-Repo: dachent/kimi_router (formerly dachent/robot_lockstep_ballast, renamed 2026-08-25)
+Repo: dachent/model_proctor (formerly dachent/robot_lockstep_ballast → kimi_router, renamed 2026-08-25)
 
 ---
 

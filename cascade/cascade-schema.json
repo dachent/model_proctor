@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://kimi-router.local/cascade-schema.json",
+  "$id": "https://model-proctor.local/cascade-schema.json",
   "title": "Static cascade plan (cascade-state.json init payload)",
   "description": "Planner task list consumed by `cascade.py init` / `cascade.py replan`. The controller's stdlib validator in cascade.py (validate_plan) is the executable authority; this schema is the documentation artifact and mirrors it exactly. See policy/STATIC_CASCADE_SPEC.md section 4.",
   "type": "object",

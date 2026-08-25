@@ -1,6 +1,6 @@
-# Objective and session history: kimi_router (2026-07-30 → 2026-08-23)
+# Objective and session history: model_proctor (2026-07-30 → 2026-08-23)
 
-> Built on deterministic extraction per `scripts/extract_log.py`. Every quotation carries citation tuple (file, record, context). See `C:\Users\BorisVaisman\.kimi-code\sessions\wd_kimi_router_48279e049987\agents\main\wire.jsonl` for primary wire-log source.
+> Built on deterministic extraction per `scripts/extract_log.py`. Every quotation carries citation tuple (file, record, context). See `C:\Users\BorisVaisman\.kimi-code\sessions\wd_kimi_router_48279e049987\agents\main\wire.jsonl` for primary wire-log source (historical path — the worktree was named kimi_router at the time).
 
 ---
 

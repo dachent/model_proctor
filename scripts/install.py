@@ -1,7 +1,7 @@
-"""Install the kimi-router harness durably (idempotent).
+"""Install the model-proctor harness durably (idempotent).
 
-- Copies the delegate wrapper files to C:\\Tools\\kimi-router\\
-- Copies runner/runner.py to C:\\Tools\\kimi-router\\ (MVP-001 control plane)
+- Copies the delegate wrapper files to C:\\Tools\\model-proctor\\
+- Copies runner/runner.py to C:\\Tools\\model-proctor\\ (MVP-001 control plane)
 - ACL-hardens the installed agents.json (Administrators: full, current user: read)
   so a compromised worker cannot rewrite the trusted command config.
   Re-run this script (elevated or after taking ownership) to update the roster.
@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-TOOL_DIR = Path(r"C:\Tools\kimi-router")
+TOOL_DIR = Path(r"C:\Tools\model-proctor")
 
 DELEGATE_FILES = ["delegate.py", "agents.example.json", "README.md"]
 RUNNER_FILES = [("runner", "runner.py")]

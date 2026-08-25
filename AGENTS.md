@@ -1,8 +1,10 @@
-# kimi_router
+# model_proctor
 
-Multi-model routing harness for Kimi Code CLI: Kimi K3 as lead orchestrator, GLM-5.2 native
-secondary subagents, and a lean Windows-native `delegate` subprocess wrapper for external CLI
-workers (fast scouts, cheap workers, independent reviewers, read-only advisors).
+Deterministic control plane for coding agents on Kimi Code CLI: task-owning workers
+dispatched through a lean Windows-native `delegate` wrapper, leader-executed verification
+with tree-bound acceptance receipts, wire-metered cost accounting, and a pre-registered
+evaluation harness. (Formerly kimi_router; the static-cascade routing design is preserved
+as a frozen research artifact — see Status.)
 
 ## Layout
 
@@ -56,17 +58,18 @@ workers (fast scouts, cheap workers, independent reviewers, read-only advisors).
 - Python 3.10, standard library only everywhere.
 - No git mutations without explicit user confirmation. Repository creation on this workstation must
   use `New-CentralGitRepo.ps1` (centralized Git policy); never raw `git init`.
-- Durable installs follow workstation policy: tools to `C:\Tools\kimi-router\`, skills to
+- Durable installs follow workstation policy: tools to `C:\Tools\model-proctor\`, skills to
   `%USERPROFILE%\.kimi-code\skills\`, each with explicit user confirmation.
-- Eval fixture runs live outside cloud-synced folders (default: `C:\Dev\bootstrap-state\kimi-router\evals\runs\`).
+- Eval fixture runs live outside cloud-synced folders (default: `C:\Dev\bootstrap-state\model-proctor\evals\runs\`;
+  historical metered rows keep their original `kimi-router` paths — the evidence record is immutable).
 - When delegating coding work from this project, follow `policy/delegation-policy.md`.
 - All work on this tool is managed via the GitHub Issues backlog at
-  `dachent/kimi_router` (owner directive 2026-08-14; repo renamed from
-  `dachent/robot_lockstep_ballast` 2026-08-25, old URLs redirect): every unit of work is an
+  `dachent/model_proctor` (owner directive 2026-08-14; repo renamed from
+  `dachent/robot_lockstep_ballast` → `kimi_router` → `model_proctor` 2026-08-25, old URLs redirect): every unit of work is an
   issue with
   a `[AREA-NNN]` key, `priority:now|next|parked` labels, a `## Blocked by` section, and a non-empty
   `## Final evidence and handoff` before closing. Parked items carry an explicit activation trigger.
 
 ## Status
 
-Research artifact frozen at commit 6095695 (2026-08-13). Governance decision: dachent/kimi_router #16. Installed skill: `static-cascade`.
+Research artifact frozen at commit 6095695 (2026-08-13). Governance decision: dachent/model_proctor #16. Installed skill: `static-cascade`.

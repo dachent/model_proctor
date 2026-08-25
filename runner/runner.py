@@ -272,7 +272,7 @@ def classify_and_recommend(state, lane):
 
 def resolve_delegate(explicit):
     for cand in (explicit, os.environ.get("DELEGATE_PATH"),
-                 r"C:\Tools\kimi-router\delegate.py"):
+                 r"C:\Tools\model-proctor\delegate.py"):
         if cand and Path(cand).is_file():
             return str(cand)
     raise SystemExit(_emit({

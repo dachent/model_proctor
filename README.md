@@ -1,13 +1,15 @@
-# kimi_router
+# model_proctor
 
-A static-cascade multi-model routing harness for [Kimi Code CLI](https://github.com/MoonshotAI/kimi-cli):
-fixed-role allocation decided once at plan time, enforced by a deterministic controller, with cheap
-metered models carrying the bulk of the work and expensive models reserved for what measurably needs them.
+A deterministic control plane for coding agents on [Kimi Code CLI](https://github.com/MoonshotAI/kimi-cli):
+task-owning workers dispatched through a thin runner, leader-executed verification with tree-bound
+acceptance receipts, wire-metered cost accounting, and a pre-registered evaluation harness.
 
-**The name.** *Lockstep* — ranks are fixed, escalation is one rung at a time, nothing skips. This is the
-behavioral property that distinguishes a static cascade from a dynamic router. *Ballast* — the cheap
-metered fleet (DeepSeek V4 Flash/Pro, Kimi K2.7) carries the load so the expensive leader stays stable
-above. *Static cascade* remains the name of the **pattern**; this repo is one implementation of it.
+**The name.** A *proctor* assigns the exam, watches the clock, and grades it objectively — the model
+never marks its own work. That is the architectural invariant this repo converged on: deterministic
+evidence outranks every model, and acceptance is bound to the exact tree that was verified.
+(Historical names: `robot_lockstep_ballast` — *lockstep* for fixed rungs, *ballast* for the cheap
+fleet — then briefly `kimi_router`; renamed 2026-08-25. *Static cascade* remains the name of the
+frozen research **pattern** documented here; `runner/` is the live implementation path.)
 
 ---
 
