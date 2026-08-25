@@ -74,4 +74,4 @@ as a frozen research artifact — see Status.)
 
 ## Status
 
-Research artifact frozen at commit 6095695 (2026-08-13). Governance decision: dachent/model_proctor #16. Installed skill: `static-cascade`.
+Research artifact frozen at commit 6095695 (2026-08-13). Governance decision: dachent/model_proctor #16. Installed skills: `model-proctor` (live policy), `static-cascade` (frozen reference).

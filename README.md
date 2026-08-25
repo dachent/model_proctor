@@ -41,7 +41,7 @@ frozen research **pattern** documented here; `runner/` is the live implementatio
   v3 quality sets (10 each, naive-solution-proven to discriminate requirement fidelity), the
   metering stack (`meter.py`, `pricing.yaml`), pre-registrations (`PREREG-v2.md`, `PREREG-v3.md`),
   and every result row (`results*.jsonl`, `pilot-*.jsonl`, `phase2-*.jsonl`, `phase3-*.jsonl`).
-- `skill/` — installable Kimi Code skills (`task-router/` live policy, `static-cascade/` frozen
+- `skill/` — installable Kimi Code skills (`model-proctor/` live policy, `static-cascade/` frozen
   reference, `multi-model-routing/` superseded).
 
 Python 3.10+, standard library only, everywhere.
@@ -52,6 +52,51 @@ python -m unittest discover -s delegate/tests -v
 python -m unittest discover -s cascade/tests -v
 python -m unittest discover -s scripts/tests -v
 ```
+
+---
+
+## Using it from Kimi Code CLI
+
+Install once (idempotent):
+
+```bash
+python scripts/install.py
+```
+
+This installs two skills (`model-proctor`, `static-cascade`) to `%USERPROFILE%\.kimi-code\skills\`
+and the runner + delegate + agent roster to `C:\Tools\model-proctor\`. If `agents.json` is missing,
+regenerate it first from `delegate/agents.example.json` (see `delegate/README.md`).
+
+### Triggering the proctor
+
+Skills load at **session start**, so open a new Kimi Code session after installing. Then:
+
+- **Implicit:** give the session a substantial coding task (multi-file, unfamiliar code, anything
+  past one edit-test cycle). The `model-proctor` skill fires on its own description; trivial tasks
+  are deliberately executed directly.
+- **Explicit:** *"Use the model-proctor skill: classify this task, dispatch it through the runner,
+  and accept only on a fresh tree-bound receipt."*
+
+The skill then drives the loop: `lane → init → dispatch → verify → accept → record`, with the
+runner — not the model — owning state, verification, budgets, and receipts.
+
+### Direct CLI use (no skill)
+
+```bash
+# task.json: {"task_id": "t1", "prompt": "Fix sum_to_n in math_utils.py.",
+#             "features": {"bounded": true, "known_location": true, "objective_acceptance": true},
+#             "scope": ["math_utils.py"], "verifier": {"argv": ["{python}", "check.py"]},
+#             "seal": ["check.py"]}
+python C:/Tools/model-proctor/runner.py lane     --task task.json
+python C:/Tools/model-proctor/runner.py init     --workspace <ws> --task task.json
+python C:/Tools/model-proctor/runner.py dispatch --workspace <ws> --task task.json
+python C:/Tools/model-proctor/runner.py verify   --workspace <ws> --task task.json
+python C:/Tools/model-proctor/runner.py accept   --workspace <ws> --task task.json
+python C:/Tools/model-proctor/runner.py record   --workspace <ws> --task task.json
+```
+
+State, receipts, and the ledger land in `<ws_parent>/.runner-state/<ws>-<hash>/` — outside the
+worker's writable tree. Every command prints one JSON object; nonzero exit = refused/failed.
 
 ---
 

@@ -1,11 +1,12 @@
 ---
-name: task-router
-description: vNext task-owning worker policy (MVP-001, issue #27) — classify a task into a frozen lane (Flash bounded / GLM substantial / K3 marathon), dispatch through the installed runner (C:/Tools/model-proctor/runner.py), verify with tree-bound receipts, switch on stagnation rather than fixed rungs. Use for substantial coding tasks. Do NOT use for trivial tasks (known location, one edit-test cycle) — execute those directly. Supersedes nothing yet; static-cascade remains the frozen reference. Requires the model-proctor install (scripts/install.py).
+name: model-proctor
+description: Task-owning worker policy with deterministic acceptance (model_proctor) — classify a task into a frozen lane (Flash bounded / GLM substantial / K3 marathon), dispatch through the installed runner (C:/Tools/model-proctor/runner.py), verify with tree-bound receipts, switch on stagnation rather than fixed rungs. Use for substantial coding tasks. Do NOT use for trivial tasks (known location, one edit-test cycle) — execute those directly. Supersedes nothing yet; static-cascade remains the frozen reference. Requires the model-proctor install (scripts/install.py).
 ---
 
-# Task Router Policy (vNext MVP)
+# Model Proctor Policy
 
-You are the leader. The deterministic control plane is the installed runner,
+The proctor assigns the exam, watches the clock, and grades it objectively — the model never
+marks its own work. You are the leader. The deterministic control plane is the installed runner,
 `C:/Tools/model-proctor/runner.py` (repo copy: `runner/runner.py`; delegate transport and the
 agent roster live alongside it at `C:/Tools/model-proctor/`). Prompts do not
 enforce; the runner enforces. Deterministic evidence outranks every model, including you.

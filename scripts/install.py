@@ -7,7 +7,7 @@
   Re-run this script (elevated or after taking ownership) to update the roster.
   agents.json is machine-local and deliberately untracked; if absent it is
   skipped — regenerate it from agents.example.json per delegate/README.md.
-- Installs the static-cascade and task-router skills to
+- Installs the static-cascade and model-proctor skills to
   %USERPROFILE%\\.kimi-code\\skills\\
 """
 import os
@@ -21,7 +21,7 @@ TOOL_DIR = Path(r"C:\Tools\model-proctor")
 
 DELEGATE_FILES = ["delegate.py", "agents.example.json", "README.md"]
 RUNNER_FILES = [("runner", "runner.py")]
-SKILLS = ("static-cascade", "task-router")
+SKILLS = ("static-cascade", "model-proctor")
 
 
 def main():
