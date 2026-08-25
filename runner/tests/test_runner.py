@@ -99,6 +99,12 @@ class SmokeTest(unittest.TestCase):
         rc, out = run_runner("init", "--workspace", ws, "--task", task)
         self.assertEqual(rc, 0, out)
         self.assertEqual(out["lane"], "flash")
+        # TOOL-014: state lives OUTSIDE the agent-writable workspace.
+        self.assertFalse((Path(ws) / ".runner").exists())
+        state_dir = Path(out["state_dir"])
+        self.assertTrue(state_dir.is_dir())
+        self.assertTrue((state_dir / "sealed" / "check.py").is_file())
+        self.assertNotIn(str(Path(ws)), str(state_dir))
 
         env = {"FAKE_WORKER_WRITE": "math_utils.py", "FAKE_WORKER_CONTENT": FIXED}
         rc, out = run_runner("dispatch", "--workspace", ws, "--task", task,
@@ -232,6 +238,37 @@ class SmokeTest(unittest.TestCase):
         self.assertEqual(facts["usage_records"], row["usage_records"])
         self.assertEqual(coverage["records_unrecognized"], 0)
         self.assertEqual(coverage["malformed_lines"], 0)
+
+    # ── S7: worker tampers with the verifier; sealed copy restores it ────
+    def test_s7_verifier_tamper_restored(self):
+        ws = make_workspace(self.tmp)  # buggy code, real verifier
+        task = make_task(self.tmp)
+        rc, out = run_runner("init", "--workspace", ws, "--task", task)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(out["sealed_files"], ["check.py"])
+
+        # Worker neuters the verifier instead of fixing the code.
+        (Path(ws) / "check.py").write_text('print("PASS")\n', encoding="utf-8")
+        rc, out = run_runner("dispatch", "--workspace", ws, "--task", task,
+                             "--delegate", str(FAKE_WORKER))
+        self.assertEqual(rc, 0, out)
+
+        # Verify must restore the sealed verifier, flag the tamper, and FAIL
+        # (the code is still buggy) — a hollow PASS from the fake check would
+        # be the #18-class exploit succeeding.
+        rc, out = run_runner("verify", "--workspace", ws, "--task", task)
+        self.assertEqual(rc, 1)
+        self.assertFalse(out["passed"])
+        self.assertEqual(out["verifier_restored"], ["check.py"])
+        self.assertTrue(out["tamper_detected"])
+        self.assertIn("assert", (Path(ws) / "check.py").read_text(encoding="utf-8"))
+
+        # After a real fix, verification passes clean on the restored verifier.
+        (Path(ws) / "math_utils.py").write_text(FIXED, encoding="utf-8")
+        rc, out = run_runner("verify", "--workspace", ws, "--task", task)
+        self.assertEqual(rc, 0, out)
+        self.assertTrue(out["passed"])
+        self.assertEqual(out["verifier_restored"], [])
 
 
 def importlib_import(path):

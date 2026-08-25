@@ -15,26 +15,39 @@ frozen research **pattern** documented here; `runner/` is the live implementatio
 
 ## What this repo is
 
-- `cascade/` — the deterministic static-cascade controller (`cascade.py`). Owns `cascade-state.json`
-  transitions, JSON-schema-validates the planner's task list, enforces caps/counters and **legal
-  escalation transitions only**, archives dispatch evidence (`files_changed`, run-log archival with
-  sha256), and provides `commit-green` / `rollback` git gates, `handoff` / `record-decision` session
-  continuity, an owner-set immutable `threat_model` field, and a vision capability filter.
-  76 tests.
+- `runner/` — **the live control plane** (`runner.py`): task intake with observable features, a
+  frozen lane table, worker dispatch through the delegate wrapper, leader-executed verification,
+  tree-bound acceptance receipts (stale on any post-verify mutation), a sealed verification
+  surface (payloads copied out of the agent-writable workspace at init; tampered inputs are
+  restored and flagged at verify time), stagnation detection with failure-class switching, and an
+  append-only metered task ledger. Runner state lives **outside** the workspace
+  (`.runner-state/` sibling). Smoke suite S1–S7: `python -m unittest discover -s runner/tests -v`.
 - `delegate/` — a lean Windows-native subprocess wrapper (`delegate.py`) that runs external CLI
-  workers (fast scouts, cheap workers, independent reviewers, read-only advisors) with a stable
-  envelope contract: exit codes, truncation flags, captured child session ids for cheap resume.
-  88 tests.
+  workers with a stable envelope contract: exit codes, truncation flags, captured child session
+  ids, and per-dispatch isolated+seeded `KIMI_CODE_HOME` homes (`child_home` in the envelope;
+  callers meter from it, then delete it). 90 tests.
+- `cascade/` — the deterministic static-cascade controller (`cascade.py`), **frozen research
+  artifact** (governance: issue #16). Owns `cascade-state.json` transitions, plan validation,
+  caps and legal escalation transitions, evidence archival, `commit-green`/`rollback` git gates,
+  `handoff`/`record-decision` continuity, threat-model field, vision capability filter. Carries
+  known trust-boundary defects (issues #17–#22) — do not use its green gate as acceptance
+  authority; `runner/` designs them out instead of patching them. 76 tests (2 known
+  environment-sensitive failures, documented in #20).
 - `scripts/extract_log.py` — deterministic session-log fact extractor with a **coverage manifest**
   (bytes in, records parsed, records dropped). LLMs interpret extractions; they never scan raw
   volume. Verifier-class: hash-frozen per goal. 5 tests.
 - `policy/` — the governing specs (see Provenance below).
-- `evals/` — the A/B/C benchmark harness that killed the dynamic design (see below).
-- `skill/` — installable Kimi Code skills (`static-cascade/`, `multi-model-routing/` (superseded)).
+- `evals/` — the benchmark harness: v1 (20 cases + 2 showcase, killed the dynamic design), v2 and
+  v3 quality sets (10 each, naive-solution-proven to discriminate requirement fidelity), the
+  metering stack (`meter.py`, `pricing.yaml`), pre-registrations (`PREREG-v2.md`, `PREREG-v3.md`),
+  and every result row (`results*.jsonl`, `pilot-*.jsonl`, `phase2-*.jsonl`, `phase3-*.jsonl`).
+- `skill/` — installable Kimi Code skills (`task-router/` live policy, `static-cascade/` frozen
+  reference, `multi-model-routing/` superseded).
 
 Python 3.10+, standard library only, everywhere.
 
 ```bash
+python -m unittest discover -s runner/tests -v    # live path smoke suite (S1–S7)
 python -m unittest discover -s delegate/tests -v
 python -m unittest discover -s cascade/tests -v
 python -m unittest discover -s scripts/tests -v
@@ -189,15 +202,23 @@ fix is honestly labeled [CODE] / [POLICY] / [RESIDUAL]).
 - [Magnitude](https://magnitude.dev/) — the routing behavior this project set out to reproduce with
   open models; see Phase 0 for what is confirmed vs. inferred about it.
 
-## Model lineup (Fireworks, metered) and advisors (flat-rate)
+## Model lineup (measured, 2026-08-25 — replaces the frozen design's assumed ladder)
 
-| Role | Model | Why |
+The frozen cascade's role ladder (K3 plans → GLM orchestrates → Flash executes → Pro/advisors
+escalate) was a **cost hypothesis**. The pre-registered fixed-arm grids (issues #27/#29/#30,
+`evals/phase2-*.jsonl`, `evals/phase3-*.jsonl`) measured it instead: on bounded, spec-complete
+tasks the arms are quality-indistinguishable, so cost decides.
+
+| Role | Model | Basis |
 |---|---|---|
-| Planner (per substantial goal) | Kimi K3 | Planning/decomposition quality; a fixed per-goal tax, gated away from trivial tasks |
-| Orchestrator / QC | GLM-5.2 | $4.40 vs $15.00 per 1M output vs K3; decides within controller-legal transitions |
-| Default executor | DeepSeek V4 Flash | ~10–25× cheaper than K3 per turn; wins regardless of cache state |
-| Escalation executor | DeepSeek V4 Pro | Only on evidence-driven escalation (deterministic verification first, QC judgment second) |
-| Advisors (read-only, apex) | Codex CLI / Claude CLI | Flat-rate subscriptions; adversarial QC and design review; never edit the workspace |
+| Default worker (bounded/substantial) | GPT-OSS-120B (`gpt-oss-worker`) | 29/30 hidden on v3 (one flake), $0.053/hidden-pass — 3.0× cheaper than K3, zero systematic discordance |
+| Second (equal quality, ~1.8× faster wall) | GLM-5.2 (`glm-worker`) | 30/30 hidden on v3, $0.097/hidden-pass |
+| Marathon / open-ended | Kimi K3 (`k3-worker`) | **Hypothesis only — see Open gaps below** |
+| Cheap scout (vision, misc.) | Kimi K2.7 (`k27-scout`) | Carried from the frozen roster; live |
+| Advisors (read-only, closed triggers) | Codex CLI / Claude CLI | Flat-rate; trigger set in issue #8 — **not yet wired into the runner** (see Open gaps) |
+
+Retired: DeepSeek V4 Flash (404 on Fireworks since 2026-08-25, see #23). DS-Pro is a benchmark
+challenger, not a rung.
 
 ---
 
@@ -219,13 +240,23 @@ Start here: [Issues](../../issues).
 
 ## Status
 
-Research artifact frozen at 6095695 (2026-08-13); governance: issue #16 — the bespoke cascade
-carries no production authority. The wrapper, controller, and extractor are test-covered and
-installed via `scripts/install.py`. The benchmark suite is retained as regression
-infrastructure — its negative result is part of this repo's value.
+The measured end-state for bounded/spec-complete tasks is live: fixed cheap task-owning worker +
+deterministic verification + failure-class switching, no economic routing. The bespoke cascade is a
+frozen research artifact (6095695; governance #16). The grid results (#29/#30): quality parity
+across K3/GLM/GPT-OSS at 3.0× cost spread → the STOP rule fired; routing complexity stays parked.
 
-The live experiment path is `runner/` (MVP-001, issue #27): a thin task-owning control plane
-with tree-bound acceptance receipts, config-surface verification, and stagnation switching —
-designing out the frozen cascade's #17–#20 defects instead of patching them. Policy:
-`skill/task-router/SKILL.md` (installed alongside `static-cascade`). Smoke suite:
-`python -m unittest discover -s runner/tests -v`.
+The trust boundary is sealed for the live path (TOOL-013/014, issue #31/#33): isolated per-dispatch
+`KIMI_CODE_HOME`, runner state and verifier payloads outside the agent-writable workspace,
+restore-and-flag on verifier tamper, tree-staled receipts.
+
+### Open gaps and their activation triggers
+
+Parked items stay parked until their trigger fires — that is the governance working, not neglect.
+
+| Gap | Status | Activation trigger |
+|---|---|---|
+| **Marathon / open-ended lane (K3)** | Unproven — no v2/v3 case is marathon-shaped; K3's role there is a vendor-prior hypothesis | The first real multi-hour/open-ended task appears, or a marathon-shaped corpus gets built (extend `evals/fixtures/`, new PREREG); then run K3-vs-cheap as fixed arms on it before trusting the lane |
+| **Advisor gates (Sol/Opus, #8) and M3 parallelism (#26 Phase 5)** | Deferred, untested | Observed *conceptual* stagnation in production — workers stuck on reasoning, not execution loops (the runner's failure-class log distinguishes these); for M3: a task with genuinely separable uncertainty branches |
+| **Provider-billing reconciliation** | Residual — wire-metered costs are the estimate of record | First provider invoice day, or Fireworks billing-API access: reconcile `evals/meter.py` output against the bill within the PREREG tolerance (2–5%) |
+| **Decision-grade evaluation** | Screens only (v2/v3 are n=10–30, hidden checks run in-workspace albeit sealed) | Any claim intended to justify production adoption for a *third party*; until then, all results here are single-operator screens |
+| **Learned routing (#7)** | Parked | Measured oracle headroom: fixed arms must show systematic per-task-class quality splits large enough to pay for a classifier — v2/v3 show the opposite |

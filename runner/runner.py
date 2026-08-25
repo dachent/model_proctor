@@ -9,20 +9,29 @@ stagnation detection, and an append-only task record.
 Designs out the frozen cascade's trust-boundary defects at birth:
   #17  receipts bind a tree signature; any mutation after verify stales them
   #18  a config-surface manifest (conftest.py, pytest.ini, ...) is hashed at
-       init; new or changed verification-affecting files reject verification
+       init; new verification-affecting files reject verification
   #19  verifier commands are argv arrays — no POSIX shlex on Windows paths
   #20  a workspace inside a parent git repo is refused unless it IS the root
+
+Sealed trust boundary (TOOL-013/TOOL-014): worker CLIs run in an isolated,
+seeded KIMI_CODE_HOME (delegate side); runner state, receipts, the task
+ledger, and sealed verifier payloads live OUTSIDE the agent-writable
+workspace (default <ws_parent>/.runner-state/<ws>-<hash>, override with
+--state-dir); at verify time, verification inputs whose content diverges
+from the sealed copy are restored and the receipt flags the tamper
+(restore-and-flag, ATIF class) while added/removed surface files reject.
 
 Stdlib only, Python 3.10, Windows-native.
 
 Commands:
   lane     --task task.json                          print the frozen lane decision
-  init     --workspace ws --task task.json           validate + snapshot state
+  init     --workspace ws --task task.json           validate + seal + snapshot state
   dispatch --workspace ws --task task.json           run one worker attempt
   verify   --workspace ws --task task.json           leader-side acceptance check
   accept   --workspace ws --task task.json           refuse unless receipt fresh+green
-  record   --workspace ws --task task.json [--wire wire.jsonl] [--pricing pricing.yaml]
+  record   --workspace ws --task task.json [--wire wire.jsonl ...] [--pricing pricing.yaml]
   status   --workspace ws                            print runner state
+  (stateful commands accept --state-dir to relocate the external state root)
 
 Every command prints exactly one JSON object on stdout. Exit 0 = success,
 1 = refused/failed, 2 = usage error, 3 = missing/bad config, 4 = internal.
@@ -33,6 +42,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -216,21 +226,56 @@ def tree_signature(ws):
     return "files:" + _sha256_bytes("\n".join(sorted(rows)).encode("utf-8"))
 
 
-# ── state ───────────────────────────────────────────────────────────────
+# ── state (TOOL-014: OUTSIDE the agent-writable workspace) ──────────────
 
-def _state_path(ws):
-    return Path(ws) / STATE_DIR / "state.json"
+def _state_root(ws, state_dir=None):
+    """Runner state root. Receipts, state, the ledger, and sealed verifier
+    payloads must not be rewritable by the worker they judge — the default is
+    a sibling of the workspace, not a directory inside it."""
+    if state_dir:
+        return Path(state_dir)
+    ws_res = Path(ws).resolve()
+    key = re.sub(r"[^A-Za-z0-9_.-]+", "_", ws_res.name)
+    digest = hashlib.sha256(str(ws_res).encode("utf-8")).hexdigest()[:8]
+    return ws_res.parent / ".runner-state" / f"{key}-{digest}"
 
 
-def _receipt_path(ws, task_id):
-    return Path(ws) / STATE_DIR / f"receipt-{task_id}.json"
+def _state_path(root):
+    return Path(root) / "state.json"
 
 
-def _load_state(ws):
-    p = _state_path(ws)
+def _receipt_path(root, task_id):
+    return Path(root) / f"receipt-{task_id}.json"
+
+
+def _load_state(root):
+    p = _state_path(root)
     if not p.is_file():
         raise SystemExit(_emit({"error": "runner not initialized; run `init` first"}, 3))
     return _load_json(p, "runner state")
+
+
+def seal_files(task, ws, sroot):
+    """Copy the verification payload out of the agent-writable workspace at
+    init: task["seal"] entries + verifier argv file args + every config-surface
+    file. Returns {relpath: sha256} of what was sealed."""
+    files = set(task.get("seal", []))
+    for a in task["verifier"]["argv"]:
+        if a.startswith("{") or Path(a).is_absolute():
+            continue
+        if (Path(ws) / a).is_file():
+            files.add(a.replace(os.sep, "/"))
+    files |= set(config_surface(ws).keys())
+    sealed = {}
+    for rel in sorted(files):
+        src = Path(ws) / rel
+        if not src.is_file():
+            continue
+        dst = Path(sroot) / "sealed" / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        sealed[rel] = _sha256_file(src)
+    return sealed
 
 
 # ── failure fingerprints / stagnation ───────────────────────────────────
@@ -321,9 +366,11 @@ def cmd_init(args):
     ws = str(Path(args.workspace).resolve())
     task = load_task(args.task)
     check_workspace_root(ws)
+    sroot = _state_root(ws, args.state_dir)
     lane = task.get("lane") or lane_for(task["features"])[0]
     if lane not in LANES:
         raise SystemExit(_emit({"error": f"unknown lane: {lane}"}, 3))
+    sealed = seal_files(task, ws, sroot)
     state = {
         "schema_version": SCHEMA_VERSION,
         "task_id": task["task_id"],
@@ -333,20 +380,23 @@ def cmd_init(args):
         "budget": task["budget"],
         "init_config_surface": config_surface(ws),
         "init_tree_sig": tree_signature(ws),
+        "sealed": sealed,
         "dispatches": [],
         "failures": [],
         "accepted": False,
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
-    _write_json_atomic(_state_path(ws), state)
+    _write_json_atomic(_state_path(sroot), state)
     return _emit({"initialized": True, "task_id": task["task_id"], "lane": lane,
+                  "state_dir": str(sroot), "sealed_files": sorted(sealed),
                   "config_surface_files": sorted(state["init_config_surface"])})
 
 
 def cmd_dispatch(args):
     ws = str(Path(args.workspace).resolve())
     task = load_task(args.task)
-    state = _load_state(ws)
+    sroot = _state_root(ws, args.state_dir)
+    state = _load_state(sroot)
     if state["accepted"]:
         raise SystemExit(_emit({"error": "task already accepted"}, 1))
     if len(state["dispatches"]) >= state["budget"]["max_dispatches"]:
@@ -375,7 +425,7 @@ def cmd_dispatch(args):
             "fingerprint": f"provider:{envelope_status}",
             "at": state["dispatches"][-1]["at"],
         })
-    _write_json_atomic(_state_path(ws), state)
+    _write_json_atomic(_state_path(sroot), state)
     cls, rec = classify_and_recommend(state, state["lane"])
     return _emit({
         "dispatched": True, "agent": agent, "lane": state["lane"],
@@ -389,21 +439,29 @@ def cmd_dispatch(args):
 def cmd_verify(args):
     ws = str(Path(args.workspace).resolve())
     task = load_task(args.task)
-    state = _load_state(ws)
+    sroot = _state_root(ws, args.state_dir)
+    state = _load_state(sroot)
 
-    # #18: the verification surface must be exactly what init saw.
+    # #18: no NEW or REMOVED verification-affecting files since init.
     now_surface = config_surface(ws)
-    if now_surface != state["init_config_surface"]:
-        added = sorted(set(now_surface) - set(state["init_config_surface"]))
-        changed = sorted(k for k in now_surface if k in state["init_config_surface"]
-                         and now_surface[k] != state["init_config_surface"][k])
-        removed = sorted(set(state["init_config_surface"]) - set(now_surface))
+    added = sorted(set(now_surface) - set(state["init_config_surface"]))
+    removed = sorted(set(state["init_config_surface"]) - set(now_surface))
+    if added or removed:
         receipt = {"task_id": task["task_id"], "passed": False,
                    "rejected": "config_surface_changed",
-                   "added": added, "changed": changed, "removed": removed,
+                   "added": added, "removed": removed,
                    "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
-        _write_json_atomic(_receipt_path(ws, task["task_id"]), receipt)
+        _write_json_atomic(_receipt_path(sroot, task["task_id"]), receipt)
         return _emit(receipt, 1)
+
+    # TOOL-014: restore any MODIFIED verification input from the sealed copy
+    # (reset modified inputs before testing) and flag the tamper on the receipt.
+    restored = []
+    for rel, sealed_hash in state.get("sealed", {}).items():
+        cur = Path(ws) / rel
+        if not cur.is_file() or _sha256_file(cur) != sealed_hash:
+            shutil.copy2(Path(sroot) / "sealed" / rel, cur)
+            restored.append(rel)
 
     argv = [sys.executable if a == "{python}" else a for a in task["verifier"]["argv"]]
     with tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as tf:
@@ -417,17 +475,19 @@ def cmd_verify(args):
         "passed": passed,
         "verifier_exit": r.returncode,
         "verifier_output_hash": _sha256_bytes(output.encode("utf-8")),
+        "verifier_restored": restored,
+        "tamper_detected": bool(restored),
         "tree_sig": tree_signature(ws),
         "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
-    _write_json_atomic(_receipt_path(ws, task["task_id"]), receipt)
+    _write_json_atomic(_receipt_path(sroot, task["task_id"]), receipt)
     if not passed:
         state["failures"].append({
             "kind": "execution",
             "fingerprint": normalize_failure(output),
             "at": receipt["at"],
         })
-        _write_json_atomic(_state_path(ws), state)
+        _write_json_atomic(_state_path(sroot), state)
         cls, rec = classify_and_recommend(state, state["lane"])
         receipt["failure_class"] = cls
         receipt["recommendation"] = rec
@@ -437,8 +497,9 @@ def cmd_verify(args):
 def cmd_accept(args):
     ws = str(Path(args.workspace).resolve())
     task = load_task(args.task)
-    state = _load_state(ws)
-    rp = _receipt_path(ws, task["task_id"])
+    sroot = _state_root(ws, args.state_dir)
+    state = _load_state(sroot)
+    rp = _receipt_path(sroot, task["task_id"])
     if not rp.is_file():
         raise SystemExit(_emit({"accepted": False, "reason": "no receipt; run verify"}, 1))
     receipt = _load_json(rp, "receipt")
@@ -456,7 +517,7 @@ def cmd_accept(args):
         }, 1))
     state["accepted"] = True
     state["accepted_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-    _write_json_atomic(_state_path(ws), state)
+    _write_json_atomic(_state_path(sroot), state)
     return _emit({"accepted": True, "task_id": task["task_id"],
                   "receipt": receipt})
 
@@ -529,7 +590,8 @@ def price_tokens(totals, pricing):
 def cmd_record(args):
     ws = str(Path(args.workspace).resolve())
     task = load_task(args.task)
-    state = _load_state(ws)
+    sroot = _state_root(ws, args.state_dir)
+    state = _load_state(sroot)
     row = {
         "task_id": task["task_id"],
         "lane": state["lane"],
@@ -559,7 +621,7 @@ def cmd_record(args):
             by_model, total = price_tokens(totals, load_pricing(args.pricing))
             row["cost_usd_by_model"] = by_model
             row["api_cost_usd"] = total
-    out = Path(ws) / STATE_DIR / "tasks.jsonl"
+    out = Path(sroot) / "tasks.jsonl"
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "a", encoding="utf-8") as f:
         f.write(json.dumps(row, sort_keys=True) + "\n")
@@ -568,7 +630,7 @@ def cmd_record(args):
 
 def cmd_status(args):
     ws = str(Path(args.workspace).resolve())
-    return _emit(_load_state(ws))
+    return _emit(_load_state(_state_root(ws, args.state_dir)))
 
 
 def main(argv=None):
@@ -580,6 +642,9 @@ def main(argv=None):
             p.add_argument("--task", required=True)
         if name != "lane":
             p.add_argument("--workspace", required=True)
+            p.add_argument("--state-dir", default=None,
+                           help="override the external runner-state location "
+                                "(default: sibling .runner-state/<ws>-<hash>)")
         if name == "dispatch":
             p.add_argument("--delegate", default=None)
             p.add_argument("--agent-map", default=None)

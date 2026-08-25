@@ -126,6 +126,11 @@ def run_case(case, out_root, dry_run, lane_override=None, max_dispatches=None,
         "features": dict(CATEGORY_FEATURES[case["category"]]),
         "scope": ["."],
         "verifier": {"argv": ["{python}", "check.py"]},
+        # TOOL-014: seal the hidden check too — it lives in the workspace during
+        # the run, so a worker could read/rewrite it; verify restores the sealed
+        # copy and flags tampering, and pilot's post-accept hidden run then
+        # executes the restored (== sealed) file.
+        "seal": ["check.py", "hidden_check.py"],
         "budget": {"max_dispatches": max_dispatches or 3, "max_stagnant": 3,
                    "timeout_s": min(case["timeout_seconds"] * 2, 600)},
     }

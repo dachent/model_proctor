@@ -32,6 +32,10 @@ that is a planning consult, not a mandatory planner tax.
 
 ## Flow (one task-scoped worker session per task)
 
+Runner state, receipts, and sealed verifier payloads live OUTSIDE the workspace
+(`.runner-state/` sibling) — the worker cannot rewrite its own evidence. At verify time the
+runner restores any tampered verification input from the sealed copy and flags it on the receipt.
+
 1. **Write the task file**: `task.json` with `task_id`, `prompt`, `features`, `scope`
    (non-empty), `verifier.argv` (an argv ARRAY — never a shell string; use `{python}` for the
    interpreter), and `budget`.

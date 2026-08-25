@@ -22,7 +22,9 @@ as a frozen research artifact — see Status.)
 - `runner/` — the MVP-001 thin control plane (`runner.py`): frozen task-start lane
   selection, delegate-wrapper dispatch, leader-side verification with tree-bound
   receipts and a config-surface manifest, stagnation switching, append-only task
-  records. Smoke suite in `runner/tests/` (S1–S6 + git-root cases). Designs out the
+  records. State, receipts, and sealed verifier payloads live OUTSIDE the workspace
+  (`<ws_parent>/.runner-state/<ws>-<hash>/`, override with `--state-dir`; TOOL-014).
+  Smoke suite in `runner/tests/` (S1–S7 + git-root cases). Designs out the
   frozen cascade's trust-boundary defects (#17–#20) rather than patching them.
 - `policy/delegation-policy.md` — the K3 orchestration policy (routing decision procedure, fire
   rules, task packet schema, budgets, stopping rules, final acceptance gate). The production skill
