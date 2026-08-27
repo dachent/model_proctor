@@ -34,6 +34,13 @@ Acceptance gate (TOOL-015/016/018). The gate consumes what verify records:
     just `git status` letters, which alone never staled an already-dirty
     file that was edited again.
 
+Known residuals (#40). The state root is at a path the worker can compute
+and write -- there is no OS-level confinement -- and the installed tool
+directory is user-writable. `init --reinit` and the --state-dir boundary
+check narrow the accidental cases; they do not make receipts unforgeable.
+Treat the boundary as tamper-EVIDENT against a non-adversarial worker, not
+sealed against a hostile one.
+
 Stdlib only, Python 3.10, Windows-native.
 
 Commands:
@@ -408,7 +415,20 @@ def _state_root(ws, state_dir=None):
     payloads must not be rewritable by the worker they judge — the default is
     a sibling of the workspace, not a directory inside it."""
     if state_dir:
-        return Path(state_dir)
+        root = Path(state_dir).expanduser().resolve()
+        wsr = Path(ws).resolve()
+        if root == wsr or wsr in root.parents:
+            raise SystemExit(_emit({
+                "error": "state_dir_inside_workspace",
+                "detail": "runner state must not be writable by the worker it "
+                          "judges; choose a path outside the workspace. Note "
+                          "that STATE_DIR is pruned by _walk_files, so an "
+                          "in-workspace state root would also be invisible to "
+                          "config_surface() and the files: tree signature.",
+                "state_dir": str(root),
+                "workspace": str(wsr),
+            }, 1))
+        return root
     ws_res = Path(ws).resolve()
     key = re.sub(r"[^A-Za-z0-9_.-]+", "_", ws_res.name)
     digest = hashlib.sha256(str(ws_res).encode("utf-8")).hexdigest()[:8]
@@ -549,6 +569,28 @@ def cmd_init(args):
     task = load_task(args.task)
     check_workspace_root(ws)
     sroot = _state_root(ws, args.state_dir)
+    # Re-running init unconditionally re-sealed whatever was on disk NOW,
+    # re-snapshotted the config surface, and reset dispatches/failures/accepted
+    # -- so a worker never needed to forge a receipt, only to run `init`.
+    # Re-initialisation is sometimes legitimate, so require the intent to be
+    # stated and count it on state, where the leader can see it.
+    prior = _state_path(sroot)
+    reinit_count = 0
+    if prior.is_file():
+        if not getattr(args, "reinit", False):
+            raise SystemExit(_emit({
+                "error": "already_initialized",
+                "detail": "state already exists for this workspace; re-running "
+                          "init would re-seal the CURRENT tree as the baseline "
+                          "and reset the dispatch budget. Pass --reinit if that "
+                          "is what you intend.",
+                "state_dir": str(sroot),
+            }, 1))
+        try:
+            reinit_count = int(_load_json(prior, "runner state")
+                               .get("reinit_count", 0)) + 1
+        except (ValueError, TypeError):
+            reinit_count = 1
     lane = task.get("lane") or lane_for(task["features"])[0]
     if lane not in LANES:
         raise SystemExit(_emit({"error": f"unknown lane: {lane}"}, 3))
@@ -562,6 +604,7 @@ def cmd_init(args):
         # A reviewed decision, recorded outside the worker-writable tree so
         # dispatch can honour it without re-reading the task file.
         "lane_override": bool(task.get("lane")),
+        "reinit_count": reinit_count,
         # The verification contract, pinned OUTSIDE the agent-writable tree.
         # task.json is re-read on every command and lives in the workspace, so
         # an unpinned argv lets a worker swap the exam for print('ok').
@@ -580,6 +623,7 @@ def cmd_init(args):
     _write_json_atomic(_state_path(sroot), state)
     out = {"initialized": True, "task_id": task["task_id"], "lane": lane,
            "state_dir": str(sroot), "sealed_files": sorted(sealed),
+           "reinit_count": reinit_count,
            "config_surface_files": sorted(state["init_config_surface"])}
     if guard:
         out["production_guard"] = guard
@@ -959,6 +1003,11 @@ def main(argv=None):
             p.add_argument("--state-dir", default=None,
                            help="override the external runner-state location "
                                 "(default: sibling .runner-state/<ws>-<hash>)")
+        if name == "init":
+            p.add_argument("--reinit", action="store_true",
+                           help="re-baseline an already-initialized workspace: "
+                                "re-seals the CURRENT tree and resets the "
+                                "dispatch budget (counted on state)")
         if name == "dispatch":
             p.add_argument("--delegate", default=None)
             p.add_argument("--agent-map", default=None)

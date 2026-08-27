@@ -296,6 +296,29 @@ The trust boundary is sealed for the live path (TOOL-013/014, issue #31/#33): is
 `KIMI_CODE_HOME`, runner state and verifier payloads outside the agent-writable workspace,
 restore-and-flag on verifier tamper, tree-staled receipts.
 
+**Correction (2026-08-27 — TOOL-015/016/017/018, issues #36/#37/#38/#40).** The paragraph above is
+left as written because it is what this repo claimed at `7a69061`; "sealed" overstated what the code
+did. Two of the four mechanisms it cites did not hold as stated:
+
+- *restore-and-flag on verifier tamper* — the flag had **no consumer**. `cmd_accept` never read
+  `tamper_detected`, so a receipt recording that the worker altered the exam was accepted silently.
+- *tree-staled receipts* — in a **git** workspace the signature hashed `git status` letters and
+  paths, never content, so re-editing an already-dirty file left it unchanged. A dispatch after a
+  green verify also left the receipt intact. (Every recorded eval run used the non-git `files:` path,
+  which hashed contents and was correct, so no measured result is affected.)
+
+Both are fixed, along with two paths that reached a green receipt without the verifier running at
+all: the verifier argv was re-read from the worker-writable task file on every command, and
+`python -m MOD` resolved `MOD` out of the workspace, so a one-line `ws/unittest.py` turned a failing
+suite into exit 0.
+
+The accurate current claim is **tamper-evident against a non-adversarial worker**, not sealed
+against a hostile one. The worker runs as the same OS user with no filesystem confinement: the state
+root sits at a path it can compute and write, receipts are unsigned JSON, and the installed tool
+directory is user-writable. The realistic threat is a reward-hacking model gaming the exam it was
+handed rather than an attacker hunting the grader's filing cabinet — but the distinction is now
+recorded rather than assumed away. See #40 for what remains and what closing it would cost.
+
 ### Open gaps and their activation triggers
 
 Parked items stay parked until their trigger fires — that is the governance working, not neglect.
