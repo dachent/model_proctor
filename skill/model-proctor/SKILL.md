@@ -39,7 +39,8 @@ runner restores any tampered verification input from the sealed copy and flags i
 
 1. **Write the task file**: `task.json` with `task_id`, `prompt`, `features`, `scope`
    (non-empty), `verifier.argv` (an argv ARRAY — never a shell string; use `{python}` for the
-   interpreter), and `budget`.
+   interpreter), and `budget`. Tasks that drive a known production runner also require
+   `preflight_receipts` — see **Production tasks** below.
 2. **Lane**: `python C:/Tools/model-proctor/runner.py lane --task task.json` — record the decision. Override
    only by setting `lane` in the task file, and note why in the task record.
 3. **Init**: `python C:/Tools/model-proctor/runner.py init --workspace <w> --task task.json`. Refusal
@@ -54,6 +55,25 @@ runner restores any tampered verification input from the sealed copy and flags i
    receipt stales automatically on any tree mutation — re-verify after every change.
 7. **Record**: `python C:/Tools/model-proctor/runner.py record --workspace <w> --task task.json [--wire
    <wire.jsonl> --pricing evals/pricing.yaml]` — appends the append-only task record.
+
+## Production tasks
+
+If the prompt, scope, or verifier names a known production entrypoint (`run_week.ps1`,
+`src.run_all`, `src.run_weekly`, `run_readiness_doctor`, `morning_battery`), the runner
+treats the task as ops-class:
+
+- **The flash lane is refused** unless you set an explicit `lane` in the task file. `init`
+  and `dispatch` now agree on this; an explicit override is a reviewed decision, so record
+  why in the task record.
+- **`preflight_receipts` is mandatory** — a non-empty array of paths to logs or reports the
+  orchestrator's own probe (doctor / battery / dry-run) actually produced. Missing files
+  refuse (`preflight_receipt_required`); receipts older than 24h refuse
+  (`preflight_receipt_stale`, override with `budget.max_preflight_age_s`). Discovery is
+  what probes are for, not what dispatch budgets are for.
+
+This is a **known-entrypoint denylist over your own task text**, not a general ops-class
+detector: a prompt that never names one of those entrypoints will not trip it. Declaring
+features honestly is still your job.
 
 ## Failure classes and switching (not a fixed ladder)
 

@@ -143,5 +143,121 @@ class ProductionGuardTests(unittest.TestCase):
         self.assertEqual(out.get("envelope_status"), "completed")
 
 
+
+class _GuardBase(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+
+class ExplicitFlashOverrideTests(_GuardBase):
+    """The override init documents must survive dispatch.
+
+    Regression for the deadlock: init accepted lane:"flash" (task.get("lane")
+    is truthy, so the carve-out applied) while dispatch refused it
+    unconditionally, telling the operator to "re-init with an explicit `lane`
+    override" -- which is what they had just done. The pre-existing
+    test_init_allows_explicit_lane_override uses lane="glm", so it never
+    reached the disagreement.
+    """
+
+    def test_explicit_flash_survives_init_and_dispatch(self):
+        d = self.tmp / "r1"
+        d.mkdir()
+        receipt = d / "doctor_ok.log"
+        receipt.write_text("ALL GREEN", encoding="utf-8")
+        t = _write_task(self.tmp, lane="flash",
+                        preflight_receipts=[str(receipt)])
+        ws = self.tmp / "wsf"
+        ws.mkdir()
+        r = _run(["init", "--workspace", str(ws), "--task", str(t)])
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        out = json.loads(r.stdout)
+        self.assertEqual(out["lane"], "flash")
+        self.assertTrue(out["production_guard"]["production_task"])
+
+        r2 = _dispatch(ws, t)
+        out2 = json.loads(r2.stdout)
+        self.assertNotIn("error", out2)
+        self.assertEqual(out2.get("envelope_status"), "completed")
+
+    def test_feature_declared_flash_still_refused(self):
+        """No explicit lane: features must not smuggle production into flash."""
+        t = _write_task(self.tmp)          # features -> flash, no `lane` key
+        ws = self.tmp / "wsg"
+        ws.mkdir()
+        r = _run(["init", "--workspace", str(ws), "--task", str(t)])
+        self.assertNotEqual(r.returncode, 0)
+        out = json.loads(r.stdout)
+        self.assertEqual(out["error"], "flash_lane_forbidden_production_runner")
+        # A lane refusal is a refusal (1), not missing/bad config (3).
+        self.assertEqual(r.returncode, 1)
+
+
+class PreflightFreshnessTests(_GuardBase):
+    """Existence is satisfied by `touch`; replay is what age catches."""
+
+    def test_dispatch_refuses_stale_receipt(self):
+        import os
+        import time as _time
+        d = self.tmp / "r2"
+        d.mkdir()
+        receipt = d / "battery_green.log"
+        receipt.write_text("ALL GREEN", encoding="utf-8")
+        old = _time.time() - (8 * 24 * 3600)     # last week
+        os.utime(receipt, (old, old))
+        t = _write_task(self.tmp, lane="glm",
+                        preflight_receipts=[str(receipt)])
+        ws = self.tmp / "wsh"
+        ws.mkdir()
+        self.assertEqual(
+            _run(["init", "--workspace", str(ws), "--task", str(t)]).returncode, 0)
+        r = _dispatch(ws, t)
+        self.assertNotEqual(r.returncode, 0)
+        out = json.loads(r.stdout)
+        self.assertEqual(out["error"], "preflight_receipt_stale")
+        self.assertTrue(any("battery_green.log" in s for s in out["stale"]))
+
+    def test_budget_can_widen_the_window(self):
+        import os
+        import time as _time
+        d = self.tmp / "r3"
+        d.mkdir()
+        receipt = d / "doctor.log"
+        receipt.write_text("ALL GREEN", encoding="utf-8")
+        old = _time.time() - (8 * 24 * 3600)
+        os.utime(receipt, (old, old))
+        t = _write_task(
+            self.tmp, lane="glm", preflight_receipts=[str(receipt)],
+            budget={"max_dispatches": 1, "max_stagnant": 2, "timeout_s": 60,
+                    "max_preflight_age_s": 30 * 24 * 3600})
+        ws = self.tmp / "wsi"
+        ws.mkdir()
+        self.assertEqual(
+            _run(["init", "--workspace", str(ws), "--task", str(t)]).returncode, 0)
+        out = json.loads(_dispatch(ws, t).stdout)
+        self.assertNotIn("error", out)
+
+    def test_fresh_receipt_age_is_recorded(self):
+        d = self.tmp / "r4"
+        d.mkdir()
+        receipt = d / "doctor.log"
+        receipt.write_text("ALL GREEN", encoding="utf-8")
+        t = _write_task(self.tmp, lane="glm",
+                        preflight_receipts=[str(receipt)])
+        ws = self.tmp / "wsj"
+        ws.mkdir()
+        _run(["init", "--workspace", str(ws), "--task", str(t)])
+        _dispatch(ws, t)
+        r = _run(["status", "--workspace", str(ws)])
+        state = json.loads(r.stdout)
+        ages = state["dispatches"][-1]["preflight_ages_seconds"]
+        self.assertIsNotNone(ages, "preflight evidence left no trace")
+        self.assertTrue(any("doctor.log" in k for k in ages))
+
+
 if __name__ == "__main__":
     unittest.main()
