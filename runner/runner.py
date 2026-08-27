@@ -268,20 +268,77 @@ def check_workspace_root(ws):
         }, 1))
 
 
+def _porcelain_entries(ws):
+    """[(xy, relpath)] parsed from -z porcelain v1. Fails closed.
+
+    -z is required: with core.quotePath on (the default) the newline-delimited
+    form C-quotes any path containing non-ASCII, quotes, or backslashes, and a
+    naive parser corrupts those. Rename/copy records carry a second
+    origin-path field that must be consumed, not read as another entry.
+    """
+    r = subprocess.run(
+        ["git", "-C", str(ws), "status", "--porcelain=v1", "-z",
+         "--untracked-files=all"],
+        capture_output=True, timeout=60)
+    if r.returncode != 0:
+        raise SystemExit(_emit({
+            "error": "git_status_failed",
+            "detail": "cannot compute a tree signature; refusing rather than "
+                      "signing empty output",
+            "stderr": r.stderr.decode("utf-8", "replace")[-400:],
+        }, 1))
+    fields = r.stdout.decode("utf-8", "surrogateescape").split("\0")
+    entries, i = [], 0
+    while i < len(fields):
+        f = fields[i]
+        if not f or len(f) < 4:
+            i += 1
+            continue
+        xy = f[:2]
+        entries.append((xy, f[3:]))
+        if "R" in xy or "C" in xy:
+            i += 1          # consume the origin path of a rename/copy record
+        i += 1
+    return entries
+
+
 def tree_signature(ws):
     """Signature of the exact tree a verifier ran against.
 
-    Git workspace: HEAD + hash of `git status --porcelain` (tracked state).
+    Git workspace: HEAD + the non-clean entry set + the sha256 of each
+    non-clean path + the config surface.
     Non-git workspace: hash of the sorted (relpath, sha256) manifest.
     Either way, ANY mutation after verify produces a different signature (#17).
     """
     if _git_toplevel(ws) is not None:
         head = subprocess.run(["git", "-C", str(ws), "rev-parse", "HEAD"],
                               capture_output=True, text=True, timeout=30)
-        status = subprocess.run(
-            ["git", "-C", str(ws), "status", "--porcelain=v1", "--untracked-files=all"],
-            capture_output=True, text=True, timeout=60)
-        payload = (head.stdout + "\n" + status.stdout).encode("utf-8")
+        # An unborn branch (git init, no commit) legitimately has no HEAD;
+        # mark it explicitly rather than signing empty output.
+        head_part = head.stdout.strip() if head.returncode == 0 else "<unborn>"
+        rows = []
+        for xy, rel in _porcelain_entries(ws):
+            rows.append(f"{xy} {rel}")
+            # Porcelain reports status letters and paths, never content: a
+            # file already reading ' M path' keeps a byte-identical line when
+            # re-edited, so HEAD + status alone does NOT stale a receipt on
+            # the very mutation class this signature exists to catch. Hash
+            # the non-clean set — small after a dispatch, unlike the tree.
+            fp = Path(ws) / rel
+            if fp.is_file():
+                try:
+                    rows.append("  " + _sha256_file(fp))
+                except OSError:
+                    rows.append("  <unreadable>")
+            elif fp.is_dir():
+                rows.append("  <dir>")
+            else:
+                rows.append("  <absent>")
+        # The config surface is walked directly rather than through git, so
+        # verification-affecting files hidden by .gitignore are bound here.
+        for rel, digest in sorted(config_surface(ws).items()):
+            rows.append(f"cfg {digest}  {rel}")
+        payload = (head_part + "\n" + "\n".join(rows)).encode("utf-8")
         return "git:" + _sha256_bytes(payload)
     rows = []
     for rel, p in _walk_files(ws):
