@@ -53,6 +53,9 @@ runner restores any tampered verification input from the sealed copy and flags i
    Never trust worker-reported results.
 6. **Accept**: `python C:/Tools/model-proctor/runner.py accept --workspace <w> --task task.json`. A green
    receipt stales automatically on any tree mutation — re-verify after every change.
+   Accept also refuses when the receipt carries `tamper_detected` (a sealed verification
+   input was altered and the runner restored it) and when any dispatch happened after the
+   receipt was written. Both clear by re-running `verify` — never by re-running `accept`.
 7. **Record**: `python C:/Tools/model-proctor/runner.py record --workspace <w> --task task.json [--wire
    <wire.jsonl> --pricing evals/pricing.yaml]` — appends the append-only task record.
 

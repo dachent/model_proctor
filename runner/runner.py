@@ -663,6 +663,9 @@ def cmd_verify(args):
         "verifier_output_hash": _sha256_bytes(output.encode("utf-8")),
         "verifier_restored": restored,
         "tamper_detected": bool(restored),
+        # Binds the receipt to the dispatch it describes, so a later dispatch
+        # cannot be accepted on an earlier green receipt.
+        "dispatch_seq": len(state["dispatches"]),
         "tree_sig": tree_signature(ws),
         "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
@@ -692,6 +695,33 @@ def cmd_accept(args):
     if not receipt.get("passed"):
         raise SystemExit(_emit({"accepted": False, "reason": "receipt not green",
                                 "receipt": receipt}, 1))
+    # Restore-and-flag (TOOL-014) had no consumer: a receipt carrying
+    # tamper_detected was accepted silently, which makes the whole ATIF design
+    # decorative at the only point where it matters. A tampered verification
+    # surface is not acceptable evidence. Recoverable, not terminal -- the
+    # restore already made the files match the seal, so re-verifying yields a
+    # clean receipt.
+    if receipt.get("tamper_detected"):
+        raise SystemExit(_emit({
+            "accepted": False,
+            "reason": "tamper_detected: verification inputs were restored at "
+                      "verify; re-verify on the restored tree before accepting",
+            "verifier_restored": receipt.get("verifier_restored", []),
+            "receipt": receipt,
+        }, 1))
+    # A dispatch after a green verify left the receipt untouched, so
+    # verify -> dispatch -> accept was gated by tree_sig alone. When the second
+    # dispatch changes no bytes the signature does not move and the FIRST
+    # dispatch's receipt authorises the accept -- issue #17's sticky-flag
+    # defect. The receipt must describe the current dispatch count.
+    seq = receipt.get("dispatch_seq")
+    if seq is not None and seq != len(state["dispatches"]):
+        raise SystemExit(_emit({
+            "accepted": False,
+            "reason": "stale_receipt: dispatches occurred after verification",
+            "receipt_dispatch_seq": seq,
+            "current_dispatches": len(state["dispatches"]),
+        }, 1))
     current = tree_signature(ws)
     if current != receipt["tree_sig"]:
         # #17: the green receipt no longer describes this tree.
@@ -773,6 +803,17 @@ def price_tokens(totals, pricing):
     return by_model, (round(sum(known), 6) if len(known) == len(by_model) else None)
 
 
+def _receipt_flag(sroot, task_id):
+    """tamper_detected from the task's receipt, or None when there is none."""
+    rp = _receipt_path(sroot, task_id)
+    if not rp.is_file():
+        return None
+    try:
+        return bool(json.loads(rp.read_text(encoding="utf-8")).get("tamper_detected"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def cmd_record(args):
     ws = str(Path(args.workspace).resolve())
     task = load_task(args.task)
@@ -784,6 +825,7 @@ def cmd_record(args):
         "dispatches": len(state["dispatches"]),
         "agents_used": sorted({d["agent"] for d in state["dispatches"]}),
         "accepted": state["accepted"],
+        "tamper_detected": _receipt_flag(sroot, task["task_id"]),
         "failures": len(state["failures"]),
         "wall_time_seconds": round(sum(
             d.get("duration_seconds") or 0 for d in state["dispatches"]), 3),
