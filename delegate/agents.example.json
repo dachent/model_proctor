@@ -33,7 +33,8 @@
       "required_environment": [
         "EXAMPLE_API_KEY"
       ],
-      "write_allowed": false
+      "write_allowed": false,
+      "allow_breakaway": false
     },
     "example-reviewer": {
       "command": [

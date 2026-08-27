@@ -92,6 +92,11 @@ if _IS_WINDOWS:
 
 if _IS_WINDOWS:
     _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+    # Opt-in per agent (`allow_breakaway`): lets descendants escape the job via
+    # CREATE_BREAKAWAY_FROM_JOB so deliberately-detached pipelines survive
+    # worker exit. Timeout kills stay effective regardless — kill_process_tree
+    # force-taskkill /T /F's out-of-job descendants before closing the job.
+    _JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x0400
     _JobObjectExtendedLimitInformation = 9
     _PROCESS_SET_QUOTA = 0x0100
     _PROCESS_TERMINATE = 0x0001
@@ -156,16 +161,20 @@ if _IS_WINDOWS:
             ("PeakJobMemoryUsed", ctypes.c_size_t),
         ]
 
-    # Breakaway is deliberately NOT allowed: a child calling
-    # CreateProcess(CREATE_BREAKAWAY_FROM_JOB) fails, keeping all descendants
-    # inside the kill-on-close boundary.
-    def create_kill_on_close_job():
+    # Breakaway is opt-in per agent config (`allow_breakaway`, default False):
+    # with the flag unset, children calling CreateProcess(CREATE_BREAKAWAY_FROM_JOB)
+    # fail, keeping all descendants inside the kill-on-close boundary (legacy
+    # guarantee). With the flag set, detached grandchildren survive worker exit —
+    # required for workers that launch supervised long-running pipelines.
+    def create_kill_on_close_job(allow_breakaway=False):
         """Create a Job Object that kills all assigned processes when the handle closes."""
         job = _k32.CreateJobObjectW(None, None)
         if not job:
             raise ctypes.WinError(ctypes.get_last_error())
         info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
         info.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if allow_breakaway:
+            info.BasicLimitInformation.LimitFlags |= _JOB_OBJECT_LIMIT_BREAKAWAY_OK
         ok = _k32.SetInformationJobObject(
             job, _JobObjectExtendedLimitInformation,
             ctypes.byref(info), ctypes.sizeof(info),
@@ -406,6 +415,13 @@ def _validate_agent(name, agent, global_max_timeout, check_executable=False):
     wa = agent.get("write_allowed", False)
     if not isinstance(wa, bool):
         raise ConfigError(f"Agent '{name}': write_allowed must be a boolean")
+    # allow_breakaway — opt-in JOB_OBJECT_LIMIT_BREAKAWAY_OK for workers that
+    # must launch deliberately-detached long-running processes (e.g. weekly
+    # pipeline orchestrators). Default False preserves the legacy
+    # everything-dies-with-the-worker guarantee.
+    ab = agent.get("allow_breakaway", False)
+    if not isinstance(ab, bool):
+        raise ConfigError(f"Agent '{name}': allow_breakaway must be a boolean")
     # resume_args — optional argv template for session resume (e.g. kimi's
     # ["-r", "{session_id}"]).  Exactly one element must contain the
     # placeholder.  Missing field = the agent does not support resume.
@@ -998,7 +1014,7 @@ def _run_delegate_inner(args, start_time, agent_name):
     job_warning = False
     if _IS_WINDOWS:
         try:
-            job = create_kill_on_close_job()
+            job = create_kill_on_close_job(bool(agent.get("allow_breakaway", False)))
             proc_handle = assign_process_to_job(job, proc.pid)
         except Exception:
             if job is not None:

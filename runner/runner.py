@@ -159,6 +159,61 @@ def lane_for(features):
     return "glm", ["default: substantial work without a bounded signature -> GLM worker"]
 
 
+# ── production-runner guard ─────────────────────────────────────────────
+# Incident class (fsn_rpt_wk_finops week-run 2026-08-25): a task driving a
+# production pipeline orchestrator was feature-declared "bounded +
+# known_location" and dispatched to the flash lane; worker #1 burned its whole
+# budget discovering environment prerequisites (the WKFINOPS-231 durable
+# checkout) that live statically in the orchestrator's own preflight surface.
+# Deterministic rule: tasks that drive production runners are never flash —
+# regardless of declared features — and their leader must attach preflight
+# receipts before any dispatch.
+
+PRODUCTION_RUNNER_PATTERNS = (
+    "run_week.ps1",
+    "src.run_all",
+    "src.run_weekly",
+    "run_readiness_doctor",
+    "morning_battery",
+)
+
+
+def production_guard(task):
+    """Deterministic ops-class detection. Returns (is_production, matched)."""
+    hay = "\n".join([
+        str(task.get("prompt", "")),
+        json.dumps(task.get("scope", [])),
+        json.dumps(task.get("verifier", {})),
+    ]).lower()
+    matched = sorted({p for p in PRODUCTION_RUNNER_PATTERNS if p in hay})
+    return bool(matched), matched
+
+
+def check_production_guard(task, lane):
+    """Refuse illegal production/lane combinations at init time.
+
+    flash is forbidden for production-runner tasks unless the leader set an
+    explicit ``lane`` in the task file (the skill's documented override path —
+    an explicit override is a reviewed decision, not feature guesswork).
+    Returns an advisory dict for state/output, or None for non-production.
+    """
+    is_prod, matched = production_guard(task)
+    if not is_prod:
+        return None
+    if lane == "flash" and not task.get("lane"):
+        raise SystemExit(_emit({
+            "error": "flash_lane_forbidden_production_runner",
+            "detail": (
+                "task drives production pipeline runners; the flash lane is "
+                "ineligible (multi-hour supervised ops work). Set an explicit "
+                "`lane` override with justification in the task file, or let "
+                "the features classify honestly."
+            ),
+            "matched_patterns": matched,
+        }, 3))
+    return {"production_task": True, "matched_patterns": matched}
+
+
 # ── workspace surface / tree signatures ──────────────────────────────────
 
 def _is_config_surface(relpath):
@@ -360,7 +415,14 @@ def run_delegate(delegate_py, agent, ws, prompt, timeout_s):
 def cmd_lane(args):
     task = load_task(args.task)
     lane, reasons = lane_for(task["features"])
-    return _emit({"task_id": task["task_id"], "lane": lane, "reasons": reasons})
+    out = {"task_id": task["task_id"], "lane": lane, "reasons": reasons}
+    is_prod, matched = production_guard(task)
+    if is_prod:
+        out["production_task"] = True
+        out["matched_patterns"] = matched
+        if lane == "flash" and not task.get("lane"):
+            out["guard"] = "flash_lane_forbidden_production_runner (init/dispatch will refuse)"
+    return _emit(out)
 
 
 def cmd_init(args):
@@ -371,6 +433,7 @@ def cmd_init(args):
     lane = task.get("lane") or lane_for(task["features"])[0]
     if lane not in LANES:
         raise SystemExit(_emit({"error": f"unknown lane: {lane}"}, 3))
+    guard = check_production_guard(task, lane)
     sealed = seal_files(task, ws, sroot)
     state = {
         "schema_version": SCHEMA_VERSION,
@@ -388,9 +451,12 @@ def cmd_init(args):
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
     _write_json_atomic(_state_path(sroot), state)
-    return _emit({"initialized": True, "task_id": task["task_id"], "lane": lane,
-                  "state_dir": str(sroot), "sealed_files": sorted(sealed),
-                  "config_surface_files": sorted(state["init_config_surface"])})
+    out = {"initialized": True, "task_id": task["task_id"], "lane": lane,
+           "state_dir": str(sroot), "sealed_files": sorted(sealed),
+           "config_surface_files": sorted(state["init_config_surface"])}
+    if guard:
+        out["production_guard"] = guard
+    return _emit(out)
 
 
 def cmd_dispatch(args):
@@ -403,6 +469,33 @@ def cmd_dispatch(args):
     if len(state["dispatches"]) >= state["budget"]["max_dispatches"]:
         raise SystemExit(_emit({"error": "dispatch budget exhausted",
                                 "dispatches": len(state["dispatches"])}, 1))
+    # Production-runner guard, enforced again at dispatch (defense in depth —
+    # the task file may have changed since init).
+    is_prod, matched = production_guard(task)
+    if is_prod and state["lane"] == "flash":
+        raise SystemExit(_emit({
+            "error": "flash_lane_forbidden_production_runner",
+            "detail": "state lane is flash for a production-runner task; "
+                      "re-init with an explicit `lane` override.",
+            "matched_patterns": matched,
+        }, 1))
+    if is_prod:
+        # Leader-side preflight mandate: the deterministic probe (doctor /
+        # battery / dry-run) must have RUN before a worker is spent — discovery
+        # is what probes are for, not what dispatch budgets are for. An absent
+        # or empty receipt list refuses exactly like a missing file.
+        receipts = task.get("preflight_receipts", [])
+        if not isinstance(receipts, list):
+            raise SystemExit(_emit({"error": "preflight_receipts must be a list of file paths"}, 3))
+        missing = [p for p in receipts if not Path(str(p)).expanduser().is_file()]
+        if not receipts or missing:
+            raise SystemExit(_emit({
+                "error": "preflight_receipt_required",
+                "missing": missing,
+                "hint": "run the orchestrator's own preflight (doctor/battery/"
+                        "dry-run) and list the resulting log/report paths in "
+                        "the task file's `preflight_receipts` array",
+            }, 1))
     agent_map = dict(DEFAULT_AGENT_MAP)
     if args.agent_map:
         agent_map.update(_load_json(args.agent_map, "agent map"))
