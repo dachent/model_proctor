@@ -162,6 +162,36 @@ failure was real. **Dynamic per-turn routing was rejected.** The skill is kept i
 superseded artifact, not deleted, because the delegation mechanics (wrapper, task packets, evidence
 rules) survived into the static design.
 
+**Correction (2026-08-27 — EVAL-004, issue #46).** Point 2 above is wrong about *which* instrument
+failed, and the original wording is kept because it is what this repo concluded at the time. Counted
+directly from `evals/results.jsonl`:
+
+| | rows | `acceptance_pass` | `hidden_pass` |
+|---|---|---|---|
+| all | 36 | **36** | 27 |
+| showcase | 18 | **18** | **9** |
+
+Acceptance passed at 1.00. Hidden passed at **0.50** — `big_explore` failed its hidden check in 8 of
+9 runs while `bulk_migrate` failed 1 of 9. So the hidden fixtures *did* discriminate, decisively.
+What did not discriminate was the **acceptance check**, which passed 36/36 while the hidden check was
+failing 9 times: it caught **0 of 9**.
+
+That inverts the lesson. Phase 2 recorded a verifier problem as a fixture problem — and the
+distinction is load-bearing, because Phase 3 below cites RouterBench for the constraint that
+cascading only works when verifier error stays ≤ 0.1, a threshold this repo had never evaluated
+against its own verifiers.
+
+`evals/verifier_error.py` now computes the contingency tables on demand, reporting **both** the joint
+`P(accept ∧ ¬hidden)` and the conditional `P(accept | ¬hidden)` with explicit denominators — on
+`results.jsonl` those read 0.25 and 1.00 respectively, and quoting either without its denominator is
+meaningless. `evals/PREREG-verifier-error.md` fixes the decision rule.
+
+The honest verdict from that rule: **every corpus here is underpowered.** No file has more than 9
+rows in which the hidden check failed, and resolving a 0.1 threshold needs roughly 30. The finding is
+therefore *"these screens cannot resolve verifier error"*, not a rate — which is itself worth
+recording, because it means the v1/v2/v3 pass rates say less about acceptance quality than their
+headline numbers suggest. No architectural conclusion is drawn from it.
+
 ### Phase 3 — Literature verification → the static cascade (2026-08)
 
 Before designing v3, the routing literature was checked against primary sources. The evidence base
