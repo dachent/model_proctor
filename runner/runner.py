@@ -21,6 +21,19 @@ workspace (default <ws_parent>/.runner-state/<ws>-<hash>, override with
 from the sealed copy are restored and the receipt flags the tamper
 (restore-and-flag, ATIF class) while added/removed surface files reject.
 
+Acceptance gate (TOOL-015/016/018). The gate consumes what verify records:
+  - a receipt flagged tamper_detected is refused, not merely annotated;
+  - a receipt is bound to the dispatch count it was written at, so
+    verify -> dispatch -> accept can no longer accept the earlier green;
+  - the verification contract (verifier argv, seal list) is pinned into
+    external state at init, and verify refuses when the workspace task file
+    diverges from the pin;
+  - a workspace file shadowing a `-m` verifier module rejects verification
+    (cmd_verify runs with cwd=ws, so the workspace is sys.path[0]);
+  - the git tree signature hashes the content of every non-clean path, not
+    just `git status` letters, which alone never staled an already-dirty
+    file that was edited again.
+
 Stdlib only, Python 3.10, Windows-native.
 
 Commands:
@@ -346,6 +359,48 @@ def tree_signature(ws):
     return "files:" + _sha256_bytes("\n".join(sorted(rows)).encode("utf-8"))
 
 
+def _verifier_modules(argv):
+    """Module names a `-m` verifier would import (`-m x` and `-mx` forms)."""
+    mods = []
+    for i, a in enumerate(argv):
+        if a == "-m" and i + 1 < len(argv):
+            mods.append(argv[i + 1])
+        elif a.startswith("-m") and len(a) > 2 and not a.startswith("--"):
+            mods.append(a[2:])
+    return mods
+
+
+def module_shadow_check(task, ws, probe_cwd):
+    """Workspace files that would hijack a `-m MOD` verifier.
+
+    `python -m MOD` puts the process cwd at sys.path[0], and cmd_verify runs
+    the verifier with cwd=ws — so ws/MOD.py or ws/MOD/__init__.py resolves
+    ahead of the real module. A one-line ws/unittest.py turns a failing suite
+    into exit 0. Neither name is in CONFIG_SURFACE_NAMES, and a `-m` argument
+    is not a workspace file, so seal_files() never covers it and the
+    added/removed surface check never fires.
+
+    Only a candidate that ALSO resolves outside the workspace counts: a module
+    that exists only in the tree is the verifier's intended target, not a
+    shadow. Returns a sorted list of shadowing relpaths.
+    """
+    shadowed = []
+    for mod in _verifier_modules(task["verifier"]["argv"]):
+        top = mod.split(".")[0]
+        local = [c for c in (f"{top}.py", f"{top}/__init__.py")
+                 if (Path(ws) / c).is_file()]
+        if not local:
+            continue
+        probe = subprocess.run(
+            [sys.executable, "-c",
+             "import importlib.util as u, sys;"
+             "sys.exit(0 if u.find_spec(sys.argv[1]) else 1)", top],
+            capture_output=True, cwd=str(probe_cwd), timeout=60)
+        if probe.returncode == 0:
+            shadowed.extend(local)
+    return sorted(set(shadowed))
+
+
 # ── state (TOOL-014: OUTSIDE the agent-writable workspace) ──────────────
 
 def _state_root(ws, state_dir=None):
@@ -507,6 +562,11 @@ def cmd_init(args):
         # A reviewed decision, recorded outside the worker-writable tree so
         # dispatch can honour it without re-reading the task file.
         "lane_override": bool(task.get("lane")),
+        # The verification contract, pinned OUTSIDE the agent-writable tree.
+        # task.json is re-read on every command and lives in the workspace, so
+        # an unpinned argv lets a worker swap the exam for print('ok').
+        "verifier": task["verifier"],
+        "task_seal": sorted(task.get("seal", [])),
         "scope": task["scope"],
         "budget": task["budget"],
         "init_config_surface": config_surface(ws),
@@ -649,6 +709,30 @@ def cmd_verify(args):
             shutil.copy2(Path(sroot) / "sealed" / rel, cur)
             restored.append(rel)
 
+    # B3: the pinned contract outranks the live task file.
+    pinned = state.get("verifier")
+    if pinned is not None and pinned != task["verifier"]:
+        receipt = {"task_id": task["task_id"], "passed": False,
+                   "rejected": "verifier_changed_since_init",
+                   "pinned_argv": pinned.get("argv"),
+                   "task_file_argv": task["verifier"].get("argv"),
+                   "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        _write_json_atomic(_receipt_path(sroot, task["task_id"]), receipt)
+        return _emit(receipt, 1)
+
+    # B4: a pinned argv is still worthless if the module it names can be
+    # resolved out of the workspace instead.
+    shadowed = module_shadow_check(task, ws, sroot)
+    if shadowed:
+        receipt = {"task_id": task["task_id"], "passed": False,
+                   "rejected": "module_shadow_detected",
+                   "shadowed": shadowed,
+                   "detail": "workspace files shadow a module the verifier "
+                             "imports via -m; the workspace is sys.path[0]",
+                   "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        _write_json_atomic(_receipt_path(sroot, task["task_id"]), receipt)
+        return _emit(receipt, 1)
+
     argv = [sys.executable if a == "{python}" else a for a in task["verifier"]["argv"]]
     with tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as tf:
         r = subprocess.run(argv, cwd=ws, stdout=tf, stderr=subprocess.STDOUT,
@@ -666,6 +750,8 @@ def cmd_verify(args):
         # Binds the receipt to the dispatch it describes, so a later dispatch
         # cannot be accepted on an earlier green receipt.
         "dispatch_seq": len(state["dispatches"]),
+        # A green receipt now says WHAT was verified, not only which tree.
+        "verifier_argv": task["verifier"]["argv"],
         "tree_sig": tree_signature(ws),
         "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
