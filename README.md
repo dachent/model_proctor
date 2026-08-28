@@ -22,6 +22,11 @@ frozen research **pattern** documented here; `runner/` is the live implementatio
   restored and flagged at verify time), stagnation detection with failure-class switching, and an
   append-only metered task ledger. Runner state lives **outside** the workspace
   (`.runner-state/` sibling). Smoke suite S1–S7: `python -m unittest discover -s runner/tests -v`.
+  Acceptance additionally refuses a receipt flagged `tamper_detected` and one written before a
+  later dispatch; verification pins the verifier argv at init and rejects `-m` module shadowing;
+  `init` refuses to silently re-baseline an initialized workspace. See **Deterministic refusals**
+  below for the full list, and `runner/pilot.py` for the real-dispatch harness that drives the
+  whole loop against live workers.
 - `delegate/` — a lean Windows-native subprocess wrapper (`delegate.py`) that runs external CLI
   workers with a stable envelope contract: exit codes, truncation flags, captured child session
   ids, and per-dispatch isolated+seeded `KIMI_CODE_HOME` homes (`child_home` in the envelope;
@@ -97,6 +102,36 @@ python C:/Tools/model-proctor/runner.py record   --workspace <ws> --task task.js
 
 State, receipts, and the ledger land in `<ws_parent>/.runner-state/<ws>-<hash>/` — outside the
 worker's writable tree. Every command prints one JSON object; nonzero exit = refused/failed.
+
+#### Optional task-file fields
+
+| field | effect |
+|---|---|
+| `lane` | Overrides the frozen lane table. A reviewed decision — record why. Also the only way to run an ops-class task on `flash`. |
+| `seal` | Extra files copied out of the workspace at init and restored at verify. Verifier argv files and the config surface are sealed automatically; a `-m` verifier seals nothing from argv, so name test helpers here. |
+| `preflight_receipts` | **Required** for tasks naming a known production entrypoint: paths to logs the orchestrator's own probe produced. |
+| `budget.max_preflight_age_s` | Widens the default 24h freshness window on those receipts. |
+
+#### Deterministic refusals, and how each clears
+
+Every one is a refusal, not a warning — nonzero exit, no receipt, no acceptance.
+
+| refusal | raised by | clears when |
+|---|---|---|
+| `workspace_is_not_repo_root` | init | the workspace *is* the repo root (#20) |
+| `already_initialized` | init | you pass `--reinit` (counted on state, so re-baselining is visible) |
+| `state_dir_inside_workspace` | any | `--state-dir` points outside the agent-writable tree |
+| `flash_lane_forbidden_production_runner` | init, dispatch | features classify honestly, or an explicit `lane` is set |
+| `preflight_receipt_required` / `_stale` | dispatch | the probe has actually run, recently |
+| `config_surface_changed` | verify | no conftest/pytest.ini/pyproject/`*.pth` added or removed since init |
+| `verifier_changed_since_init` | verify | the task file's verifier matches the copy pinned at init |
+| `module_shadow_detected` | verify | no workspace file shadows a module the verifier imports via `-m` |
+| `tamper_detected` | accept | you re-run `verify` on the restored tree |
+| `stale_receipt` | accept | you re-run `verify` — the tree changed, or a dispatch happened after the receipt |
+
+The last two clear by re-running **`verify`**, never by re-running `accept`. A receipt records the
+tree signature, the dispatch count it was written at (`dispatch_seq`), and the verifier argv that
+produced it — so a green receipt states *what* was verified, not merely *that* something was.
 
 ---
 
