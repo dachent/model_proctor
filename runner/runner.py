@@ -732,6 +732,23 @@ def cmd_verify(args):
     sroot = _state_root(ws, args.state_dir)
     state = _load_state(sroot)
 
+    # A verifier that passes on the UNMODIFIED init tree has no discriminating
+    # power: it will pass whatever the worker does, so acceptance means
+    # nothing. The repo's own guard fixture is that shape --
+    # ["{python}", "-c", "print('ok')"].
+    #
+    # Deliberately NOT done by running the verifier at init. That writes a
+    # receipt, and cmd_accept never consults len(state["dispatches"]), so
+    # init -> accept would succeed with ZERO dispatches on exactly the task
+    # class this detects; a red baseline would also seed state["failures"] and
+    # pull a lateral switch forward by one dispatch. Instead, recognise the
+    # baseline when it happens naturally: if the tree has not moved since init,
+    # THIS verify already is the baseline run. Costs nothing, and gives
+    # init_tree_sig -- written at init and previously read nowhere -- a reader.
+    pre_tree_sig = tree_signature(ws)
+    baseline_tree = (state.get("init_tree_sig") is not None
+                     and pre_tree_sig == state["init_tree_sig"])
+
     # #18: no NEW or REMOVED verification-affecting files since init.
     now_surface = config_surface(ws)
     added = sorted(set(now_surface) - set(state["init_config_surface"]))
@@ -796,6 +813,13 @@ def cmd_verify(args):
         "dispatch_seq": len(state["dispatches"]),
         # A green receipt now says WHAT was verified, not only which tree.
         "verifier_argv": task["verifier"]["argv"],
+        # The tree had not moved since init when this verifier ran...
+        "baseline_tree": baseline_tree,
+        # ...and it passed anyway, so it cannot distinguish done from undone.
+        # Reported, never enforced: some tasks legitimately pass at init
+        # ("add a test that ..."), so this is evidence for the leader, not a
+        # gate. Recorded per task, it becomes its own frequency measurement.
+        "verifier_nondiscriminating": bool(baseline_tree and passed),
         "tree_sig": tree_signature(ws),
         "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
@@ -933,13 +957,13 @@ def price_tokens(totals, pricing):
     return by_model, (round(sum(known), 6) if len(known) == len(by_model) else None)
 
 
-def _receipt_flag(sroot, task_id):
-    """tamper_detected from the task's receipt, or None when there is none."""
+def _receipt_flag(sroot, task_id, field="tamper_detected"):
+    """A boolean flag from the task's receipt, or None when there is none."""
     rp = _receipt_path(sroot, task_id)
     if not rp.is_file():
         return None
     try:
-        return bool(json.loads(rp.read_text(encoding="utf-8")).get("tamper_detected"))
+        return bool(json.loads(rp.read_text(encoding="utf-8")).get(field))
     except (OSError, json.JSONDecodeError):
         return None
 
@@ -956,6 +980,8 @@ def cmd_record(args):
         "agents_used": sorted({d["agent"] for d in state["dispatches"]}),
         "accepted": state["accepted"],
         "tamper_detected": _receipt_flag(sroot, task["task_id"]),
+        "verifier_nondiscriminating": _receipt_flag(
+            sroot, task["task_id"], "verifier_nondiscriminating"),
         "failures": len(state["failures"]),
         "wall_time_seconds": round(sum(
             d.get("duration_seconds") or 0 for d in state["dispatches"]), 3),
