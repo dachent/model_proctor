@@ -44,17 +44,32 @@ runner restores any tampered verification input from the sealed copy and flags i
 2. **Lane**: `python C:/Tools/model-proctor/runner.py lane --task task.json` — record the decision. Override
    only by setting `lane` in the task file, and note why in the task record.
 3. **Init**: `python C:/Tools/model-proctor/runner.py init --workspace <w> --task task.json`. Refusal
-   (`workspace_is_not_repo_root`) is final — fix the workspace, never bypass.
+   (`workspace_is_not_repo_root`) is final — fix the workspace, never bypass. Init pins the
+   verification contract (`verifier`, `seal`) into external state; the task file sits inside
+   the worker-writable tree, so from here on the pinned copy is authoritative.
 4. **Dispatch**: `python C:/Tools/model-proctor/runner.py dispatch --workspace <w> --task task.json`. The
    worker owns the engineering trajectory in its own session; you own state and acceptance.
 5. **Verify**: `python C:/Tools/model-proctor/runner.py verify --workspace <w> --task task.json`. The runner
    rejects verification if any verification-affecting file (conftest.py, pytest.ini,
-   pyproject.toml, *.pth, ...) appeared or changed since init, then runs the verifier itself.
-   Never trust worker-reported results.
+   pyproject.toml, *.pth, ...) appeared or changed since init, if the task file's verifier
+   diverges from the pin (`verifier_changed_since_init`), or if a workspace file shadows a
+   module the verifier imports via `-m` (`module_shadow_detected` — the workspace is
+   `sys.path[0]`, so a dropped `unittest.py` would otherwise swallow the run). Then it runs
+   the verifier itself. Never trust worker-reported results.
 6. **Accept**: `python C:/Tools/model-proctor/runner.py accept --workspace <w> --task task.json`. A green
    receipt stales automatically on any tree mutation — re-verify after every change.
+   Accept also refuses when the receipt carries `tamper_detected` (a sealed verification
+   input was altered and the runner restored it) and when any dispatch happened after the
+   receipt was written. Both clear by re-running `verify` — never by re-running `accept`.
 7. **Record**: `python C:/Tools/model-proctor/runner.py record --workspace <w> --task task.json [--wire
-   <wire.jsonl> --pricing evals/pricing.yaml]` — appends the append-only task record.
+   <wire.jsonl> --pricing C:/Tools/model-proctor/pricing.yaml]` — appends the append-only task
+   record. Use the **installed** pricing table, not a relative `evals/` path: the relative form
+   resolves only when you happen to be sitting in the repo root, and a missing pricing file drops
+   cost accounting silently rather than failing loudly.
+
+The receipt records the tree signature, the dispatch count it was written at (`dispatch_seq`), and
+the `verifier_argv` that produced it — so a green receipt states *what* was verified, not merely
+that something was.
 
 ## Production tasks
 

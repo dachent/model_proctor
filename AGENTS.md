@@ -23,9 +23,24 @@ as a frozen research artifact — see Status.)
   selection, delegate-wrapper dispatch, leader-side verification with tree-bound
   receipts and a config-surface manifest, stagnation switching, append-only task
   records. State, receipts, and sealed verifier payloads live OUTSIDE the workspace
-  (`<ws_parent>/.runner-state/<ws>-<hash>/`, override with `--state-dir`; TOOL-014).
-  Smoke suite in `runner/tests/` (S1–S7 + git-root cases). Designs out the
-  frozen cascade's trust-boundary defects (#17–#20) rather than patching them.
+  (`<ws_parent>/.runner-state/<ws>-<hash>/`, override with `--state-dir`, which now
+  refuses a path inside the workspace; TOOL-014/017). Designs out the frozen
+  cascade's trust-boundary defects (#17–#20) rather than patching them.
+  Acceptance gate (TOOL-015/016/018): a receipt flagged `tamper_detected` is refused
+  rather than annotated; receipts carry `dispatch_seq` and `verifier_argv`, so one
+  written before a later dispatch no longer authorises acceptance and a green receipt
+  states *what* was verified; the verification contract is pinned at init and verify
+  refuses on divergence; `-m` module shadowing is rejected (cmd_verify runs with
+  `cwd=ws`, so the workspace is `sys.path[0]`); the git tree signature hashes content,
+  not just `git status` letters. `init` refuses to re-baseline an initialized workspace
+  without `--reinit`. Production-runner tasks (TOOL-019) are barred from `flash` absent
+  an explicit `lane`, and require fresh `preflight_receipts`. `runner/pilot.py` drives
+  the loop against real workers and appends an evidence row.
+  Tests in `runner/tests/`: S1–S7 + git-root cases, `test_production_guard.py`,
+  `test_acceptance_gate.py`, `test_tree_signature.py`, `test_verifier_integrity.py`,
+  `test_state_boundary.py`.
+  The boundary is **tamper-evident against a non-adversarial worker**, not sealed
+  against a hostile one — residuals tracked in #40.
 - `policy/delegation-policy.md` — the K3 orchestration policy (routing decision procedure, fire
   rules, task packet schema, budgets, stopping rules, final acceptance gate). The production skill
   installed to `%USERPROFILE%\.kimi-code\skills\static-cascade\` is derived from this hierarchy.
@@ -50,6 +65,12 @@ as a frozen research artifact — see Status.)
 - Rebuild watch: `python evals/meter.py --rebuild-watch <hours>`
 - Eval self-test: `python evals/run_eval.py --self-test`
 - Eval scorecard: `python evals/report.py`
+- Verifier error over committed rows: `python evals/verifier_error.py [--json]`
+  (free — no model runs; read `evals/PREREG-verifier-error.md` for the decision
+  rule before interpreting the output, and never quote a rate without its
+  denominator)
+- Real-dispatch pilot: `python runner/pilot.py --cases <id> --lane <lane> --max-dispatches 1`
+  (spends real tokens)
 
 ## Conventions
 

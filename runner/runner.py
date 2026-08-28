@@ -21,6 +21,26 @@ workspace (default <ws_parent>/.runner-state/<ws>-<hash>, override with
 from the sealed copy are restored and the receipt flags the tamper
 (restore-and-flag, ATIF class) while added/removed surface files reject.
 
+Acceptance gate (TOOL-015/016/018). The gate consumes what verify records:
+  - a receipt flagged tamper_detected is refused, not merely annotated;
+  - a receipt is bound to the dispatch count it was written at, so
+    verify -> dispatch -> accept can no longer accept the earlier green;
+  - the verification contract (verifier argv, seal list) is pinned into
+    external state at init, and verify refuses when the workspace task file
+    diverges from the pin;
+  - a workspace file shadowing a `-m` verifier module rejects verification
+    (cmd_verify runs with cwd=ws, so the workspace is sys.path[0]);
+  - the git tree signature hashes the content of every non-clean path, not
+    just `git status` letters, which alone never staled an already-dirty
+    file that was edited again.
+
+Known residuals (#40). The state root is at a path the worker can compute
+and write -- there is no OS-level confinement -- and the installed tool
+directory is user-writable. `init --reinit` and the --state-dir boundary
+check narrow the accidental cases; they do not make receipts unforgeable.
+Treat the boundary as tamper-EVIDENT against a non-adversarial worker, not
+sealed against a hostile one.
+
 Stdlib only, Python 3.10, Windows-native.
 
 Commands:
@@ -268,25 +288,124 @@ def check_workspace_root(ws):
         }, 1))
 
 
+def _porcelain_entries(ws):
+    """[(xy, relpath)] parsed from -z porcelain v1. Fails closed.
+
+    -z is required: with core.quotePath on (the default) the newline-delimited
+    form C-quotes any path containing non-ASCII, quotes, or backslashes, and a
+    naive parser corrupts those. Rename/copy records carry a second
+    origin-path field that must be consumed, not read as another entry.
+    """
+    r = subprocess.run(
+        ["git", "-C", str(ws), "status", "--porcelain=v1", "-z",
+         "--untracked-files=all"],
+        capture_output=True, timeout=60)
+    if r.returncode != 0:
+        raise SystemExit(_emit({
+            "error": "git_status_failed",
+            "detail": "cannot compute a tree signature; refusing rather than "
+                      "signing empty output",
+            "stderr": r.stderr.decode("utf-8", "replace")[-400:],
+        }, 1))
+    fields = r.stdout.decode("utf-8", "surrogateescape").split("\0")
+    entries, i = [], 0
+    while i < len(fields):
+        f = fields[i]
+        if not f or len(f) < 4:
+            i += 1
+            continue
+        xy = f[:2]
+        entries.append((xy, f[3:]))
+        if "R" in xy or "C" in xy:
+            i += 1          # consume the origin path of a rename/copy record
+        i += 1
+    return entries
+
+
 def tree_signature(ws):
     """Signature of the exact tree a verifier ran against.
 
-    Git workspace: HEAD + hash of `git status --porcelain` (tracked state).
+    Git workspace: HEAD + the non-clean entry set + the sha256 of each
+    non-clean path + the config surface.
     Non-git workspace: hash of the sorted (relpath, sha256) manifest.
     Either way, ANY mutation after verify produces a different signature (#17).
     """
     if _git_toplevel(ws) is not None:
         head = subprocess.run(["git", "-C", str(ws), "rev-parse", "HEAD"],
                               capture_output=True, text=True, timeout=30)
-        status = subprocess.run(
-            ["git", "-C", str(ws), "status", "--porcelain=v1", "--untracked-files=all"],
-            capture_output=True, text=True, timeout=60)
-        payload = (head.stdout + "\n" + status.stdout).encode("utf-8")
+        # An unborn branch (git init, no commit) legitimately has no HEAD;
+        # mark it explicitly rather than signing empty output.
+        head_part = head.stdout.strip() if head.returncode == 0 else "<unborn>"
+        rows = []
+        for xy, rel in _porcelain_entries(ws):
+            rows.append(f"{xy} {rel}")
+            # Porcelain reports status letters and paths, never content: a
+            # file already reading ' M path' keeps a byte-identical line when
+            # re-edited, so HEAD + status alone does NOT stale a receipt on
+            # the very mutation class this signature exists to catch. Hash
+            # the non-clean set — small after a dispatch, unlike the tree.
+            fp = Path(ws) / rel
+            if fp.is_file():
+                try:
+                    rows.append("  " + _sha256_file(fp))
+                except OSError:
+                    rows.append("  <unreadable>")
+            elif fp.is_dir():
+                rows.append("  <dir>")
+            else:
+                rows.append("  <absent>")
+        # The config surface is walked directly rather than through git, so
+        # verification-affecting files hidden by .gitignore are bound here.
+        for rel, digest in sorted(config_surface(ws).items()):
+            rows.append(f"cfg {digest}  {rel}")
+        payload = (head_part + "\n" + "\n".join(rows)).encode("utf-8")
         return "git:" + _sha256_bytes(payload)
     rows = []
     for rel, p in _walk_files(ws):
         rows.append(f"{_sha256_file(p)}  {rel}")
     return "files:" + _sha256_bytes("\n".join(sorted(rows)).encode("utf-8"))
+
+
+def _verifier_modules(argv):
+    """Module names a `-m` verifier would import (`-m x` and `-mx` forms)."""
+    mods = []
+    for i, a in enumerate(argv):
+        if a == "-m" and i + 1 < len(argv):
+            mods.append(argv[i + 1])
+        elif a.startswith("-m") and len(a) > 2 and not a.startswith("--"):
+            mods.append(a[2:])
+    return mods
+
+
+def module_shadow_check(task, ws, probe_cwd):
+    """Workspace files that would hijack a `-m MOD` verifier.
+
+    `python -m MOD` puts the process cwd at sys.path[0], and cmd_verify runs
+    the verifier with cwd=ws — so ws/MOD.py or ws/MOD/__init__.py resolves
+    ahead of the real module. A one-line ws/unittest.py turns a failing suite
+    into exit 0. Neither name is in CONFIG_SURFACE_NAMES, and a `-m` argument
+    is not a workspace file, so seal_files() never covers it and the
+    added/removed surface check never fires.
+
+    Only a candidate that ALSO resolves outside the workspace counts: a module
+    that exists only in the tree is the verifier's intended target, not a
+    shadow. Returns a sorted list of shadowing relpaths.
+    """
+    shadowed = []
+    for mod in _verifier_modules(task["verifier"]["argv"]):
+        top = mod.split(".")[0]
+        local = [c for c in (f"{top}.py", f"{top}/__init__.py")
+                 if (Path(ws) / c).is_file()]
+        if not local:
+            continue
+        probe = subprocess.run(
+            [sys.executable, "-c",
+             "import importlib.util as u, sys;"
+             "sys.exit(0 if u.find_spec(sys.argv[1]) else 1)", top],
+            capture_output=True, cwd=str(probe_cwd), timeout=60)
+        if probe.returncode == 0:
+            shadowed.extend(local)
+    return sorted(set(shadowed))
 
 
 # ── state (TOOL-014: OUTSIDE the agent-writable workspace) ──────────────
@@ -296,7 +415,20 @@ def _state_root(ws, state_dir=None):
     payloads must not be rewritable by the worker they judge — the default is
     a sibling of the workspace, not a directory inside it."""
     if state_dir:
-        return Path(state_dir)
+        root = Path(state_dir).expanduser().resolve()
+        wsr = Path(ws).resolve()
+        if root == wsr or wsr in root.parents:
+            raise SystemExit(_emit({
+                "error": "state_dir_inside_workspace",
+                "detail": "runner state must not be writable by the worker it "
+                          "judges; choose a path outside the workspace. Note "
+                          "that STATE_DIR is pruned by _walk_files, so an "
+                          "in-workspace state root would also be invisible to "
+                          "config_surface() and the files: tree signature.",
+                "state_dir": str(root),
+                "workspace": str(wsr),
+            }, 1))
+        return root
     ws_res = Path(ws).resolve()
     key = re.sub(r"[^A-Za-z0-9_.-]+", "_", ws_res.name)
     digest = hashlib.sha256(str(ws_res).encode("utf-8")).hexdigest()[:8]
@@ -437,6 +569,28 @@ def cmd_init(args):
     task = load_task(args.task)
     check_workspace_root(ws)
     sroot = _state_root(ws, args.state_dir)
+    # Re-running init unconditionally re-sealed whatever was on disk NOW,
+    # re-snapshotted the config surface, and reset dispatches/failures/accepted
+    # -- so a worker never needed to forge a receipt, only to run `init`.
+    # Re-initialisation is sometimes legitimate, so require the intent to be
+    # stated and count it on state, where the leader can see it.
+    prior = _state_path(sroot)
+    reinit_count = 0
+    if prior.is_file():
+        if not getattr(args, "reinit", False):
+            raise SystemExit(_emit({
+                "error": "already_initialized",
+                "detail": "state already exists for this workspace; re-running "
+                          "init would re-seal the CURRENT tree as the baseline "
+                          "and reset the dispatch budget. Pass --reinit if that "
+                          "is what you intend.",
+                "state_dir": str(sroot),
+            }, 1))
+        try:
+            reinit_count = int(_load_json(prior, "runner state")
+                               .get("reinit_count", 0)) + 1
+        except (ValueError, TypeError):
+            reinit_count = 1
     lane = task.get("lane") or lane_for(task["features"])[0]
     if lane not in LANES:
         raise SystemExit(_emit({"error": f"unknown lane: {lane}"}, 3))
@@ -450,6 +604,12 @@ def cmd_init(args):
         # A reviewed decision, recorded outside the worker-writable tree so
         # dispatch can honour it without re-reading the task file.
         "lane_override": bool(task.get("lane")),
+        "reinit_count": reinit_count,
+        # The verification contract, pinned OUTSIDE the agent-writable tree.
+        # task.json is re-read on every command and lives in the workspace, so
+        # an unpinned argv lets a worker swap the exam for print('ok').
+        "verifier": task["verifier"],
+        "task_seal": sorted(task.get("seal", [])),
         "scope": task["scope"],
         "budget": task["budget"],
         "init_config_surface": config_surface(ws),
@@ -463,6 +623,7 @@ def cmd_init(args):
     _write_json_atomic(_state_path(sroot), state)
     out = {"initialized": True, "task_id": task["task_id"], "lane": lane,
            "state_dir": str(sroot), "sealed_files": sorted(sealed),
+           "reinit_count": reinit_count,
            "config_surface_files": sorted(state["init_config_surface"])}
     if guard:
         out["production_guard"] = guard
@@ -592,6 +753,30 @@ def cmd_verify(args):
             shutil.copy2(Path(sroot) / "sealed" / rel, cur)
             restored.append(rel)
 
+    # B3: the pinned contract outranks the live task file.
+    pinned = state.get("verifier")
+    if pinned is not None and pinned != task["verifier"]:
+        receipt = {"task_id": task["task_id"], "passed": False,
+                   "rejected": "verifier_changed_since_init",
+                   "pinned_argv": pinned.get("argv"),
+                   "task_file_argv": task["verifier"].get("argv"),
+                   "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        _write_json_atomic(_receipt_path(sroot, task["task_id"]), receipt)
+        return _emit(receipt, 1)
+
+    # B4: a pinned argv is still worthless if the module it names can be
+    # resolved out of the workspace instead.
+    shadowed = module_shadow_check(task, ws, sroot)
+    if shadowed:
+        receipt = {"task_id": task["task_id"], "passed": False,
+                   "rejected": "module_shadow_detected",
+                   "shadowed": shadowed,
+                   "detail": "workspace files shadow a module the verifier "
+                             "imports via -m; the workspace is sys.path[0]",
+                   "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        _write_json_atomic(_receipt_path(sroot, task["task_id"]), receipt)
+        return _emit(receipt, 1)
+
     argv = [sys.executable if a == "{python}" else a for a in task["verifier"]["argv"]]
     with tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as tf:
         r = subprocess.run(argv, cwd=ws, stdout=tf, stderr=subprocess.STDOUT,
@@ -606,6 +791,11 @@ def cmd_verify(args):
         "verifier_output_hash": _sha256_bytes(output.encode("utf-8")),
         "verifier_restored": restored,
         "tamper_detected": bool(restored),
+        # Binds the receipt to the dispatch it describes, so a later dispatch
+        # cannot be accepted on an earlier green receipt.
+        "dispatch_seq": len(state["dispatches"]),
+        # A green receipt now says WHAT was verified, not only which tree.
+        "verifier_argv": task["verifier"]["argv"],
         "tree_sig": tree_signature(ws),
         "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
@@ -635,6 +825,33 @@ def cmd_accept(args):
     if not receipt.get("passed"):
         raise SystemExit(_emit({"accepted": False, "reason": "receipt not green",
                                 "receipt": receipt}, 1))
+    # Restore-and-flag (TOOL-014) had no consumer: a receipt carrying
+    # tamper_detected was accepted silently, which makes the whole ATIF design
+    # decorative at the only point where it matters. A tampered verification
+    # surface is not acceptable evidence. Recoverable, not terminal -- the
+    # restore already made the files match the seal, so re-verifying yields a
+    # clean receipt.
+    if receipt.get("tamper_detected"):
+        raise SystemExit(_emit({
+            "accepted": False,
+            "reason": "tamper_detected: verification inputs were restored at "
+                      "verify; re-verify on the restored tree before accepting",
+            "verifier_restored": receipt.get("verifier_restored", []),
+            "receipt": receipt,
+        }, 1))
+    # A dispatch after a green verify left the receipt untouched, so
+    # verify -> dispatch -> accept was gated by tree_sig alone. When the second
+    # dispatch changes no bytes the signature does not move and the FIRST
+    # dispatch's receipt authorises the accept -- issue #17's sticky-flag
+    # defect. The receipt must describe the current dispatch count.
+    seq = receipt.get("dispatch_seq")
+    if seq is not None and seq != len(state["dispatches"]):
+        raise SystemExit(_emit({
+            "accepted": False,
+            "reason": "stale_receipt: dispatches occurred after verification",
+            "receipt_dispatch_seq": seq,
+            "current_dispatches": len(state["dispatches"]),
+        }, 1))
     current = tree_signature(ws)
     if current != receipt["tree_sig"]:
         # #17: the green receipt no longer describes this tree.
@@ -716,6 +933,17 @@ def price_tokens(totals, pricing):
     return by_model, (round(sum(known), 6) if len(known) == len(by_model) else None)
 
 
+def _receipt_flag(sroot, task_id):
+    """tamper_detected from the task's receipt, or None when there is none."""
+    rp = _receipt_path(sroot, task_id)
+    if not rp.is_file():
+        return None
+    try:
+        return bool(json.loads(rp.read_text(encoding="utf-8")).get("tamper_detected"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def cmd_record(args):
     ws = str(Path(args.workspace).resolve())
     task = load_task(args.task)
@@ -727,6 +955,7 @@ def cmd_record(args):
         "dispatches": len(state["dispatches"]),
         "agents_used": sorted({d["agent"] for d in state["dispatches"]}),
         "accepted": state["accepted"],
+        "tamper_detected": _receipt_flag(sroot, task["task_id"]),
         "failures": len(state["failures"]),
         "wall_time_seconds": round(sum(
             d.get("duration_seconds") or 0 for d in state["dispatches"]), 3),
@@ -774,6 +1003,11 @@ def main(argv=None):
             p.add_argument("--state-dir", default=None,
                            help="override the external runner-state location "
                                 "(default: sibling .runner-state/<ws>-<hash>)")
+        if name == "init":
+            p.add_argument("--reinit", action="store_true",
+                           help="re-baseline an already-initialized workspace: "
+                                "re-seals the CURRENT tree and resets the "
+                                "dispatch budget (counted on state)")
         if name == "dispatch":
             p.add_argument("--delegate", default=None)
             p.add_argument("--agent-map", default=None)

@@ -22,6 +22,11 @@ frozen research **pattern** documented here; `runner/` is the live implementatio
   restored and flagged at verify time), stagnation detection with failure-class switching, and an
   append-only metered task ledger. Runner state lives **outside** the workspace
   (`.runner-state/` sibling). Smoke suite S1–S7: `python -m unittest discover -s runner/tests -v`.
+  Acceptance additionally refuses a receipt flagged `tamper_detected` and one written before a
+  later dispatch; verification pins the verifier argv at init and rejects `-m` module shadowing;
+  `init` refuses to silently re-baseline an initialized workspace. See **Deterministic refusals**
+  below for the full list, and `runner/pilot.py` for the real-dispatch harness that drives the
+  whole loop against live workers.
 - `delegate/` — a lean Windows-native subprocess wrapper (`delegate.py`) that runs external CLI
   workers with a stable envelope contract: exit codes, truncation flags, captured child session
   ids, and per-dispatch isolated+seeded `KIMI_CODE_HOME` homes (`child_home` in the envelope;
@@ -98,6 +103,36 @@ python C:/Tools/model-proctor/runner.py record   --workspace <ws> --task task.js
 State, receipts, and the ledger land in `<ws_parent>/.runner-state/<ws>-<hash>/` — outside the
 worker's writable tree. Every command prints one JSON object; nonzero exit = refused/failed.
 
+#### Optional task-file fields
+
+| field | effect |
+|---|---|
+| `lane` | Overrides the frozen lane table. A reviewed decision — record why. Also the only way to run an ops-class task on `flash`. |
+| `seal` | Extra files copied out of the workspace at init and restored at verify. Verifier argv files and the config surface are sealed automatically; a `-m` verifier seals nothing from argv, so name test helpers here. |
+| `preflight_receipts` | **Required** for tasks naming a known production entrypoint: paths to logs the orchestrator's own probe produced. |
+| `budget.max_preflight_age_s` | Widens the default 24h freshness window on those receipts. |
+
+#### Deterministic refusals, and how each clears
+
+Every one is a refusal, not a warning — nonzero exit, no receipt, no acceptance.
+
+| refusal | raised by | clears when |
+|---|---|---|
+| `workspace_is_not_repo_root` | init | the workspace *is* the repo root (#20) |
+| `already_initialized` | init | you pass `--reinit` (counted on state, so re-baselining is visible) |
+| `state_dir_inside_workspace` | any | `--state-dir` points outside the agent-writable tree |
+| `flash_lane_forbidden_production_runner` | init, dispatch | features classify honestly, or an explicit `lane` is set |
+| `preflight_receipt_required` / `_stale` | dispatch | the probe has actually run, recently |
+| `config_surface_changed` | verify | no conftest/pytest.ini/pyproject/`*.pth` added or removed since init |
+| `verifier_changed_since_init` | verify | the task file's verifier matches the copy pinned at init |
+| `module_shadow_detected` | verify | no workspace file shadows a module the verifier imports via `-m` |
+| `tamper_detected` | accept | you re-run `verify` on the restored tree |
+| `stale_receipt` | accept | you re-run `verify` — the tree changed, or a dispatch happened after the receipt |
+
+The last two clear by re-running **`verify`**, never by re-running `accept`. A receipt records the
+tree signature, the dispatch count it was written at (`dispatch_seq`), and the verifier argv that
+produced it — so a green receipt states *what* was verified, not merely *that* something was.
+
 ---
 
 ## Provenance: how this design was arrived at
@@ -161,6 +196,36 @@ The dynamic design's cost predictions did not materialize; on cost the prior res
 failure was real. **Dynamic per-turn routing was rejected.** The skill is kept in-repo as a
 superseded artifact, not deleted, because the delegation mechanics (wrapper, task packets, evidence
 rules) survived into the static design.
+
+**Correction (2026-08-27 — EVAL-004, issue #46).** Point 2 above is wrong about *which* instrument
+failed, and the original wording is kept because it is what this repo concluded at the time. Counted
+directly from `evals/results.jsonl`:
+
+| | rows | `acceptance_pass` | `hidden_pass` |
+|---|---|---|---|
+| all | 36 | **36** | 27 |
+| showcase | 18 | **18** | **9** |
+
+Acceptance passed at 1.00. Hidden passed at **0.50** — `big_explore` failed its hidden check in 8 of
+9 runs while `bulk_migrate` failed 1 of 9. So the hidden fixtures *did* discriminate, decisively.
+What did not discriminate was the **acceptance check**, which passed 36/36 while the hidden check was
+failing 9 times: it caught **0 of 9**.
+
+That inverts the lesson. Phase 2 recorded a verifier problem as a fixture problem — and the
+distinction is load-bearing, because Phase 3 below cites RouterBench for the constraint that
+cascading only works when verifier error stays ≤ 0.1, a threshold this repo had never evaluated
+against its own verifiers.
+
+`evals/verifier_error.py` now computes the contingency tables on demand, reporting **both** the joint
+`P(accept ∧ ¬hidden)` and the conditional `P(accept | ¬hidden)` with explicit denominators — on
+`results.jsonl` those read 0.25 and 1.00 respectively, and quoting either without its denominator is
+meaningless. `evals/PREREG-verifier-error.md` fixes the decision rule.
+
+The honest verdict from that rule: **every corpus here is underpowered.** No file has more than 9
+rows in which the hidden check failed, and resolving a 0.1 threshold needs roughly 30. The finding is
+therefore *"these screens cannot resolve verifier error"*, not a rate — which is itself worth
+recording, because it means the v1/v2/v3 pass rates say less about acceptance quality than their
+headline numbers suggest. No architectural conclusion is drawn from it.
 
 ### Phase 3 — Literature verification → the static cascade (2026-08)
 
@@ -295,6 +360,29 @@ across K3/GLM/GPT-OSS at 3.0× cost spread → the STOP rule fired; routing comp
 The trust boundary is sealed for the live path (TOOL-013/014, issue #31/#33): isolated per-dispatch
 `KIMI_CODE_HOME`, runner state and verifier payloads outside the agent-writable workspace,
 restore-and-flag on verifier tamper, tree-staled receipts.
+
+**Correction (2026-08-27 — TOOL-015/016/017/018, issues #36/#37/#38/#40).** The paragraph above is
+left as written because it is what this repo claimed at `7a69061`; "sealed" overstated what the code
+did. Two of the four mechanisms it cites did not hold as stated:
+
+- *restore-and-flag on verifier tamper* — the flag had **no consumer**. `cmd_accept` never read
+  `tamper_detected`, so a receipt recording that the worker altered the exam was accepted silently.
+- *tree-staled receipts* — in a **git** workspace the signature hashed `git status` letters and
+  paths, never content, so re-editing an already-dirty file left it unchanged. A dispatch after a
+  green verify also left the receipt intact. (Every recorded eval run used the non-git `files:` path,
+  which hashed contents and was correct, so no measured result is affected.)
+
+Both are fixed, along with two paths that reached a green receipt without the verifier running at
+all: the verifier argv was re-read from the worker-writable task file on every command, and
+`python -m MOD` resolved `MOD` out of the workspace, so a one-line `ws/unittest.py` turned a failing
+suite into exit 0.
+
+The accurate current claim is **tamper-evident against a non-adversarial worker**, not sealed
+against a hostile one. The worker runs as the same OS user with no filesystem confinement: the state
+root sits at a path it can compute and write, receipts are unsigned JSON, and the installed tool
+directory is user-writable. The realistic threat is a reward-hacking model gaming the exam it was
+handed rather than an attacker hunting the grader's filing cabinet — but the distinction is now
+recorded rather than assumed away. See #40 for what remains and what closing it would cost.
 
 ### Open gaps and their activation triggers
 
