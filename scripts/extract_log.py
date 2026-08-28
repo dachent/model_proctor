@@ -87,6 +87,17 @@ KNOWN_TOP_LEVEL = frozenset({
     "staleGuard.recorded",
     "token_counting.measured",
     "token_counting.turn_recorded",
+    # A second pass on 2026-08-27 over ~869 sessions rather than one capture
+    # (TOOL-026, issue #59) found six more. Worth recording why: the first
+    # refresh above was taken from a SINGLE session and looked complete
+    # because its coverage came back clean. It was not. A one-session sample
+    # cannot enumerate a schema -- refresh from a broad scan, not one file.
+    "context.undo",
+    "cron.add",
+    "cron.cursor",
+    "cron.delete",
+    "task.waitDelivered",
+    "token_counting.truncated",
 })
 
 # Inner event types recognized inside context.append_loop_event.
