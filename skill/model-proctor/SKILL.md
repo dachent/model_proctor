@@ -71,6 +71,12 @@ The receipt records the tree signature, the dispatch count it was written at (`d
 the `verifier_argv` that produced it — so a green receipt states *what* was verified, not merely
 that something was.
 
+It also carries `baseline_tree` (the tree had not moved since init when this verifier ran) and
+`verifier_nondiscriminating` (it *passed* on that unmodified tree). The second is a warning to you,
+not a refusal: a verifier that goes green before the worker has touched anything will go green
+whatever the worker does, so acceptance carries no information. Some tasks legitimately pass at
+init — "add a test that…" — so read it, don't obey it.
+
 ## Production tasks
 
 If the prompt, scope, or verifier names a known production entrypoint (`run_week.ps1`,
