@@ -17,7 +17,11 @@ CASES_PATH = os.path.join(SCRIPT_DIR, "cases.yaml")
 RESULTS_PATH = os.path.join(SCRIPT_DIR, "results.jsonl")
 BLINDING_PATH = os.path.join(SCRIPT_DIR, "blinding-key.json")
 KIMI_EXE = os.path.join(os.getenv("USERPROFILE", ""), ".kimi-code", "bin", "kimi.exe")
-RUNS_BASE = r"C:\Dev\bootstrap-state\kimi-router\evals\runs"
+# Post-rename path. The 2026-08-25 name sweep (3624978) updated the other live
+# kimi-router refs and missed this one, so new runs were still landing under the
+# old codename while evals/README.md documented the model-proctor location.
+# Historical result rows keep citing the old path — that record is immutable.
+RUNS_BASE = r"C:\Dev\bootstrap-state\model-proctor\evals\runs"
 
 DEFAULT_REPS = 3
 SIMPLE_FIX_REPS = 5
