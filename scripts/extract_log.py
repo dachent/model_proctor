@@ -73,6 +73,20 @@ KNOWN_TOP_LEVEL = frozenset({
     "turn.prompt",
     "turn.steer",
     "usage.record",
+    # Added from a live capture on 2026-08-27 (TOOL-023, issue #53). The
+    # enumeration above was frozen 2026-08-14; against kimi 0.34.0 these six
+    # accounted for 33 of 143 records -- 23% -- in one ordinary session. All
+    # of them were landing in records_unrecognized, so by this module's own
+    # contract ("leaders must reject extractions whose coverage shows nonzero
+    # unrecognized records") every current extraction was rejectable, and
+    # nobody was looking. Refresh from evals/fixtures/wire/ on kimi-CLI
+    # version bumps -- see #3 and #54.
+    "plugin.session_start",
+    "prompt.accepted",
+    "runtime.set_binding",
+    "staleGuard.recorded",
+    "token_counting.measured",
+    "token_counting.turn_recorded",
 })
 
 # Inner event types recognized inside context.append_loop_event.

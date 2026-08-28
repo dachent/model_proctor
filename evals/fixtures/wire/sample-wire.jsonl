@@ -1,0 +1,143 @@
+{"time": "2026-01-01T00:00:00", "type": "metadata"}
+{"time": "2026-01-01T00:00:01", "type": "runtime.set_binding"}
+{"time": "2026-01-01T00:00:02", "type": "mcp.tools_discovered"}
+{"time": "2026-01-01T00:00:03", "type": "mcp.tools_discovered"}
+{"time": "2026-01-01T00:00:04", "type": "mcp.tools_discovered"}
+{"time": "2026-01-01T00:00:05", "type": "permission.set_mode"}
+{"time": "2026-01-01T00:00:06", "type": "profile.bind"}
+{"time": "2026-01-01T00:00:07", "type": "config.update"}
+{"time": "2026-01-01T00:00:08", "type": "prompt.accepted"}
+{"time": "2026-01-01T00:00:09", "type": "turn.prompt"}
+{"time": "2026-01-01T00:00:10", "type": "context.append_message"}
+{"time": "2026-01-01T00:00:11", "type": "plugin.session_start"}
+{"event": {"type": "step.begin"}, "time": "2026-01-01T00:00:12", "type": "context.append_loop_event"}
+{"time": "2026-01-01T00:00:13", "type": "llm.tools_snapshot"}
+{"time": "2026-01-01T00:00:14", "type": "llm.request"}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:00:15", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 0, "inputOther": 56092, "output": 351}}
+{"time": "2026-01-01T00:00:16", "type": "token_counting.measured"}
+{"event": {"type": "content.part"}, "time": "2026-01-01T00:00:17", "type": "context.append_loop_event"}
+{"event": {"type": "content.part"}, "time": "2026-01-01T00:00:18", "type": "context.append_loop_event"}
+{"event": {"args": {"redacted": true}, "name": "Bash", "type": "tool.call"}, "time": "2026-01-01T00:00:19", "type": "context.append_loop_event"}
+{"event": {"args": {"redacted": true}, "name": "Bash", "type": "tool.call"}, "time": "2026-01-01T00:00:20", "type": "context.append_loop_event"}
+{"event": {"type": "tool.result"}, "time": "2026-01-01T00:00:21", "type": "context.append_loop_event"}
+{"event": {"type": "tool.result"}, "time": "2026-01-01T00:00:22", "type": "context.append_loop_event"}
+{"event": {"type": "step.end"}, "time": "2026-01-01T00:00:23", "type": "context.append_loop_event"}
+{"event": {"type": "step.begin"}, "time": "2026-01-01T00:00:24", "type": "context.append_loop_event"}
+{"time": "2026-01-01T00:00:25", "type": "llm.request"}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:00:26", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 56091, "inputOther": 673, "output": 124}}
+{"time": "2026-01-01T00:00:27", "type": "token_counting.measured"}
+{"event": {"type": "content.part"}, "time": "2026-01-01T00:00:28", "type": "context.append_loop_event"}
+{"event": {"type": "content.part"}, "time": "2026-01-01T00:00:29", "type": "context.append_loop_event"}
+{"event": {"args": {"redacted": true}, "name": "Bash", "type": "tool.call"}, "time": "2026-01-01T00:00:30", "type": "context.append_loop_event"}
+{"time": "2026-01-01T00:00:31", "type": "llm.request"}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:00:32", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 56763, "inputOther": 4469, "output": 522}}
+{"time": "2026-01-01T00:00:33", "type": "token_counting.measured"}
+{"time": "2026-01-01T00:00:34", "type": "config.update"}
+{"time": "2026-01-01T00:00:35", "type": "prompt.accepted"}
+{"time": "2026-01-01T00:00:36", "type": "turn.steer"}
+{"time": "2026-01-01T00:00:37", "type": "context.append_message"}
+{"time": "2026-01-01T00:00:38", "type": "llm.request"}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:00:39", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 61231, "inputOther": 882, "output": 216}}
+{"time": "2026-01-01T00:00:40", "type": "token_counting.measured"}
+{"time": "2026-01-01T00:00:41", "type": "turn.steer"}
+{"time": "2026-01-01T00:00:42", "type": "context.append_message"}
+{"time": "2026-01-01T00:00:43", "type": "llm.request"}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:00:44", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 62112, "inputOther": 1399, "output": 2914}}
+{"time": "2026-01-01T00:00:45", "type": "token_counting.measured"}
+{"time": "2026-01-01T00:00:46", "type": "llm.request"}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:00:47", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 63510, "inputOther": 3196, "output": 337}}
+{"time": "2026-01-01T00:00:48", "type": "token_counting.measured"}
+{"time": "2026-01-01T00:00:49", "type": "llm.request"}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:00:50", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 66705, "inputOther": 2641, "output": 2636}}
+{"time": "2026-01-01T00:00:51", "type": "token_counting.measured"}
+{"time": "2026-01-01T00:00:52", "type": "staleGuard.recorded"}
+{"time": "2026-01-01T00:00:53", "type": "staleGuard.recorded"}
+{"time": "2026-01-01T00:00:54", "type": "llm.request"}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:00:55", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 69345, "inputOther": 12249, "output": 5285}}
+{"time": "2026-01-01T00:00:56", "type": "token_counting.measured"}
+{"time": "2026-01-01T00:00:57", "type": "llm.request"}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:00:58", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 81593, "inputOther": 5802, "output": 1463}}
+{"time": "2026-01-01T00:00:59", "type": "token_counting.measured"}
+{"time": "2026-01-01T00:01:00", "type": "interaction.request"}
+{"time": "2026-01-01T00:01:01", "type": "interaction.resolved"}
+{"time": "2026-01-01T00:01:02", "type": "llm.request"}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:01:03", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 87394, "inputOther": 1497, "output": 20708}}
+{"time": "2026-01-01T00:01:04", "type": "token_counting.measured"}
+{"time": "2026-01-01T00:01:05", "type": "tools.update_store"}
+{"time": "2026-01-01T00:01:06", "type": "llm.request"}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:01:07", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 88890, "inputOther": 20845, "output": 183}}
+{"time": "2026-01-01T00:01:08", "type": "token_counting.measured"}
+{"time": "2026-01-01T00:01:09", "type": "staleGuard.recorded"}
+{"time": "2026-01-01T00:01:10", "type": "llm.request"}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:01:11", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 109734, "inputOther": 210, "output": 3816}}
+{"time": "2026-01-01T00:01:12", "type": "token_counting.measured"}
+{"time": "2026-01-01T00:01:13", "type": "staleGuard.recorded"}
+{"time": "2026-01-01T00:01:14", "type": "staleGuard.recorded"}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:01:15", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 109943, "inputOther": 3909, "output": 156}}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:01:16", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 113851, "inputOther": 241, "output": 764}}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:01:17", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 114091, "inputOther": 954, "output": 449}}
+{"time": "2026-01-01T00:01:18", "type": "tools.update_store"}
+{"time": "2026-01-01T00:01:19", "type": "task.started"}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:01:20", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 115044, "inputOther": 704, "output": 540}}
+{"time": "2026-01-01T00:01:21", "type": "turn.ended"}
+{"time": "2026-01-01T00:01:22", "type": "token_counting.turn_recorded"}
+{"time": "2026-01-01T00:01:23", "type": "config.update"}
+{"time": "2026-01-01T00:01:24", "type": "prompt.accepted"}
+{"time": "2026-01-01T00:01:25", "type": "turn.prompt"}
+{"time": "2026-01-01T00:01:26", "type": "context.append_message"}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:01:27", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 115747, "inputOther": 612, "output": 2443}}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:01:28", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 116358, "inputOther": 2794, "output": 741}}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:01:29", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 119151, "inputOther": 2363, "output": 1891}}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:01:30", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 121513, "inputOther": 2903, "output": 3492}}
+{"time": "2026-01-01T00:01:31", "type": "turn.ended"}
+{"time": "2026-01-01T00:01:32", "type": "token_counting.turn_recorded"}
+{"time": "2026-01-01T00:01:33", "type": "task.terminated"}
+{"time": "2026-01-01T00:01:34", "type": "turn.prompt"}
+{"time": "2026-01-01T00:01:35", "type": "context.append_message"}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:01:36", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 124415, "inputOther": 3734, "output": 139}}
+{"time": "2026-01-01T00:01:37", "type": "staleGuard.recorded"}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:01:38", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 128148, "inputOther": 311, "output": 528}}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:01:39", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 128458, "inputOther": 825, "output": 298}}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:01:40", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 129282, "inputOther": 422, "output": 1820}}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:01:41", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 129703, "inputOther": 1877, "output": 553}}
+{"time": "2026-01-01T00:01:42", "type": "context.append_message"}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:01:43", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 131579, "inputOther": 848, "output": 430}}
+{"time": "2026-01-01T00:01:44", "type": "tools.update_store"}
+{"time": "2026-01-01T00:01:45", "type": "staleGuard.recorded"}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:01:46", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 132426, "inputOther": 1804, "output": 145}}
+{"time": "2026-01-01T00:01:47", "type": "staleGuard.recorded"}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:01:48", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 134229, "inputOther": 836, "output": 801}}
+{"time": "2026-01-01T00:01:49", "type": "staleGuard.recorded"}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:01:50", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 135064, "inputOther": 854, "output": 209}}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:01:51", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 135917, "inputOther": 374, "output": 172}}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:01:52", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 136290, "inputOther": 393, "output": 1936}}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:01:53", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 136682, "inputOther": 2370, "output": 767}}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:01:54", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 139051, "inputOther": 855, "output": 634}}
+{"time": "2026-01-01T00:01:55", "type": "tools.update_store"}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:01:56", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 139905, "inputOther": 787, "output": 528}}
+{"time": "2026-01-01T00:01:57", "type": "turn.ended"}
+{"time": "2026-01-01T00:01:58", "type": "token_counting.turn_recorded"}
+{"time": "2026-01-01T00:01:59", "type": "config.update"}
+{"time": "2026-01-01T00:02:00", "type": "prompt.accepted"}
+{"time": "2026-01-01T00:02:01", "type": "turn.prompt"}
+{"time": "2026-01-01T00:02:02", "type": "context.append_message"}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:02:03", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 140691, "inputOther": 598, "output": 2151}}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:02:04", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 141288, "inputOther": 2476, "output": 765}}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:02:05", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 143763, "inputOther": 1397, "output": 1615}}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:02:06", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 145159, "inputOther": 2185, "output": 1644}}
+{"time": "2026-01-01T00:02:07", "type": "turn.ended"}
+{"time": "2026-01-01T00:02:08", "type": "token_counting.turn_recorded"}
+{"time": "2026-01-01T00:02:09", "type": "config.update"}
+{"time": "2026-01-01T00:02:10", "type": "prompt.accepted"}
+{"time": "2026-01-01T00:02:11", "type": "turn.prompt"}
+{"time": "2026-01-01T00:02:12", "type": "context.append_message"}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:02:13", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 147343, "inputOther": 1744, "output": 1254}}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:02:14", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 149086, "inputOther": 1816, "output": 826}}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:02:15", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 150901, "inputOther": 5947, "output": 1369}}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:02:16", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 156847, "inputOther": 2737, "output": 2834}}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:02:17", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 159583, "inputOther": 3884, "output": 1433}}
+{"time": "2026-01-01T00:02:18", "type": "context.append_message"}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:02:19", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 163466, "inputOther": 3552, "output": 2769}}
+{"model": "fireworks/deepseek-v4-flash-0731", "time": "2026-01-01T00:02:20", "type": "usage.record", "usage": {"inputCacheCreation": 0, "inputCacheRead": 167017, "inputOther": 3384, "output": 2635}}
+{"time": "2026-01-01T00:02:21", "type": "turn.ended"}
+{"time": "2026-01-01T00:02:22", "type": "token_counting.turn_recorded"}
