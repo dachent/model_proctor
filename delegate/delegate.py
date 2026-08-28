@@ -94,8 +94,16 @@ if _IS_WINDOWS:
     _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
     # Opt-in per agent (`allow_breakaway`): lets descendants escape the job via
     # CREATE_BREAKAWAY_FROM_JOB so deliberately-detached pipelines survive
-    # worker exit. Timeout kills stay effective regardless — kill_process_tree
-    # force-taskkill /T /F's out-of-job descendants before closing the job.
+    # worker exit.
+    #
+    # Timeout kills remain effective for descendants still reachable through
+    # parent-PID links, because kill_process_tree force-taskkill /T /F's them
+    # before closing the job. RESIDUAL: that reachability is exactly what
+    # breakaway is bought to remove. A process that escaped the job AND whose
+    # intermediate parent has already exited is in neither the job nor the /T
+    # walk, so a timeout kill will not reach it — surviving the run is the
+    # feature, and outliving a timeout is its cost. Enable per agent only
+    # where an orphaned pipeline is preferable to a killed one.
     _JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x0400
     _JobObjectExtendedLimitInformation = 9
     _PROCESS_SET_QUOTA = 0x0100

@@ -179,13 +179,20 @@ PRODUCTION_RUNNER_PATTERNS = (
 
 
 def production_guard(task):
-    """Deterministic ops-class detection. Returns (is_production, matched)."""
+    """Known-entrypoint denylist over leader-authored task text.
+
+    Deterministic *given the text* — but the text is the same surface that
+    mis-declared features in the originating incident, so a prompt that never
+    names a known entrypoint ("run the weekly pipeline") evades this entirely.
+    It hardens recurrences of a known incident; it is not a general ops-class
+    detector. Returns (is_production, matched).
+    """
     hay = "\n".join([
         str(task.get("prompt", "")),
         json.dumps(task.get("scope", [])),
         json.dumps(task.get("verifier", {})),
     ]).lower()
-    matched = sorted({p for p in PRODUCTION_RUNNER_PATTERNS if p in hay})
+    matched = sorted({p for p in PRODUCTION_RUNNER_PATTERNS if p.lower() in hay})
     return bool(matched), matched
 
 
@@ -210,7 +217,7 @@ def check_production_guard(task, lane):
                 "the features classify honestly."
             ),
             "matched_patterns": matched,
-        }, 3))
+        }, 1))
     return {"production_task": True, "matched_patterns": matched}
 
 
@@ -440,6 +447,9 @@ def cmd_init(args):
         "task_id": task["task_id"],
         "workspace": ws,
         "lane": lane,
+        # A reviewed decision, recorded outside the worker-writable tree so
+        # dispatch can honour it without re-reading the task file.
+        "lane_override": bool(task.get("lane")),
         "scope": task["scope"],
         "budget": task["budget"],
         "init_config_surface": config_surface(ws),
@@ -471,12 +481,14 @@ def cmd_dispatch(args):
                                 "dispatches": len(state["dispatches"])}, 1))
     # Production-runner guard, enforced again at dispatch (defense in depth —
     # the task file may have changed since init).
+    preflight_ages = None
     is_prod, matched = production_guard(task)
-    if is_prod and state["lane"] == "flash":
+    if is_prod and state["lane"] == "flash" and not state.get("lane_override"):
         raise SystemExit(_emit({
             "error": "flash_lane_forbidden_production_runner",
-            "detail": "state lane is flash for a production-runner task; "
-                      "re-init with an explicit `lane` override.",
+            "detail": "state lane is flash for a production-runner task and no "
+                      "explicit `lane` override was recorded at init; set an "
+                      "explicit `lane` in the task file and re-init.",
             "matched_patterns": matched,
         }, 1))
     if is_prod:
@@ -496,6 +508,26 @@ def cmd_dispatch(args):
                         "dry-run) and list the resulting log/report paths in "
                         "the task file's `preflight_receipts` array",
             }, 1))
+        # Existence alone is satisfied by `touch`. These receipts are authored
+        # by the leader — the trusted party here — so hashing them would
+        # defend against nobody. What existence cannot catch is LAST WEEK's
+        # receipt being replayed for today's run; age is the check with teeth.
+        max_age = state["budget"].get("max_preflight_age_s", 86400)
+        now = time.time()
+        ages = {str(q): round(now - Path(str(q)).expanduser().stat().st_mtime)
+                for q in receipts}
+        stale = sorted(k for k, v in ages.items() if v > max_age)
+        if stale:
+            raise SystemExit(_emit({
+                "error": "preflight_receipt_stale",
+                "stale": stale,
+                "ages_seconds": ages,
+                "max_age_seconds": max_age,
+                "hint": "re-run the preflight; these receipts predate the "
+                        "allowed window (override with "
+                        "budget.max_preflight_age_s)",
+            }, 1))
+        preflight_ages = ages
     agent_map = dict(DEFAULT_AGENT_MAP)
     if args.agent_map:
         agent_map.update(_load_json(args.agent_map, "agent map"))
@@ -511,6 +543,9 @@ def cmd_dispatch(args):
         "duration_seconds": envelope.get("duration_seconds", wall),
         "child_session_id": envelope.get("child_session_id"),
         "child_home": envelope.get("child_home"),
+        # Which preflight evidence authorised this dispatch, and how old it
+        # was — the check previously left no trace at all.
+        "preflight_ages_seconds": preflight_ages,
         "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     })
     if envelope_status not in ("completed", "failed"):
