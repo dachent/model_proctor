@@ -164,8 +164,22 @@ def run_case(case, out_root, dry_run, lane_override=None, max_dispatches=None,
         if recommendation and recommendation.get("action") == "lateral_switch":
             task["lane"] = recommendation["to_lane"]
             task_path.write_text(json.dumps(task, indent=2), encoding="utf-8")
-            run_runner("init", "--workspace", str(ws), "--task", str(task_path))
+            # A lateral switch re-baselines an already-initialized workspace, so
+            # it needs --reinit. Without it the guard added in this commit
+            # refuses with already_initialized, and because the return code used
+            # to be discarded the lane would silently NOT change while
+            # summary["switched_to"] still claimed it had -- the dispatch would
+            # run on the old lane and the evidence row would say otherwise.
+            # Check the code: a failed switch must stop the case, not falsify it.
+            rc_sw, out_sw = run_runner(
+                "init", "--workspace", str(ws), "--task", str(task_path),
+                "--reinit")
+            if rc_sw != 0:
+                summary["error"] = (out_sw.get("error")
+                                    or "lateral_switch reinit failed")
+                break
             summary["switched_to"] = recommendation["to_lane"]
+            summary["reinit_count"] = out_sw.get("reinit_count")
         started = time.time()
         disp_argv = ["dispatch", "--workspace", str(ws), "--task", str(task_path)]
         if agent_map:

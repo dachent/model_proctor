@@ -169,6 +169,7 @@ class StateDirBoundaryTest(_Base):
         ws = self.make_ws()
         task = self.make_task()
         outside = str(Path(self.tmp) / "external-state2")
+        # (see LateralSwitchTest below for the other caller this guard broke)
         run_runner("init", "--workspace", ws, "--task", task,
                    "--state-dir", outside)
         run_runner("dispatch", "--workspace", ws, "--task", task,
@@ -182,6 +183,52 @@ class StateDirBoundaryTest(_Base):
                              "--state-dir", outside)
         self.assertEqual(rc, 0, out)
         self.assertTrue(out["accepted"])
+
+
+class LateralSwitchTest(_Base):
+    """pilot.py re-inits an initialized workspace on a lateral switch.
+
+    The guard added here refuses that without --reinit, and pilot.py used to
+    discard the return code -- so the lane would silently NOT change while
+    summary["switched_to"] still claimed it had. The dispatch would run on the
+    old lane and the evidence row would say otherwise: worse than a failure,
+    because it falsifies the record rather than stopping.
+
+    No hermetic test reaches pilot's real-dispatch path, which is the gap #54
+    exists for. These two cover the capability and the call site.
+    """
+
+    def test_reinit_actually_changes_the_lane(self):
+        ws = self.make_ws()
+        task = self.make_task()
+        rc, out = run_runner("init", "--workspace", ws, "--task", task)
+        self.assertEqual(rc, 0, out)
+        first_lane = out["lane"]
+
+        p = Path(task)
+        t = json.loads(p.read_text(encoding="utf-8"))
+        t["lane"] = "k3" if first_lane != "k3" else "glm"
+        p.write_text(json.dumps(t), encoding="utf-8")
+
+        rc, out = run_runner("init", "--workspace", ws, "--task", task,
+                             "--reinit")
+        self.assertEqual(rc, 0, f"lateral switch blocked by the guard: {out}")
+        self.assertEqual(out["lane"], t["lane"], "the lane must actually change")
+        self.assertEqual(out["reinit_count"], 1)
+
+    def test_pilot_passes_reinit_and_checks_the_result(self):
+        src = (ROOT / "runner" / "pilot.py").read_text(encoding="utf-8")
+        # Anchor on the branch itself, not the word -- it also appears in the
+        # module docstring, and splitting on that grabs the whole file.
+        anchor = 'recommendation.get("action") == "lateral_switch"'
+        self.assertIn(anchor, src, "lateral-switch branch not found")
+        switch = src.split(anchor, 1)[1].split("started = time.time()", 1)[0]
+        self.assertLess(len(switch), 1500, "anchor matched too much")
+        self.assertIn("--reinit", switch,
+                      "pilot.py's lateral switch must pass --reinit")
+        self.assertIn("rc_sw", switch,
+                      "pilot.py must check the re-init return code, or a "
+                      "blocked switch silently falsifies switched_to")
 
 
 if __name__ == "__main__":
