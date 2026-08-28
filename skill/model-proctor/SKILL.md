@@ -62,7 +62,14 @@ runner restores any tampered verification input from the sealed copy and flags i
    input was altered and the runner restored it) and when any dispatch happened after the
    receipt was written. Both clear by re-running `verify` — never by re-running `accept`.
 7. **Record**: `python C:/Tools/model-proctor/runner.py record --workspace <w> --task task.json [--wire
-   <wire.jsonl> --pricing evals/pricing.yaml]` — appends the append-only task record.
+   <wire.jsonl> --pricing C:/Tools/model-proctor/pricing.yaml]` — appends the append-only task
+   record. Use the **installed** pricing table, not a relative `evals/` path: the relative form
+   resolves only when you happen to be sitting in the repo root, and a missing pricing file drops
+   cost accounting silently rather than failing loudly.
+
+The receipt records the tree signature, the dispatch count it was written at (`dispatch_seq`), and
+the `verifier_argv` that produced it — so a green receipt states *what* was verified, not merely
+that something was.
 
 ## Production tasks
 
