@@ -95,6 +95,146 @@ def find_wires(session_ids, not_before, homes=()):
     return sorted(set(wires))
 
 
+def wire_coverage(wires):
+    """extract_log coverage over the captured wires, or None if unavailable.
+
+    Cheap drift detector: scripts/extract_log.py holds a frozen enumeration of
+    kimi event types and counts anything outside it. Nonzero unrecognized
+    records mean kimi has moved under us -- which is how the metering stack
+    breaks silently rather than loudly.
+    """
+    if not wires:
+        return None
+    sys.path.insert(0, str(ROOT / "scripts"))
+    try:
+        import extract_log
+    except ImportError:
+        return None
+    total = {"records_parsed": 0, "records_unrecognized": 0,
+             "malformed_lines": 0, "unrecognized_types": {}}
+    for w in wires:
+        try:
+            _facts, cov = extract_log.extract_file(w)
+        except (OSError, ValueError):
+            continue
+        for k in ("records_parsed", "records_unrecognized", "malformed_lines"):
+            total[k] += cov.get(k, 0)
+        for t, n in (cov.get("unrecognized_types") or {}).items():
+            total["unrecognized_types"][t] = \
+                total["unrecognized_types"].get(t, 0) + n
+    return total
+
+
+def provenance():
+    """What this run actually exercised.
+
+    NOT SCHEMA_VERSION: that constant and delegate's schema_version are both 1
+    and describe file formats, not builds, so they carry no attribution power.
+    Hashes of the installed files and the kimi binary do.
+    """
+    import hashlib
+
+    def _sha(p):
+        try:
+            return hashlib.sha256(Path(p).read_bytes()).hexdigest()[:16]
+        except OSError:
+            return None
+
+    tool = Path(r"C:\Tools\model-proctor")
+    kimi = Path(os.environ.get("USERPROFILE", "")) / ".kimi-code" / "bin" / "kimi.exe"
+    try:
+        commit = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"],
+                                capture_output=True, text=True,
+                                timeout=30).stdout.strip() or None
+    except (OSError, subprocess.TimeoutExpired):
+        commit = None
+    return {
+        "repo_commit": commit,
+        "installed_runner_sha256": _sha(tool / "runner.py"),
+        "installed_delegate_sha256": _sha(tool / "delegate.py"),
+        "kimi_exe_sha256": _sha(kimi),
+    }
+
+
+# The usage buckets runner.sum_usage_records accumulates. Named explicitly so
+# a rename upstream shows up as a zero total rather than being absorbed.
+USAGE_BUCKETS = ("inputOther", "output", "inputCacheRead", "inputCacheCreation")
+
+
+def check_contracts(summary):
+    """Return a list of human-readable contract failures for one pilot row.
+
+    These are the couplings between this repo and kimi that no hermetic test
+    can reach. Each message names the contract, so a red run is diagnosable
+    without re-reading raw logs.
+    """
+    fails = []
+    attempts = summary.get("attempts") or []
+    if not attempts:
+        return ["no dispatch attempt recorded (init or fixture generation failed)"]
+
+    last = attempts[-1]
+    status = last.get("envelope_status")
+    if status not in ("completed", "failed"):
+        fails.append(
+            f"envelope_status={status!r}: the delegate did not return a usable "
+            "envelope (expected 'completed' or 'failed')")
+
+    if not summary.get("child_session_ids"):
+        fails.append(
+            "no child_session_id captured: delegate._CHILD_SESSION_RE no longer "
+            "matches kimi's 'kimi -r session_...' resume hint, so wire "
+            "discovery and all cost data are broken")
+
+    if (summary.get("wire_files") or 0) < 1:
+        fails.append(
+            "no wire.jsonl found: the "
+            "<child_home>/sessions/*/<sid>/agents/*/wire.jsonl layout changed, "
+            "or the session id did not match")
+
+    cov = summary.get("wire_coverage")
+    if cov is None:
+        fails.append("wire coverage unavailable (extract_log did not run)")
+    elif cov.get("records_unrecognized"):
+        fails.append(
+            f"{cov['records_unrecognized']} unrecognized wire records "
+            f"{sorted(cov.get('unrecognized_types') or {})}: kimi emits event "
+            "types extract_log.KNOWN_TOP_LEVEL does not know -- refresh it and "
+            "the evals/fixtures/wire/ fixture")
+    elif cov.get("malformed_lines"):
+        fails.append(f"{cov['malformed_lines']} malformed wire lines")
+
+    rec = summary.get("record") or {}
+    if not (rec.get("usage_records") or 0) > 0:
+        fails.append("usage_records == 0: kimi recorded no usage events")
+
+    # A renamed usage field yields records > 0, tokens 0, cost 0.0 -- a number,
+    # not None. Checking for non-null is exactly the check that misses it.
+    #
+    # Sum only the KNOWN bucket names. Summing every value in the dict would
+    # count the renamed key too, keep the total positive, and let the rename
+    # through -- which is what the first version of this did.
+    tokens = 0
+    for buckets in (rec.get("tokens_by_model") or {}).values():
+        tokens += sum(v for k, v in buckets.items()
+                      if k in USAGE_BUCKETS and isinstance(v, (int, float)))
+    if tokens <= 0:
+        fails.append(
+            "token totals are zero despite usage records: a usage field has "
+            "likely been renamed upstream (sum_usage_records uses "
+            "usage.get(k, 0), so this fails silently and cost becomes 0.0)")
+
+    cost = rec.get("api_cost_usd")
+    if cost is None:
+        fails.append(
+            "api_cost_usd is null: a model in the capture is missing from "
+            "pricing.yaml (price_tokens returns None for the total)")
+    elif cost <= 0:
+        fails.append(f"api_cost_usd == {cost}: priced at zero")
+
+    return fails
+
+
 def sweep_orphan_homes(max_age_s=3600):
     """Delete orphaned delegate-kimi-home-* temp dirs (crash leftovers)."""
     removed = 0
@@ -205,6 +345,14 @@ def run_case(case, out_root, dry_run, lane_override=None, max_dispatches=None,
 
     wires = find_wires(session_ids, t0, homes=child_homes)
     summary["wire_files"] = len(wires)
+    # delegate._CHILD_SESSION_RE scrapes these out of a bounded stdout tail --
+    # a human-readable "kimi -r session_..." hint. find_wires keys on them, so
+    # if that prose format changes there are no wires, record runs without
+    # --wire, and every cost number vanishes for a formatting reason. Record
+    # them so --assert can name that contract when it breaks.
+    summary["child_session_ids"] = [s for s in session_ids if s]
+    # Must run BEFORE the isolated homes are deleted below.
+    summary["wire_coverage"] = wire_coverage(wires)
     argv = ["record", "--workspace", str(ws), "--task", str(task_path)]
     if wires:
         argv += ["--wire", *wires, "--pricing", str(PRICING)]
@@ -246,6 +394,9 @@ def main():
                         help="label recorded as the arm in the summary")
     parser.add_argument("--keep-kimi-home", action="store_true",
                         help="do not delete the temporary KIMI_CODE_HOME after the run")
+    parser.add_argument("--assert", dest="do_assert", action="store_true",
+                        help="check the kimi-integration contracts on each row "
+                             "and exit nonzero if any broke (release gate)")
     args = parser.parse_args()
 
     cases = {c["id"]: c for c in json.loads(CASES.read_text(encoding="utf-8"))}
@@ -289,6 +440,28 @@ def main():
         print(f"\npilot: {ok}/{n} accepted, {hidden}/{n} hidden-pass, "
               f"total metered cost ${cost:.4f}")
         print(f"summary appended to {args.log}")
+
+        if args.do_assert:
+            prov = provenance()
+            print("\nprovenance: " + json.dumps(prov, sort_keys=True))
+            broken = 0
+            for s in summaries:
+                fails = check_contracts(s)
+                label = s.get("task_id", "?")
+                if not fails:
+                    print(f"  OK   {label}")
+                    continue
+                broken += 1
+                print(f"  FAIL {label}")
+                for f in fails:
+                    print(f"       - {f}")
+            if broken:
+                print(f"\n{broken}/{n} rows broke a kimi-integration contract. "
+                      "This is a release checklist step, not a merge gate — see "
+                      "issue #54.")
+                return 1
+            print(f"\nall {n} rows satisfy the kimi-integration contracts. "
+                  "Refresh evals/fixtures/wire/ from this capture (#53).")
 
 
 if __name__ == "__main__":
