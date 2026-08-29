@@ -134,6 +134,14 @@ was wrong once already, costing a working guard — the harness records the bund
 sha256. On mismatch, parity reports `UNVERIFIED`, never PASS: an offline suite stays
 green while the gate is dead.
 
+**Status: specification only.** No harness records a bundle hash today and no
+`selftest` exists. It is written here so the requirement is not lost, and labelled
+rather than implied — a contract clause with no consumer is the failure mode #36
+(`tamper_detected` detected-never-consumed) and #58 (a report-only field that "reads
+as protection and provides none") are about. `harnesses/zcode/tests/test_wire_shape.py`
+covers the adjacent risk — that the shape we emit is one ZCode accepts — but cannot
+detect that the vendor bundle changed underneath it. Tracked in #69.
+
 ## What a new harness must supply
 
 1. `roster.example.json` declaring `contract`, `ladder`, `lanes`.
