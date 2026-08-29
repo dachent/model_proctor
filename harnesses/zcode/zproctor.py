@@ -39,9 +39,13 @@ IGNORE_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".runner-
 
 
 def _run(argv, cwd, timeout=1800):
+    # Contract: a verifier runs with a cleared bytecode cache. Two source variants
+    # of identical byte length written in the same second let CPython reuse a stale
+    # .pyc, and a FAILING verify then reported next: accept.
+    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
     try:
         p = subprocess.run(argv, cwd=str(cwd), capture_output=True, text=True,
-                           timeout=timeout)
+                           timeout=timeout, env=env)
         return p.returncode, p.stdout[-65536:], p.stderr[-65536:]
     except subprocess.TimeoutExpired:
         return 124, "", "timeout after %ss" % timeout
@@ -311,6 +315,32 @@ def project(td):
         elif etype == "TASK_ABORTED":
             st["aborted"] = True
     return st
+
+
+FAIL_OPEN_LOG = STATE_ROOT / "gate-failed-open.log"
+
+
+def read_fail_open(since_ms):
+    """Fail-open records written by the shims since the task was initialized.
+
+    The shims cannot append to the hash-chained journal - two writers would break
+    the chain - so they write here and acceptance reads it.
+    """
+    out = []
+    try:
+        for line in FAIL_OPEN_LOG.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            parts = line.split("	")
+            try:
+                ms = int(parts[0])
+            except (ValueError, IndexError):
+                continue
+            if ms >= since_ms:
+                out.append({"epoch_ms": ms, "detail": "	".join(parts[1:])[:160]})
+    except OSError:
+        return []
+    return out
 
 
 def load_roster():
@@ -596,6 +626,19 @@ def main():
     if a.cmd == "accept":
         r = st.get("receipt")
         cur = tree_id(ws)
+
+        # Fail-open is bounded, not free: the shims allow a tool call they could
+        # not adjudicate, but acceptance refuses if any such gap opened during the
+        # task. Fast path stays fast; the irreversible boundary stays closed.
+        init_ms = int((st.get("init_payload") or {}).get("epoch_ms") or 0)
+        gaps = read_fail_open(init_ms)
+        if gaps:
+            emit({"ok": False, "error": "gate_failed_open",
+                  "count": len(gaps), "events": gaps[:5],
+                  "hint": "a guard could not adjudicate one or more tool calls and "
+                          "allowed them; the tree was not fully gated. Re-run the "
+                          "task, or clear the marker deliberately once reviewed: "
+                          + str(FAIL_OPEN_LOG)}, 1)
         if not r:
             emit({"ok": False, "error": "no_receipt", "hint": "run verify"}, 1)
         if not r["passed"]:
