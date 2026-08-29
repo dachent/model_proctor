@@ -1,0 +1,14 @@
+{
+  "contract": 1,
+  "_comment": "lane -> agent NAME only. Model and argv binding lives in the machine-local harness config, never in a tracked file. Copy to roster.json to override; roster.json is gitignored.",
+  "ladder": [
+    "cheap",
+    "substantial",
+    "marathon"
+  ],
+  "lanes": {
+    "cheap": "self",
+    "substantial": "escalate-glm",
+    "marathon": "escalate-k3"
+  }
+}

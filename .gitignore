@@ -5,3 +5,4 @@ __pycache__/
 .mimosa/
 .zcode/
 harnesses/kimi-code/delegate/agents.json
+harnesses/*/roster.json

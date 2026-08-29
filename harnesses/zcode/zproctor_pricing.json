@@ -1,0 +1,20 @@
+{
+  "_source": "https://docs.fireworks.ai/serverless/pricing - Standard serverless tier, fetched 2026-08-28",
+  "_units": "USD per 1,000,000 tokens",
+  "_note": "input is the non-cached portion; cached is prompt-cache reads, billed lower",
+  "custom:fireworks": {
+    "deepseek-v4-flash-0731": { "input": 0.22, "cached": 0.007, "output": 0.66 },
+    "deepseek-v4-flash": { "input": 0.22, "cached": 0.007, "output": 0.66 },
+    "deepseek-v4-pro": { "input": 1.74, "cached": 0.145, "output": 3.48 },
+    "deepseek-v4-pro-0813": { "input": 1.74, "cached": 0.145, "output": 3.48 },
+    "glm-5p2": { "input": 1.40, "cached": 0.14, "output": 4.40 },
+    "glm-5p2-fast": { "input": 1.40, "cached": 0.14, "output": 4.40 },
+    "kimi-k3": { "input": 3.00, "cached": 0.30, "output": 15.00 },
+    "kimi-k3-fast": { "input": 3.00, "cached": 0.30, "output": 15.00 },
+    "kimi-k2p6": { "input": 0.95, "cached": 0.16, "output": 4.00 },
+    "kimi-k2p6-turbo": { "input": 0.95, "cached": 0.16, "output": 4.00 },
+    "kimi-k2p7-code-fast": { "input": 0.95, "cached": 0.19, "output": 4.00 },
+    "minimax-m3": { "input": 0.30, "cached": 0.06, "output": 1.20 },
+    "gpt-oss-120b": { "input": 0.15, "cached": 0.015, "output": 0.60 }
+  }
+}
