@@ -63,6 +63,8 @@ never through the harness root.
 - Cascade tests: `python -m unittest discover -s harnesses/kimi-code/cascade/tests -v`
 - Extractor tests: `python -m unittest discover -s scripts/tests -v`
 - Runner smoke suite (MVP-001): `python -m unittest discover -s harnesses/kimi-code/runner/tests -v`
+- Contract parity (core vs Kimi, exhaustive lane table): `python -m unittest discover -s core/tests -v`
+- ZCode harness: `python -m unittest discover -s harnesses/zcode/tests -v`
 - Delegate a task: `python harnesses/kimi-code/delegate/delegate.py --agent <name> --workspace <path> --task "<text>"`
 - Cascade extras: `python harnesses/kimi-code/cascade/cascade.py commit-green|rollback --workspace <w> --task <id>`,
   `handoff --workspace <w>`, `record-decision --workspace <w> --decision ... --rationale ... --source user|leader`
@@ -77,13 +79,26 @@ never through the harness root.
 - Real-dispatch pilot: `python harnesses/kimi-code/runner/pilot.py --cases <id> --lane <lane> --max-dispatches 1`
   (spends real tokens)
 
+- `core/decisions.py` — the shared decision core: lane table, failure fingerprints,
+  stagnation thresholds, scope matching, verification-affecting set. Every harness
+  calls it rather than reimplementing. Contract v1, spec in
+  `policy/HARNESS_CONTRACT.md`; `core/tests/test_kimi_parity.py` enumerates the full
+  lane truth table against `runner.lane_for`.
+- `harnesses/zcode/` — the ZCode harness. ZCode owns subagent dispatch, so the proctor
+  gates it in front of the `Agent` tool rather than owning it. Native shims contain no
+  policy: every constant arrives in `lane.json` from the core.
+
 ## Conventions
 
 - **Durability doctrine (owner directive 2026-08-25):** everything on `C:\` is ephemeral. Only
   content stored on GitHub is durable or referenceable; anything else must be
   cloneable/reproducible/derivable from the repo. Session scratch, run envelopes, and local configs
   either get committed, get filed into issues, or are treated as disposable.
-- Python 3.10, standard library only everywhere.
+- Python 3.10, standard library only for control-plane logic. Harness *adapters*
+  may use the harness's native runtime where measured startup cost requires it,
+  and must contain no policy (see `policy/HARNESS_CONTRACT.md`; ZCode's shims are
+  Node because ZCode spawns a hook per tool call — Python measured 4.7-6.4s cold,
+  0.67-1.16s warm, against Node's 0.25-0.38s).
 - No git mutations without explicit user confirmation. Repository creation on this workstation must
   use `New-CentralGitRepo.ps1` (centralized Git policy); never raw `git init`.
 - Durable installs follow workstation policy: tools to `C:\Tools\model-proctor\`, skills to

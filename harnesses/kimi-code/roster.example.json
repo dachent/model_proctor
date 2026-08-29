@@ -1,0 +1,19 @@
+{
+  "contract": 1,
+  "_comment": "lane -> agent name in delegate's agents.json. Kimi keeps its own internal lane ids (flash/glm/k3); this maps them to contract roles.",
+  "ladder": [
+    "cheap",
+    "substantial",
+    "marathon"
+  ],
+  "lanes": {
+    "cheap": "ds-flash-worker",
+    "substantial": "glm-worker",
+    "marathon": "k3-worker"
+  },
+  "internal_lane_ids": {
+    "cheap": "flash",
+    "substantial": "glm",
+    "marathon": "k3"
+  }
+}
