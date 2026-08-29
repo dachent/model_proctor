@@ -33,7 +33,7 @@ FIXTURE = ROOT / "evals" / "fixtures" / "wire" / "sample-wire.jsonl"
 PRICING = ROOT / "evals" / "pricing.yaml"
 
 sys.path.insert(0, str(ROOT / "scripts"))
-sys.path.insert(0, str(ROOT / "runner"))
+sys.path.insert(0, str(ROOT / "harnesses" / "kimi-code" / "runner"))
 import extract_log  # noqa: E402
 import runner  # noqa: E402
 
