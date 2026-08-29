@@ -28,7 +28,7 @@
  * silent by design: a broken guard must never wedge a session.
  */
 
-import { appendFileSync } from "node:fs";
+import { appendFileSync, mkdirSync } from "node:fs";
 
 const PROTECTED = (process.env.ZPROCTOR_STATE_ROOT || "C:/Dev/scratch/zcode-proctor");
 const GATED = new Set(["Write", "Edit", "Bash", "MultiEdit", "NotebookEdit"]);
@@ -36,6 +36,23 @@ const DEADLINE_MS = Number(process.env.ZPROCTOR_GUARD_DEADLINE_MS || 1500);
 const MAX_INPUT = 1_000_000;
 
 let settled = false;
+
+/**
+ * Record that this shim allowed a call it could not adjudicate. Acceptance reads
+ * this and refuses, so fail-open on the fast path does not become fail-open at
+ * the irreversible boundary. Best effort: never let bookkeeping change the answer.
+ */
+function failOpen(why) {
+  try {
+    // The state root may not exist yet on the first gap of a session. Without
+    // this the record is silently lost - and a silently lost fail-open is
+    // exactly the hole this is meant to close.
+    mkdirSync(PROTECTED, { recursive: true });
+    appendFileSync(`${PROTECTED}/gate-failed-open.log`,
+      `${Date.now()}	${why}
+`, "utf8");
+  } catch { /* bookkeeping must not affect the outcome */ }
+}
 
 /**
  * Best-effort invocation trace. Without it an "allow" is silent and
@@ -74,7 +91,7 @@ function finish(output) {
 }
 
 // Hard deadline: if stdin never closes, allow rather than hang.
-const timer = setTimeout(() => finish(null), DEADLINE_MS);
+const timer = setTimeout(() => { failOpen("deadline"); finish(null); }, DEADLINE_MS);
 timer.unref?.();
 
 function norm(s) {
@@ -98,7 +115,8 @@ function evaluate(raw) {
   try {
     payload = JSON.parse(raw);
   } catch {
-    return finish(null); // unparseable: allow, never wedge
+    failOpen("unparseable payload");
+    return finish(null);
   }
 
   const tool = String(payload.tool_name ?? payload.toolName ?? "");
@@ -135,4 +153,4 @@ process.stdin.on("data", (chunk) => {
   if (buf.length > MAX_INPUT) evaluate(buf);
 });
 process.stdin.on("end", () => evaluate(buf));
-process.stdin.on("error", () => finish(null));
+process.stdin.on("error", () => { failOpen("stdin error"); finish(null); });

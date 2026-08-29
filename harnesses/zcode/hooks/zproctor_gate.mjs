@@ -19,7 +19,7 @@
  * through untouched. Silence means allow; every failure path is silent so a
  * broken gate can never wedge a session.
  */
-import { appendFileSync, readFileSync, realpathSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 
 const STATE = process.env.ZPROCTOR_STATE_ROOT || "C:/Dev/scratch/zcode-proctor";
 const DEADLINE_MS = Number(process.env.ZPROCTOR_GATE_DEADLINE_MS || 1500);
@@ -30,6 +30,23 @@ const DEADLINE_MS = Number(process.env.ZPROCTOR_GATE_DEADLINE_MS || 1500);
 // rule is how the control plane and its own gate drifted into a deadlock once.
 
 let settled = false;
+
+/**
+ * Record that this shim allowed a call it could not adjudicate. Acceptance reads
+ * this and refuses, so fail-open on the fast path does not become fail-open at
+ * the irreversible boundary. Best effort: never let bookkeeping change the answer.
+ */
+function failOpen(why) {
+  try {
+    // The state root may not exist yet on the first gap of a session. Without
+    // this the record is silently lost - and a silently lost fail-open is
+    // exactly the hole this is meant to close.
+    mkdirSync(STATE, { recursive: true });
+    appendFileSync(`${STATE}/gate-failed-open.log`,
+      `${Date.now()}	${why}
+`, "utf8");
+  } catch { /* bookkeeping must not affect the outcome */ }
+}
 
 function trace(note) {
   if (process.env.ZPROCTOR_TRACE === "0") return;
@@ -59,7 +76,7 @@ function finish(reason, agent) {
   }
 }
 
-setTimeout(() => finish(null), DEADLINE_MS).unref?.();
+setTimeout(() => { failOpen("deadline"); finish(null); }, DEADLINE_MS).unref?.();
 
 function readJson(p) {
   try {
@@ -133,7 +150,7 @@ function dispatchCount(taskDir) {
 
 function evaluate(raw) {
   let p;
-  try { p = JSON.parse(raw); } catch { return finish(null); }
+  try { p = JSON.parse(raw); } catch { failOpen("unparseable payload"); return finish(null); }
 
   if (String(p.tool_name ?? p.toolName ?? "") !== "Agent") return finish(null);
 
@@ -221,4 +238,4 @@ let buf = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (c) => { buf += c; });
 process.stdin.on("end", () => evaluate(buf));
-process.stdin.on("error", () => finish(null));
+process.stdin.on("error", () => { failOpen("stdin error"); finish(null); });

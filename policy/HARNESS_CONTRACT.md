@@ -126,7 +126,7 @@ A verifier must run with a cleared bytecode cache (`-B` or
 the same second let CPython reuse a stale `.pyc`, and a **failing** verify then reported
 `next: accept`. Observed while writing these tests.
 
-## Build-identity lock
+## Build-identity lock — SPECIFIED, NOT YET IMPLEMENTED
 
 Where a harness's enforcement path is reverse-engineered from a vendor bundle — ZCode's
 `hookSpecificOutput` contract is read out of `resources/glm/zcode.cjs`, and that reading
