@@ -70,6 +70,14 @@ class InstallCompletenessTest(unittest.TestCase):
             self.assertTrue((KIMI / "delegate" / name).is_file(),
                             f"DELEGATE_FILES names a missing source: {name}")
 
+    def test_exact_installed_skill_set_is_model_proctor_only(self):
+        """A stale research skill must never re-enter the durable install."""
+        self.assertEqual(tuple(self.mod.SKILLS), ("model-proctor",))
+        self.assertEqual(self.mod.main(), 0)
+        skills_root = Path(os.environ["USERPROFILE"]) / ".kimi-code" / "skills"
+        installed = sorted(p.name for p in skills_root.iterdir() if p.is_dir())
+        self.assertEqual(installed, ["model-proctor"])
+
     def test_pricing_yaml_is_installed(self):
         # Assert the artefact, not the return code: the defect is a missing
         # file, and a test that fails on main()'s return value would go green

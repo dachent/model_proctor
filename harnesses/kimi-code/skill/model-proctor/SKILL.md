@@ -1,13 +1,13 @@
 ---
 name: model-proctor
-description: Task-owning worker policy with deterministic acceptance (model_proctor) — classify a task into a frozen lane (Flash bounded / GLM substantial / K3 marathon), dispatch through the installed runner (C:/Tools/model-proctor/runner.py), verify with tree-bound receipts, switch on stagnation rather than fixed rungs. Use for substantial coding tasks. Do NOT use for trivial tasks (known location, one edit-test cycle) — execute those directly. Supersedes nothing yet; static-cascade remains the frozen reference. Requires the model-proctor install (scripts/install.py).
+description: Task-owning worker policy with deterministic acceptance (model_proctor) — classify a task into a frozen lane (Flash bounded / GLM substantial / K3 marathon), dispatch through the installed runner (C:/Tools/model-proctor/runner.py), verify with tree-bound receipts, switch on stagnation rather than fixed rungs. Use for substantial coding tasks. Do NOT use for trivial tasks (known location, one edit-test cycle) — execute those directly. This is the only live/installable skill; static-cascade is preserved research only. Requires the model-proctor install (scripts/install.py).
 ---
 
 # Model Proctor Policy
 
 The proctor assigns the exam, watches the clock, and grades it objectively — the model never
 marks its own work. You are the leader. The deterministic control plane is the installed runner,
-`C:/Tools/model-proctor/runner.py` (repo copy: `runner/runner.py`; delegate transport and the
+`C:/Tools/model-proctor/runner.py` (repo copy: `harnesses/kimi-code/runner/runner.py`; delegate transport and the
 agent roster live alongside it at `C:/Tools/model-proctor/`). Prompts do not
 enforce; the runner enforces. Deterministic evidence outranks every model, including you.
 Governance: issues #16 (measurement-first) and #26 (vNext hypothesis); this skill implements
@@ -72,10 +72,11 @@ the `verifier_argv` that produced it — so a green receipt states *what* was ve
 that something was.
 
 It also carries `baseline_tree` (the tree had not moved since init when this verifier ran) and
-`verifier_nondiscriminating` (it *passed* on that unmodified tree). The second is a warning to you,
-not a refusal: a verifier that goes green before the worker has touched anything will go green
-whatever the worker does, so acceptance carries no information. Some tasks legitimately pass at
-init — "add a test that…" — so read it, don't obey it.
+`verifier_nondiscriminating` (it *passed* on that unmodified tree). When `dispatch_seq == 0` and
+`verifier_nondiscriminating == true`, `accept` refuses by default because the receipt carries no
+worker evidence and cannot distinguish done from undone. Some tasks legitimately pass at init —
+"add a test that…" — so a reviewed exception is available via `--allow-zero-dispatch`; the runner
+counts that override in state rather than accepting silently.
 
 ## Production tasks
 
@@ -126,6 +127,6 @@ The FIRST action on any resume — new morning, reopened machine, post-crash —
 - Orphans are advisory. Investigate, then clear with
   `python C:/Tools/model-proctor/runner.py journal --workspace <w> --ack <dispatch_id>`
   so they stop re-reporting.
-- `last_receipt` with `dispatch_seq: 0` + `verifier_nondiscriminating: true` means the
-  acceptance on file carries no worker evidence; `--allow-zero-dispatch` is a counted,
-  reviewed override — read the record before trusting it.
+- `last_receipt` with `dispatch_seq: 0` + `verifier_nondiscriminating: true` carries no worker
+  evidence; `accept` refuses it unless `--allow-zero-dispatch` is supplied. That override is
+  counted and should be treated as a reviewed exception.
