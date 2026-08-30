@@ -111,7 +111,7 @@ class SmokeTest(unittest.TestCase):
                              "--delegate", str(FAKE_WORKER), env_extra=env)
         self.assertEqual(rc, 0, out)
         self.assertEqual(out["envelope_status"], "completed")
-        self.assertEqual(out["agent"], "ds-flash-worker")
+        self.assertEqual(out["agent"], "glm-flash-worker")
 
         rc, out = run_runner("verify", "--workspace", ws, "--task", task)
         self.assertEqual(rc, 0, out)

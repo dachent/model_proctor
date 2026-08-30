@@ -8,9 +8,18 @@ fireworks/kimi-k2p7-code: { input: 0.95,  cached_input: 0.19,  output: 4.00 }
 fireworks/deepseek-v4-pro:  { input: 1.74, cached_input: 0.145, output: 3.48 }
 # Undated alias 404s (2026-08-25); the live deployment is the dated 0731 snapshot.
 # Same price on both rows; the undated row stays for metering historical runs.
+# 2026-08-28 roster: kimi's synced fireworks roster dropped deepseek-v4-flash-0731
+# and glm-5p2. Flash lane -> glm-5p3-flash (dispatch-verified); glm lane -> glm-5p3
+# (404 in the morning, serving landed later the same day — re-probed OK and moved).
+# Retired ids' rows stay for metering historical runs.
 fireworks/deepseek-v4-flash: { input: 0.22, cached_input: 0.007, output: 0.66 }
 fireworks/deepseek-v4-flash-0731: { input: 0.22, cached_input: 0.007, output: 0.66 }
 fireworks/glm-5p2:        { input: 1.40,  cached_input: 0.14,  output: 4.40 }
+# GLM 5.3 / 5.3 Fast verified against the live page 2026-08-28.
+# Serving landed later on 2026-08-28 (morning probe 404'd, direct re-probe OK) —
+# the glm lane uses this row; glm-5p2 stays for historical metering / rollback.
+fireworks/glm-5p3:        { input: 1.40,  cached_input: 0.26,  output: 4.40 }
+fireworks/glm-5p3-flash:  { input: 2.10,  cached_input: 0.39,  output: 6.60 }
 fireworks/qwen-3p8-max:   { input: 2.00,  cached_input: 0.25,  output: 6.00 }
 fireworks/minimax-m3:     { input: 0.30,  cached_input: 0.06,  output: 1.20 }
 fireworks/gpt-oss-120b:   { input: 0.15,  cached_input: 0.015, output: 0.60 }

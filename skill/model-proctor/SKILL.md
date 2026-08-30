@@ -113,3 +113,19 @@ features honestly is still your job.
 One persistent worker session per task, closed at acceptance. Externalize verified state to
 files continuously; do not accumulate completed task detail in your own context. If you are
 asked to resume a dead trajectory, restart from the evidence packet instead.
+
+### Resuming after a gap (mandated first step — #73/A2)
+
+The FIRST action on any resume — new morning, reopened machine, post-crash — is
+`python C:/Tools/model-proctor/runner.py status --workspace <w> --task task.json`:
+
+- `stall_suspected: true` (silence beyond `max(2x timeout_s, 1h)`) and any
+  `orphaned_dispatch_ids` are **stop-and-investigate** signals. The 2026-08-28 overnight
+  stall went unnoticed for 8.9 hours because nobody ran anything like this; do not
+  reproduce that with better instrumentation installed.
+- Orphans are advisory. Investigate, then clear with
+  `python C:/Tools/model-proctor/runner.py journal --workspace <w> --ack <dispatch_id>`
+  so they stop re-reporting.
+- `last_receipt` with `dispatch_seq: 0` + `verifier_nondiscriminating: true` means the
+  acceptance on file carries no worker evidence; `--allow-zero-dispatch` is a counted,
+  reviewed override — read the record before trusting it.
