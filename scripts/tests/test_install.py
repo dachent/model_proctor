@@ -29,8 +29,9 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+KIMI = ROOT / "harnesses" / "kimi-code"   # Kimi harness sources
 INSTALL_PY = ROOT / "scripts" / "install.py"
-SKILL_MD = ROOT / "skill" / "model-proctor" / "SKILL.md"
+SKILL_MD = KIMI / "skill" / "model-proctor" / "SKILL.md"
 
 _IS_WINDOWS = sys.platform == "win32"
 
@@ -62,11 +63,11 @@ class InstallCompletenessTest(unittest.TestCase):
 
     def test_sources_for_every_required_file_exist_in_repo(self):
         """Guards the copy list itself: a rename must not silently drop a file."""
-        for subdir, name in self.mod.RUNNER_FILES:
-            self.assertTrue((ROOT / subdir / name).is_file(),
+        for base, subdir, name in self.mod.RUNNER_FILES:
+            self.assertTrue((base / subdir / name).is_file(),
                             f"RUNNER_FILES names a missing source: {subdir}/{name}")
         for name in self.mod.DELEGATE_FILES:
-            self.assertTrue((ROOT / "delegate" / name).is_file(),
+            self.assertTrue((KIMI / "delegate" / name).is_file(),
                             f"DELEGATE_FILES names a missing source: {name}")
 
     def test_pricing_yaml_is_installed(self):
@@ -87,7 +88,7 @@ class InstallCompletenessTest(unittest.TestCase):
         self.assertEqual(self.mod.main(), 0)
         (self.mod.TOOL_DIR / "pricing.yaml").unlink()
         self.mod.RUNNER_FILES = [t for t in self.mod.RUNNER_FILES
-                                 if t[1] != "pricing.yaml"]
+                                 if t[-1] != "pricing.yaml"]
         self.assertEqual(self.mod.main(), 1,
                          "a missing required file must fail the install")
 
@@ -119,10 +120,10 @@ class InstallRerunTest(unittest.TestCase):
         os.environ["USERPROFILE"] = str(Path(self.tmp) / "home")
         # A machine-local roster is normally untracked; synthesise one so the
         # ACL-hardening branch actually runs.
-        self.agents_src = ROOT / "delegate" / "agents.json"
+        self.agents_src = KIMI / "delegate" / "agents.json"
         self._made_agents = False
         if not self.agents_src.is_file():
-            shutil.copy2(ROOT / "delegate" / "agents.example.json",
+            shutil.copy2(KIMI / "delegate" / "agents.example.json",
                          self.agents_src)
             self._made_agents = True
 

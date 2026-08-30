@@ -19,11 +19,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[2]          # harnesses/kimi-code
+REPO_ROOT = ROOT.parents[1]                          # repo root
 RUNNER = ROOT / "runner" / "runner.py"
 FAKE_WORKER = ROOT / "runner" / "tests" / "fake_worker.py"
-EXTRACT_LOG = ROOT / "scripts" / "extract_log.py"
-PRICING = ROOT / "evals" / "pricing.yaml"
+EXTRACT_LOG = REPO_ROOT / "scripts" / "extract_log.py"
+PRICING = REPO_ROOT / "evals" / "pricing.yaml"
 
 BUGGY = 'def sum_to_n(n):\n    return sum(range(1, n))\n'
 FIXED = 'def sum_to_n(n):\n    return sum(range(1, n + 1))\n'

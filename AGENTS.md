@@ -8,9 +8,14 @@ as a frozen research artifact — see Status.)
 
 ## Layout
 
-- `delegate/` — the wrapper (`delegate.py`), live config (`agents.json`), annotated example
+Harness-specific code lives under `harnesses/<harness>/`; everything cross-harness
+(`evals/`, `scripts/`, `policy/`, `docs/`, `backlog/`) stays at the repo root. A file
+under `harnesses/` reaches repo-level assets only through an explicit `REPO_ROOT`,
+never through the harness root.
+
+- `harnesses/kimi-code/delegate/` — the wrapper (`delegate.py`), live config (`agents.json`), annotated example
   (`agents.example.json`), tests (`tests/test_delegate.py`), docs (`README.md`).
-- `cascade/` — the deterministic static-cascade controller (`cascade.py`), plan schema
+- `harnesses/kimi-code/cascade/` — the deterministic static-cascade controller (`cascade.py`), plan schema
   (`cascade-schema.json`), tests (`tests/test_cascade.py` + fixture delegate fake), docs
   (`README.md`). Owns cascade-state.json transitions, caps, legal escalation transitions,
   verifier-immutability checks, dispatch evidence hardening (files_changed + run_dir log
@@ -19,7 +24,7 @@ as a frozen research artifact — see Status.)
 - `scripts/` — `extract_log.py` (deterministic wire.jsonl fact extractor + coverage
   manifest; verifier-class, hash-frozen per goal), tests in `scripts/tests/`,
   `install.py`.
-- `runner/` — the MVP-001 thin control plane (`runner.py`): frozen task-start lane
+- `harnesses/kimi-code/runner/` — the MVP-001 thin control plane (`runner.py`): frozen task-start lane
   selection, delegate-wrapper dispatch, leader-side verification with tree-bound
   receipts and a config-surface manifest, stagnation switching, append-only task
   records. State, receipts, and sealed verifier payloads live OUTSIDE the workspace
@@ -34,9 +39,9 @@ as a frozen research artifact — see Status.)
   `cwd=ws`, so the workspace is `sys.path[0]`); the git tree signature hashes content,
   not just `git status` letters. `init` refuses to re-baseline an initialized workspace
   without `--reinit`. Production-runner tasks (TOOL-019) are barred from `flash` absent
-  an explicit `lane`, and require fresh `preflight_receipts`. `runner/pilot.py` drives
+  an explicit `lane`, and require fresh `preflight_receipts`. `harnesses/kimi-code/runner/pilot.py` drives
   the loop against real workers and appends an evidence row.
-  Tests in `runner/tests/`: S1–S7 + git-root cases, `test_production_guard.py`,
+  Tests in `harnesses/kimi-code/runner/tests/`: S1–S7 + git-root cases, `test_production_guard.py`,
   `test_acceptance_gate.py`, `test_tree_signature.py`, `test_verifier_integrity.py`,
   `test_state_boundary.py`.
   The boundary is **tamper-evident against a non-adversarial worker**, not sealed
@@ -54,12 +59,12 @@ as a frozen research artifact — see Status.)
 
 ## Commands
 
-- Wrapper tests: `python -m unittest discover -s delegate/tests -v`
-- Cascade tests: `python -m unittest discover -s cascade/tests -v`
+- Wrapper tests: `python -m unittest discover -s harnesses/kimi-code/delegate/tests -v`
+- Cascade tests: `python -m unittest discover -s harnesses/kimi-code/cascade/tests -v`
 - Extractor tests: `python -m unittest discover -s scripts/tests -v`
-- Runner smoke suite (MVP-001): `python -m unittest discover -s runner/tests -v`
-- Delegate a task: `python delegate/delegate.py --agent <name> --workspace <path> --task "<text>"`
-- Cascade extras: `python cascade/cascade.py commit-green|rollback --workspace <w> --task <id>`,
+- Runner smoke suite (MVP-001): `python -m unittest discover -s harnesses/kimi-code/runner/tests -v`
+- Delegate a task: `python harnesses/kimi-code/delegate/delegate.py --agent <name> --workspace <path> --task "<text>"`
+- Cascade extras: `python harnesses/kimi-code/cascade/cascade.py commit-green|rollback --workspace <w> --task <id>`,
   `handoff --workspace <w>`, `record-decision --workspace <w> --decision ... --rationale ... --source user|leader`
 - Extract a session log: `python scripts/extract_log.py <wire.jsonl...> --out <dir>`
 - Rebuild watch: `python evals/meter.py --rebuild-watch <hours>`
@@ -69,7 +74,7 @@ as a frozen research artifact — see Status.)
   (free — no model runs; read `evals/PREREG-verifier-error.md` for the decision
   rule before interpreting the output, and never quote a rate without its
   denominator)
-- Real-dispatch pilot: `python runner/pilot.py --cases <id> --lane <lane> --max-dispatches 1`
+- Real-dispatch pilot: `python harnesses/kimi-code/runner/pilot.py --cases <id> --lane <lane> --max-dispatches 1`
   (spends real tokens)
 
 ## Conventions

@@ -27,14 +27,16 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+KIMI = ROOT / "harnesses" / "kimi-code"     # Kimi harness sources
 TOOL_DIR = Path(r"C:\Tools\model-proctor")
 ICACLS = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
                       "System32", "icacls.exe")
 
 DELEGATE_FILES = ["delegate.py", "agents.example.json", "README.md"]
-# (subdir, filename) pairs copied flat into TOOL_DIR.
-RUNNER_FILES = [("runner", "runner.py"), ("runner", "pilot.py"),
-                ("evals", "pricing.yaml")]
+# (base, subdir, filename) copied flat into TOOL_DIR. The base is explicit
+# because runner/ lives under the harness while evals/ stays at the repo root.
+RUNNER_FILES = [(KIMI, "runner", "runner.py"), (KIMI, "runner", "pilot.py"),
+                (ROOT, "evals", "pricing.yaml")]
 SKILLS = ("static-cascade", "model-proctor")
 # Everything the installed SKILL.md tells a leader to invoke or pass.
 REQUIRED_AFTER_INSTALL = ["runner.py", "delegate.py", "pricing.yaml"]
@@ -101,13 +103,13 @@ def harden_acl(path, principal):
 def main():
     TOOL_DIR.mkdir(parents=True, exist_ok=True)
     for name in DELEGATE_FILES:
-        shutil.copy2(ROOT / "delegate" / name, TOOL_DIR / name)
-    for subdir, name in RUNNER_FILES:
-        shutil.copy2(ROOT / subdir / name, TOOL_DIR / name)
+        shutil.copy2(KIMI / "delegate" / name, TOOL_DIR / name)
+    for base, subdir, name in RUNNER_FILES:
+        shutil.copy2(base / subdir / name, TOOL_DIR / name)
     print(f"copied delegate + runner files to {TOOL_DIR}")
 
     agents_dst = TOOL_DIR / "agents.json"
-    agents_src = ROOT / "delegate" / "agents.json"
+    agents_src = KIMI / "delegate" / "agents.json"
     if agents_src.is_file():
         domain = os.environ.get("USERDOMAIN", "")
         user = os.getlogin()
@@ -130,7 +132,7 @@ def main():
     for skill in SKILLS:
         skill_dir = Path(os.environ["USERPROFILE"]) / ".kimi-code" / "skills" / skill
         skill_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT / "skill" / skill / "SKILL.md", skill_dir / "SKILL.md")
+        shutil.copy2(KIMI / "skill" / skill / "SKILL.md", skill_dir / "SKILL.md")
         print(f"skill installed to {skill_dir}")
 
     missing = [n for n in REQUIRED_AFTER_INSTALL if not (TOOL_DIR / n).is_file()]
