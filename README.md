@@ -42,13 +42,13 @@ frozen research **pattern** documented here; `harnesses/kimi-code/runner/` is th
 - `scripts/extract_log.py` — deterministic session-log fact extractor with a **coverage manifest**
   (bytes in, records parsed, records dropped). LLMs interpret extractions; they never scan raw
   volume. Verifier-class: hash-frozen per goal. 5 tests.
-- `policy/` — the governing specs (see Provenance below).
+- `policy/` — design/governance specs, including preserved predecessor specs (see Provenance below).
 - `evals/` — the benchmark harness: v1 (20 cases + 2 showcase, killed the dynamic design), v2 and
   v3 quality sets (10 each, naive-solution-proven to discriminate requirement fidelity), the
   metering stack (`meter.py`, `pricing.yaml`), pre-registrations (`PREREG-v2.md`, `PREREG-v3.md`),
   and every result row (`results*.jsonl`, `pilot-*.jsonl`, `phase2-*.jsonl`, `phase3-*.jsonl`).
-- `harnesses/kimi-code/skill/` — installable Kimi Code skills (`model-proctor/` live policy, `static-cascade/` frozen
-  reference, `multi-model-routing/` superseded).
+- `harnesses/kimi-code/skill/` — Kimi Code skill sources: `model-proctor/` is the live/installable policy;
+  `static-cascade/` and `multi-model-routing/` are preserved frozen/superseded research artifacts and are not installed.
 
 Python 3.10+, standard library only, everywhere.
 
@@ -69,7 +69,7 @@ Install once (idempotent):
 python scripts/install.py
 ```
 
-This installs two skills (`model-proctor`, `static-cascade`) to `%USERPROFILE%\.kimi-code\skills\`
+This installs the `model-proctor` skill to `%USERPROFILE%\.kimi-code\skills\`
 and the runner + delegate + agent roster to `C:\Tools\model-proctor\`. If `agents.json` is missing,
 regenerate it first from `harnesses/kimi-code/delegate/agents.example.json` (see `harnesses/kimi-code/delegate/README.md`).
 
