@@ -10,8 +10,7 @@
   so a compromised worker cannot rewrite the trusted command config.
   agents.json is machine-local and deliberately untracked; if absent it is
   skipped — regenerate it from agents.example.json per delegate/README.md.
-- Installs the static-cascade and model-proctor skills to
-  %USERPROFILE%\\.kimi-code\\skills\\
+- Installs the model-proctor skill to %USERPROFILE%\\.kimi-code\\skills\\
 - Verifies afterwards that every path the installed skill instructs a leader to
   run actually exists.
 
@@ -37,7 +36,7 @@ DELEGATE_FILES = ["delegate.py", "agents.example.json", "README.md"]
 # because runner/ lives under the harness while evals/ stays at the repo root.
 RUNNER_FILES = [(KIMI, "runner", "runner.py"), (KIMI, "runner", "pilot.py"),
                 (ROOT, "evals", "pricing.yaml")]
-SKILLS = ("static-cascade", "model-proctor")
+SKILLS = ("model-proctor",)
 # Everything the installed SKILL.md tells a leader to invoke or pass.
 REQUIRED_AFTER_INSTALL = ["runner.py", "delegate.py", "pricing.yaml"]
 

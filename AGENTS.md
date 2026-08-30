@@ -15,12 +15,13 @@ never through the harness root.
 
 - `harnesses/kimi-code/delegate/` — the wrapper (`delegate.py`), live config (`agents.json`), annotated example
   (`agents.example.json`), tests (`tests/test_delegate.py`), docs (`README.md`).
-- `harnesses/kimi-code/cascade/` — the deterministic static-cascade controller (`cascade.py`), plan schema
-  (`cascade-schema.json`), tests (`tests/test_cascade.py` + fixture delegate fake), docs
+- `harnesses/kimi-code/cascade/` — the deterministic static-cascade controller (`cascade.py`), **frozen research
+  artifact**, with plan schema (`cascade-schema.json`), tests (`tests/test_cascade.py` + fixture delegate fake), docs
   (`README.md`). Owns cascade-state.json transitions, caps, legal escalation transitions,
   verifier-immutability checks, dispatch evidence hardening (files_changed + run_dir log
   archival), `commit-green`/`rollback` git gates, `handoff`/`record-decision` session
-  continuity, and the vision capability filter (spec §9.1 v3.1).
+  continuity, and the vision capability filter (spec §9.1 v3.1). It is retained for
+  provenance and regression research, not as production authority.
 - `scripts/` — `extract_log.py` (deterministic wire.jsonl fact extractor + coverage
   manifest; verifier-class, hash-frozen per goal), tests in `scripts/tests/`,
   `install.py`.
@@ -46,9 +47,9 @@ never through the harness root.
   `test_state_boundary.py`.
   The boundary is **tamper-evident against a non-adversarial worker**, not sealed
   against a hostile one — residuals tracked in #40.
-- `policy/delegation-policy.md` — the K3 orchestration policy (routing decision procedure, fire
-  rules, task packet schema, budgets, stopping rules, final acceptance gate). The production skill
-  installed to `%USERPROFILE%\.kimi-code\skills\static-cascade\` is derived from this hierarchy.
+- `policy/delegation-policy.md` — superseded Phase-2 dynamic-routing research policy.
+  It is retained for provenance only; it is not production authority and no installed
+  skill is derived from it.
 - `evals/` — benchmark harness: `cases.yaml` (42 cases: 20 v1 tune/holdout + 2 showcase +
   10 v2 + 10 v3 quality sets),
   `fixtures/` (deterministic project generators), `run_eval.py` (A/B/C runner), `report.py`
@@ -90,7 +91,9 @@ never through the harness root.
   `%USERPROFILE%\.kimi-code\skills\`, each with explicit user confirmation.
 - Eval fixture runs live outside cloud-synced folders (default: `C:\Dev\bootstrap-state\model-proctor\evals\runs\`;
   historical metered rows keep their original `kimi-router` paths — the evidence record is immutable).
-- When delegating coding work from this project, follow `policy/delegation-policy.md`.
+- Live orchestration authority is `harnesses/kimi-code/runner/` plus
+  `harnesses/kimi-code/skill/model-proctor/SKILL.md`. Do not use
+  `policy/delegation-policy.md` as live routing policy; it is a superseded research artifact.
 - All work on this tool is managed via the GitHub Issues backlog at
   `dachent/model_proctor` (owner directive 2026-08-14; repo renamed from
   `dachent/robot_lockstep_ballast` → `kimi_router` → `model_proctor` 2026-08-25, old URLs redirect): every unit of work is an
@@ -100,4 +103,4 @@ never through the harness root.
 
 ## Status
 
-Research artifact frozen at commit 6095695 (2026-08-13). Governance decision: dachent/model_proctor #16. Installed skills: `model-proctor` (live policy), `static-cascade` (frozen reference).
+Research artifact frozen at commit 6095695 (2026-08-13). Governance decision: dachent/model_proctor #16. Installed skill: `model-proctor` (live policy). `static-cascade` remains in-repo only as a frozen research artifact.
