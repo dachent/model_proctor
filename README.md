@@ -9,35 +9,36 @@ never marks its own work. That is the architectural invariant this repo converge
 evidence outranks every model, and acceptance is bound to the exact tree that was verified.
 (Historical names: `robot_lockstep_ballast` — *lockstep* for fixed rungs, *ballast* for the cheap
 fleet — then briefly `kimi_router`; renamed 2026-08-25. *Static cascade* remains the name of the
-frozen research **pattern** documented here; `runner/` is the live implementation path.)
+frozen research **pattern** documented here; `harnesses/kimi-code/runner/` is the live implementation path.)
 
 ---
 
 ## What this repo is
 
-- `runner/` — **the live control plane** (`runner.py`): task intake with observable features, a
+- `harnesses/kimi-code/runner/` — **the live control plane** (`runner.py`): task intake with observable features, a
   frozen lane table, worker dispatch through the delegate wrapper, leader-executed verification,
   tree-bound acceptance receipts (stale on any post-verify mutation), a sealed verification
   surface (payloads copied out of the agent-writable workspace at init; tampered inputs are
   restored and flagged at verify time), stagnation detection with failure-class switching, and an
   append-only metered task ledger. Runner state lives **outside** the workspace
-  (`.runner-state/` sibling). Smoke suite S1–S7: `python -m unittest discover -s runner/tests -v`.
+  (`.runner-state/` sibling). Smoke suite S1–S7: `python -m unittest discover -s harnesses/kimi-code/runner/tests -v`.
   Acceptance additionally refuses a receipt flagged `tamper_detected` and one written before a
   later dispatch; verification pins the verifier argv at init and rejects `-m` module shadowing;
   `init` refuses to silently re-baseline an initialized workspace. See **Deterministic refusals**
-  below for the full list, and `runner/pilot.py` for the real-dispatch harness that drives the
+  below for the full list, and `harnesses/kimi-code/runner/pilot.py` for the real-dispatch harness that drives the
   whole loop against live workers.
-- `delegate/` — a lean Windows-native subprocess wrapper (`delegate.py`) that runs external CLI
+- `harnesses/kimi-code/delegate/` — a lean Windows-native subprocess wrapper (`delegate.py`) that runs external CLI
   workers with a stable envelope contract: exit codes, truncation flags, captured child session
   ids, and per-dispatch isolated+seeded `KIMI_CODE_HOME` homes (`child_home` in the envelope;
   callers meter from it, then delete it). 90 tests.
-- `cascade/` — the deterministic static-cascade controller (`cascade.py`), **frozen research
+- `harnesses/kimi-code/cascade/` — the deterministic static-cascade controller (`cascade.py`), **frozen research
   artifact** (governance: issue #16). Owns `cascade-state.json` transitions, plan validation,
   caps and legal escalation transitions, evidence archival, `commit-green`/`rollback` git gates,
   `handoff`/`record-decision` continuity, threat-model field, vision capability filter. Carries
   known trust-boundary defects (issues #17–#22) — do not use its green gate as acceptance
-  authority; `runner/` designs them out instead of patching them. 76 tests (2 known
-  environment-sensitive failures, documented in #20).
+  authority; `harnesses/kimi-code/runner/` designs them out instead of patching them. 76 tests (2 pre-existing failures in the not-a-git-repo paths, `AssertionError: 4 != 3`;
+  they reproduce on a clean clone whose temp workspace is verifiably not inside a repo,
+  so the historical "environment-sensitive / #20" label looks wrong — see #65).
 - `scripts/extract_log.py` — deterministic session-log fact extractor with a **coverage manifest**
   (bytes in, records parsed, records dropped). LLMs interpret extractions; they never scan raw
   volume. Verifier-class: hash-frozen per goal. 5 tests.
@@ -46,15 +47,15 @@ frozen research **pattern** documented here; `runner/` is the live implementatio
   v3 quality sets (10 each, naive-solution-proven to discriminate requirement fidelity), the
   metering stack (`meter.py`, `pricing.yaml`), pre-registrations (`PREREG-v2.md`, `PREREG-v3.md`),
   and every result row (`results*.jsonl`, `pilot-*.jsonl`, `phase2-*.jsonl`, `phase3-*.jsonl`).
-- `skill/` — installable Kimi Code skills (`model-proctor/` live policy, `static-cascade/` frozen
+- `harnesses/kimi-code/skill/` — installable Kimi Code skills (`model-proctor/` live policy, `static-cascade/` frozen
   reference, `multi-model-routing/` superseded).
 
 Python 3.10+, standard library only, everywhere.
 
 ```bash
-python -m unittest discover -s runner/tests -v    # live path smoke suite (S1–S7)
-python -m unittest discover -s delegate/tests -v
-python -m unittest discover -s cascade/tests -v
+python -m unittest discover -s harnesses/kimi-code/runner/tests -v    # live path smoke suite (S1–S7)
+python -m unittest discover -s harnesses/kimi-code/delegate/tests -v
+python -m unittest discover -s harnesses/kimi-code/cascade/tests -v
 python -m unittest discover -s scripts/tests -v
 ```
 
@@ -70,7 +71,7 @@ python scripts/install.py
 
 This installs two skills (`model-proctor`, `static-cascade`) to `%USERPROFILE%\.kimi-code\skills\`
 and the runner + delegate + agent roster to `C:\Tools\model-proctor\`. If `agents.json` is missing,
-regenerate it first from `delegate/agents.example.json` (see `delegate/README.md`).
+regenerate it first from `harnesses/kimi-code/delegate/agents.example.json` (see `harnesses/kimi-code/delegate/README.md`).
 
 ### Triggering the proctor
 
@@ -171,7 +172,7 @@ Two independent proposals for kimi-code-cli:
 
 ### Phase 2 — Dynamic per-turn routing: built, benchmarked, **rejected** (2026-07/08)
 
-The first implementation was a **dynamic** router (`skill/multi-model-routing/`,
+The first implementation was a **dynamic** router (`harnesses/kimi-code/skill/multi-model-routing/`,
 `policy/delegation-policy.md`): the leader classified each task at dispatch time and picked a model,
 with pre-registered predictions of **≥2–3× cost reduction** vs K3-alone.
 

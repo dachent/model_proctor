@@ -24,12 +24,14 @@ import tempfile
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[1]          # harnesses/kimi-code
+REPO_ROOT = ROOT.parents[1]                          # repo root
+# A file under harnesses/ reaches repo-level assets only through REPO_ROOT.
 RUNNER = ROOT / "runner" / "runner.py"
-FIXTURES = ROOT / "evals" / "fixtures"
-CASES = ROOT / "evals" / "cases.yaml"  # JSON syntax
-PRICING = ROOT / "evals" / "pricing.yaml"
-PILOT_LOG = ROOT / "evals" / "pilot-2026-08-25.jsonl"
+FIXTURES = REPO_ROOT / "evals" / "fixtures"
+CASES = REPO_ROOT / "evals" / "cases.yaml"  # JSON syntax
+PRICING = REPO_ROOT / "evals" / "pricing.yaml"
+PILOT_LOG = REPO_ROOT / "evals" / "pilot-2026-08-25.jsonl"
 
 DEFAULT_OUT = r"C:\Dev\bootstrap-state\model-proctor\pilot"
 def _sessions_root():
@@ -105,7 +107,7 @@ def wire_coverage(wires):
     """
     if not wires:
         return None
-    sys.path.insert(0, str(ROOT / "scripts"))
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
     try:
         import extract_log
     except ImportError:
@@ -143,7 +145,7 @@ def provenance():
     tool = Path(r"C:\Tools\model-proctor")
     kimi = Path(os.environ.get("USERPROFILE", "")) / ".kimi-code" / "bin" / "kimi.exe"
     try:
-        commit = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"],
+        commit = subprocess.run(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
                                 capture_output=True, text=True,
                                 timeout=30).stdout.strip() or None
     except (OSError, subprocess.TimeoutExpired):

@@ -21,7 +21,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "runner"))
+sys.path.insert(0, str(ROOT / "harnesses" / "kimi-code" / "runner"))
 import pilot  # noqa: E402
 
 

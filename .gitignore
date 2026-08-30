@@ -1,7 +1,7 @@
 .orchestrator/tmp/
-cascade/tests/tmp/
+harnesses/kimi-code/cascade/tests/tmp/
 __pycache__/
 *.pyc
 .mimosa/
 .zcode/
-delegate/agents.json
+harnesses/kimi-code/delegate/agents.json
