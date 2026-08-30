@@ -149,8 +149,8 @@ exactly one `{session_id}` placeholder:
 Usage: take `child_session_id` from a run's envelope and pass it back:
 
 ```
-python delegate.py --agent ds-flash-worker --workspace C:/Dev/ws --task "Add a test" 
-python delegate.py --agent ds-flash-worker --workspace C:/Dev/ws --resume-from session_9f3ab2c1 --task "Now cover the edge case"
+python delegate.py --agent glm-flash-worker --workspace C:/Dev/ws --task "Add a test" 
+python delegate.py --agent glm-flash-worker --workspace C:/Dev/ws --resume-from session_9f3ab2c1 --task "Now cover the edge case"
 ```
 
 The substituted args are inserted into argv immediately after the executable

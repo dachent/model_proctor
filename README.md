@@ -322,16 +322,23 @@ tasks the arms are quality-indistinguishable, so cost decides.
 
 | Role | Model | Basis |
 |---|---|---|
-| Default worker (bounded/substantial) | DeepSeek V4 Flash 0731 (`ds-flash-worker`) | 30/30 hidden on v3, $0.012/hidden-pass — beat GPT-OSS in the 0731 challenger arm (2026-08-25) |
+| Default worker (bounded/substantial) | GLM-5.3 Flash (`glm-flash-worker`) | Roster swap 2026-08-28: Fireworks retired `deepseek-v4-flash-0731` (the measured 30/30 hidden on v3, $0.012/hidden-pass arm); 5.3-flash successor **not yet re-measured** |
 | Cheap second / fallback | GPT-OSS-120B (`gpt-oss-worker`) | 29/30 hidden on v3 (one flake), $0.014/hidden-pass at corrected prices |
-| Substantial second (equal quality, faster wall) | GLM-5.2 (`glm-worker`) | 30/30 hidden on v3, $0.097/hidden-pass |
+| Substantial second (equal quality, faster wall) | GLM-5.3 (`glm-worker`) | Moved to 5.3 on 2026-08-28 once serving landed (morning probe 404'd, re-probe OK); predecessor GLM-5.2 measured 30/30 hidden on v3, $0.097/hidden-pass. 5.3 **not yet re-measured** |
 | Marathon / open-ended | Kimi K3 (`k3-worker`) | **Hypothesis only — see Open gaps below** |
 | Cheap scout (vision, misc.) | Kimi K2.7 (`k27-scout`) | Carried from the frozen roster; live |
 | Advisors (read-only, closed triggers) | Codex CLI / Claude CLI | Flat-rate; trigger set in issue #8 — **not yet wired into the runner** (see Open gaps) |
 
 Catalog note: Fireworks moves models to dated snapshot ids — the undated
-`deepseek-v4-flash` alias 404s while `deepseek-v4-flash-0731` is the live deployment
-(probed 2026-08-25, see #23). Roster ids are pinned and re-probed at experiment time.
+`deepseek-v4-flash` alias 404s while `deepseek-v4-flash-0731` was the live deployment
+(probed 2026-08-25, see #23). On 2026-08-28 kimi's synced fireworks roster dropped
+`deepseek-v4-flash-0731` and `glm-5p2` and gained `glm-5p3` / `glm-5p3-flash`; the flash
+lane moved to `glm-5p3-flash` and the glm lane to `glm-5p3`. Roster ids are pinned and
+re-probed at experiment time. Live-probe status 2026-08-28: `glm-5p3-flash` dispatches
+end-to-end (real worker run accepted); undated `glm-5p3` returned `404 Model not found,
+inaccessible, and/or not deployed` in the morning but went live the same day (direct
+re-probe OK — final serving probe 2026-08-28); `glm-5p2` still serves (alias re-added
+to kimi's config) and remains the recorded rollback for the glm lane.
 
 ---
 

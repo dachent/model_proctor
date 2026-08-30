@@ -67,6 +67,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 
 SCHEMA_VERSION = 1
@@ -77,11 +78,16 @@ STATE_DIR = ".runner"
 LANES = ("flash", "glm", "k3")
 
 # lane -> agent name in delegate's agents.json (roster names per README history).
-# flash lane: ds-flash-worker (deepseek-v4-flash-0731 dated snapshot) — restored
-# after the 0731 challenger arm beat gpt-oss-120b on the v3 corpus: 30/30 hidden
-# vs 29/30, $0.0120 vs $0.0143 per hidden-pass (2026-08-25, #23).
+# 2026-08-28 roster rotation: kimi's synced fireworks roster dropped both
+# deepseek-v4-flash-0731 and glm-5p2. Flash lane -> glm-5p3-flash (dispatch-
+# verified 2026-08-28; the 0731 snapshot arm had beaten gpt-oss-120b on the v3
+# corpus: 30/30 hidden vs 29/30, $0.0120 vs $0.0143 per hidden-pass, #23 — its
+# measured numbers do not carry over). GLM lane -> glm-5p3 (user-directed
+# successor): glm-5p3 404'd (not deployed) earlier on 2026-08-28 and went live
+# later that day (direct probe dispatch OK); the glm-5p2 alias was re-added to
+# kimi's config and serves, so it remains a rollback option.
 DEFAULT_AGENT_MAP = {
-    "flash": "ds-flash-worker",
+    "flash": "glm-flash-worker",
     "glm": "glm-worker",
     "k3": "k3-worker",
 }
@@ -443,6 +449,107 @@ def _receipt_path(root, task_id):
     return Path(root) / f"receipt-{task_id}.json"
 
 
+def _journal_path(root):
+    return Path(root) / "journal.jsonl"
+
+
+def _journal_append(root, rec):
+    """Append one JSON line to the append-only dispatch journal (#73/A1).
+
+    Lines are never rewritten: a runner that dies mid-dispatch leaves its
+    `dispatch_open` entry behind as the evidence the dispatch happened, and
+    re-init (which rewrites state.json) journals a `reinit` record instead of
+    resetting the trail. Each record is flushed + fsync'd so a hard-killed
+    runner cannot lose the open record itself. Trust class: the journal sits
+    beside state.json — outside the workspace, but on a worker-computable path
+    with no OS confinement (residual #40), so it is a forgeable ADVISORY
+    oracle under the project's non-adversarial threat model; a hash chain is
+    the follow-up if that model ever strengthens."""
+    p = Path(root) / "journal.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    seq = 0
+    if p.is_file():
+        with open(p, "r", encoding="utf-8", errors="replace") as f:
+            for ln in f:
+                if ln.strip():
+                    seq += 1
+    rec = {"journal_seq": seq, "at": time.strftime("%Y-%m-%dT%H:%M:%S"), **rec}
+    with open(p, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, sort_keys=True) + "\n")
+        # A1: the open record must survive a hard kill of the runner itself —
+        # buffered writes die with the process; fsync is what makes the
+        # open-before-spawn ordering actually durable.
+        f.flush()
+        os.fsync(f.fileno())
+    return rec
+
+
+def _journal_entries(root):
+    out = []
+    p = Path(root) / "journal.jsonl"
+    if not p.is_file():
+        # A1 (issue #73): missing journal is the pre-C1 schema — always an
+        # empty journal, never an error.
+        return out
+    with open(p, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                # A torn final line is the EXPECTED state after the crash
+                # class this journal instruments (killed mid-write). Keep it
+                # visible rather than discarding or failing on it.
+                out.append({"event": "journal_line_unparseable", "raw": line[-200:]})
+                continue
+            if isinstance(rec, dict):
+                out.append(rec)
+    return out
+
+
+def _journal_tail_corrupt(root):
+    """True when the journal's LAST line does not parse — the expected
+    post-crash shape, reported instead of failing the reader."""
+    p = Path(root) / "journal.jsonl"
+    if not p.is_file():
+        return False
+    try:
+        last = p.read_text(encoding="utf-8", errors="replace").rstrip("\n").rsplit("\n", 1)[-1]
+    except OSError:
+        return False
+    if not last.strip():
+        return False
+    try:
+        json.loads(last)
+    except json.JSONDecodeError:
+        return True
+    return False
+
+
+def _journal_open(root):
+    """dispatch_id -> open entries still lacking a matching finish (or ack)."""
+    last = {}
+    for e in _journal_entries(root):
+        if e.get("event") == "dispatch_ack":
+            last.pop(e.get("dispatch_id"), None)
+            continue
+        did = e.get("dispatch_id")
+        if did is not None:
+            last[did] = e
+    return {did: e for did, e in last.items()
+            if e.get("event") == "dispatch_open"}
+
+
+def _ts_to_epoch(ts):
+    """Parse the runner's local ISO timestamps back to epoch seconds."""
+    try:
+        return time.mktime(time.strptime(ts, "%Y-%m-%dT%H:%M:%S"))
+    except (TypeError, ValueError):
+        return None
+
+
 def _load_state(root):
     p = _state_path(root)
     if not p.is_file():
@@ -519,26 +626,65 @@ def resolve_delegate(explicit):
         "error": "delegate.py not found; pass --delegate or set DELEGATE_PATH"}, 3))
 
 
-def run_delegate(delegate_py, agent, ws, prompt, timeout_s):
-    """One worker attempt through the delegate wrapper. Returns the envelope."""
+def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None):
+    """One worker attempt through the delegate wrapper. Returns the envelope.
+
+    A5 (#73): instead of one blocking subprocess.run, poll the child so a
+    `dispatch_heartbeat` journal record lands at least once per interval —
+    `status` can then tell alive-but-slow from dead within one heartbeat
+    instead of one full timeout. The kill semantics are unchanged: past
+    timeout + 120s grace the child is killed and a timeout envelope returned
+    (the delegate enforces the same ceiling on its side)."""
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False,
                                      encoding="utf-8") as tf:
         tf.write(prompt)
         task_file = tf.name
+    deadline = time.monotonic() + timeout_s + 120
     try:
         cmd = [sys.executable, delegate_py, "--agent", agent, "--workspace", str(ws),
                "--task-file", task_file, "--timeout", str(timeout_s)]
-        r = subprocess.run(cmd, capture_output=True, text=True,
-                           timeout=timeout_s + 120)
-    except subprocess.TimeoutExpired:
-        return {"status": "timeout", "error": "delegate_wrapper_timeout",
-                "duration_seconds": timeout_s, "agent": agent}
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True)
+    except OSError:
+        try:
+            os.unlink(task_file)
+        except OSError:
+            pass
+        raise
+    out, err = "", ""
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                proc.kill()
+                proc.wait()
+                return {"status": "timeout", "error": "delegate_wrapper_timeout",
+                        "duration_seconds": timeout_s, "agent": agent}
+            try:
+                out, err = proc.communicate(timeout=min(remaining, 10))
+                break
+            except subprocess.TimeoutExpired:
+                # A5 (#73): alive-but-slow vs dead must be distinguishable
+                # within one heartbeat interval, not one full timeout.
+                if on_heartbeat is not None:
+                    try:
+                        on_heartbeat()
+                    except OSError:
+                        pass
+                if time.monotonic() > deadline:
+                    proc.kill()
+                    proc.wait()
+                    return {"status": "timeout", "error": "delegate_wrapper_timeout",
+                            "duration_seconds": timeout_s, "agent": agent}
     finally:
         try:
             os.unlink(task_file)
         except OSError:
             pass
-    line = (r.stdout or "").strip().splitlines()
+    line = (out or "").strip().splitlines()
+    if not line:
+        return {"status": "internal_error", "error": "empty delegate output",
+                "stderr": (err or "")[-500:], "agent": agent}
     if not line:
         return {"status": "internal_error", "error": "empty delegate output",
                 "stderr": (r.stderr or "")[-500:], "agent": agent}
@@ -621,6 +767,14 @@ def cmd_init(args):
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
     _write_json_atomic(_state_path(sroot), state)
+    # A2 (#73): a reinit rewrite must not silently re-date the activity trail.
+    # It is a real leader action, so it is journaled (preserving the trail)
+    # while the STALL clock keeps reading dispatch-lifecycle records only.
+    _journal_append(sroot, {
+        "event": "task_init", "task_id": task["task_id"],
+        "reinit": bool(reinit_count), "lane": lane,
+        "reinit_count": reinit_count,
+    })
     out = {"initialized": True, "task_id": task["task_id"], "lane": lane,
            "state_dir": str(sroot), "sealed_files": sorted(sealed),
            "reinit_count": reinit_count,
@@ -640,6 +794,26 @@ def cmd_dispatch(args):
     if len(state["dispatches"]) >= state["budget"]["max_dispatches"]:
         raise SystemExit(_emit({"error": "dispatch budget exhausted",
                                 "dispatches": len(state["dispatches"])}, 1))
+    # A6 (#73): orphan surfacing is ADVISORY — fields in the JSON output only.
+    # Neither dispatch nor status refuses on orphans: blocking would wedge
+    # every legal dispatch after any crash. Age beyond the delegate ceiling
+    # (timeout + 120s) means the open entry cannot belong to a live dispatch
+    # of THIS run's budget, so it is marked orphaned in the journal
+    # (append-only, never rewritten) and stops re-reporting once acked.
+    journal_ceiling = state["budget"]["timeout_s"] + 120
+    orphans = []
+    for did, e in sorted(_journal_open(sroot).items()):
+        started = _ts_to_epoch(e.get("at"))
+        if started is not None and time.time() - started > journal_ceiling:
+            orphans.append(_journal_append(sroot, {
+                "event": "dispatch_orphaned", "orphaned_dispatch_id": did,
+                "agent": e.get("agent"), "age_seconds":
+                    round(time.time() - started),
+            }))
+    dispatch_seq = len(state["dispatches"])
+    # A1 (#73): a dispatch_id minted per dispatch; open and finished repeat it,
+    # so concurrent runners sharing a state dir stay unambiguous.
+    dispatch_id = str(uuid.uuid4())
     # Production-runner guard, enforced again at dispatch (defense in depth —
     # the task file may have changed since init).
     preflight_ages = None
@@ -694,9 +868,30 @@ def cmd_dispatch(args):
         agent_map.update(_load_json(args.agent_map, "agent map"))
     delegate_py = resolve_delegate(args.delegate)
     agent = agent_map[state["lane"]]
+    # A1 (#73): journal the dispatch BEFORE spawning (fsync'd), so a runner
+    # that dies mid-spawn still leaves evidence; the matching
+    # dispatch_finished carries the same dispatch_id.
+    open_rec = _journal_append(sroot, {
+        "event": "dispatch_open", "task_id": state["task_id"],
+        "dispatch_id": dispatch_id, "dispatch_seq": dispatch_seq,
+        "agent": agent,
+        "timeout_s": state["budget"]["timeout_s"], "runner_pid": os.getpid(),
+    })
+    heartbeat_count = [0]
+
+    def _heartbeat():
+        # A5 (#73): alive-but-slow vs dead must be distinguishable within one
+        # heartbeat interval, not one full timeout.
+        heartbeat_count[0] += 1
+        _journal_append(sroot, {
+            "event": "dispatch_heartbeat", "dispatch_id": dispatch_id,
+            "beat": heartbeat_count[0],
+        })
+
     t0 = time.monotonic()
     envelope = run_delegate(delegate_py, agent, ws, task["prompt"],
-                            state["budget"]["timeout_s"])
+                            state["budget"]["timeout_s"],
+                            on_heartbeat=_heartbeat)
     wall = time.monotonic() - t0
     envelope_status = envelope.get("status")
     state["dispatches"].append({
@@ -716,6 +911,16 @@ def cmd_dispatch(args):
             "at": state["dispatches"][-1]["at"],
         })
     _write_json_atomic(_state_path(sroot), state)
+    # A1 (#73): the open entry is closed with the envelope result — including
+    # the provider/tool failure statuses, so a timeout or internal_error
+    # leaves a finished pair, not a dangling open.
+    _journal_append(sroot, {
+        "event": "dispatch_finished", "dispatch_id": dispatch_id,
+        "task_id": state["task_id"], "dispatch_seq": dispatch_seq,
+        "agent": agent, "envelope_status": envelope_status,
+        "duration_seconds": round(envelope.get("duration_seconds", wall), 3),
+        "heartbeats": heartbeat_count[0],
+    })
     cls, rec = classify_and_recommend(state, state["lane"])
     return _emit({
         "dispatched": True, "agent": agent, "lane": state["lane"],
@@ -723,6 +928,9 @@ def cmd_dispatch(args):
         "child_session_id": envelope.get("child_session_id"),
         "child_home": envelope.get("child_home"),
         "failure_class": cls, "recommendation": rec,
+        # A6 (#73): advisory only — see the sweep comment above.
+        "journal_orphans": [o["orphaned_dispatch_id"] for o in orphans],
+        "dispatch_id": dispatch_id,
     })
 
 
@@ -885,8 +1093,29 @@ def cmd_accept(args):
             "receipt_tree_sig": receipt["tree_sig"],
             "current_tree_sig": current,
         }, 1))
+    # A3 (#73): evidence must GATE, not just echo. Visibility at record time
+    # was the status quo and the S4 zero-dispatch acceptance shipped anyway.
+    # A receipt with dispatch_seq == 0 that is also nondiscriminating cannot
+    # tell done from undone, so acceptance on it is a reviewed decision, not a
+    # silent one — the codebase's established refuse-unless-explicit-override
+    # pattern (--reinit; lane override), with the override counted on state.
+    if (receipt.get("dispatch_seq") == 0
+            and receipt.get("verifier_nondiscriminating")
+            and not getattr(args, "allow_zero_dispatch", False)):
+        raise SystemExit(_emit({
+            "accepted": False,
+            "reason": "zero_dispatch_nondiscriminating_receipt: the verifier "
+                      "went green on the unmodified init tree with zero "
+                      "dispatches, so acceptance carries no worker evidence. "
+                      "Re-run with --allow-zero-dispatch if that is a "
+                      "reviewed decision (counted on state).",
+            "receipt": receipt,
+        }, 1))
     state["accepted"] = True
     state["accepted_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    if getattr(args, "allow_zero_dispatch", False):
+        state["allow_zero_dispatch_count"] = int(
+            state.get("allow_zero_dispatch_count", 0)) + 1
     _write_json_atomic(_state_path(sroot), state)
     return _emit({"accepted": True, "task_id": task["task_id"],
                   "receipt": receipt})
@@ -1014,7 +1243,109 @@ def cmd_record(args):
 
 def cmd_status(args):
     ws = str(Path(args.workspace).resolve())
-    return _emit(_load_state(_state_root(ws, args.state_dir)))
+    sroot = _state_root(ws, args.state_dir)
+    state = _load_state(sroot)
+
+    # C2 (#73), amended A2/A6: a one-shot dead-run detector. The overnight
+    # stall (issue #73, S1) looked like nothing at all from the wire: no
+    # process, no events, no error. A resumed leader gets the same silence;
+    # this gives it a verdict instead.
+    #
+    # Stall clock: dispatch-lifecycle journal records only (open / finished /
+    # heartbeat). Bookkeeping records (task_init on reinit) are real actions
+    # but not dispatch progress — an auto-refreshing clock would let a reinit
+    # loop mask a dead run forever. Missing journal (pre-#73 states) reads as
+    # an empty journal, never an error. Orphaned entries (dispatch_open with
+    # no finished pair and no ack, older than the delegate ceiling) are
+    # ADVISORY: listed, never refused — blocking would wedge every legal
+    # dispatch after any crash.
+    timeout_s = state.get("budget", {}).get("timeout_s", DEFAULT_BUDGET["timeout_s"])
+    stall_after = max(2 * timeout_s, 3600)
+    now = time.time()
+
+    entries = _journal_entries(sroot)
+    lifecycle = [e for e in entries
+                 if e.get("event") in ("dispatch_open", "dispatch_finished",
+                                       "dispatch_heartbeat")]
+    last_epoch = None
+    for e in lifecycle:
+        t = _ts_to_epoch(e.get("at"))
+        if t is not None and (last_epoch is None or t > last_epoch):
+            last_epoch = t
+    if last_epoch is None:
+        # Pre-journal state or no dispatches yet: fall back to the state file
+        # mtime so an uninitialized-era state still gets a sane reading.
+        st_path = _state_path(sroot)
+        if st_path.is_file():
+            last_epoch = st_path.stat().st_mtime
+    seconds_since = (round(now - last_epoch) if last_epoch is not None else None)
+
+    open_dispatches = _journal_open(sroot)
+    ceiling = timeout_s + 120
+    orphans = sorted(
+        did for did, e in open_dispatches.items()
+        if (started := _ts_to_epoch(e.get("at"))) is not None
+        and now - started > ceiling
+    )
+
+    last_receipt = None
+    task_id = state.get("task_id")
+    receipt_path = _receipt_path(sroot, task_id) if task_id else None
+    if receipt_path is not None and Path(receipt_path).is_file():
+        try:
+            last_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            last_receipt = None
+
+    out = {
+        "task_id": state.get("task_id"),
+        "lane": state.get("lane"),
+        "accepted": state.get("accepted", False),
+        "dispatch_count": len(state.get("dispatches", [])),
+        "failure_count": len(state.get("failures", [])),
+        "reinit_count": state.get("reinit_count", 0),
+        "last_dispatch": (state.get("dispatches") or [{}])[-1].get("at"),
+        "last_activity_at": (time.strftime("%Y-%m-%dT%H:%M:%S",
+                                           time.localtime(last_epoch))
+                             if last_epoch is not None else None),
+        "seconds_since_last_event": (round(now - last_epoch)
+                                     if last_epoch is not None else None),
+        "stall_after_seconds": stall_after,
+        "stall_suspected": bool(last_epoch and now - last_epoch > stall_after),
+        "open_journal_ids": sorted(open_dispatches),
+        "orphaned_dispatch_ids": orphans,
+        "journal_tail_corrupt": _journal_tail_corrupt(sroot),
+        "journal_events": len(entries),
+        # C3 (#73): a zero-dispatch or nondiscriminating green must be visible
+        # without opening the receipt file by hand.
+        "last_receipt": {
+            "passed": (last_receipt or {}).get("passed"),
+            "dispatch_seq": (last_receipt or {}).get("dispatch_seq"),
+            "verifier_nondiscriminating":
+                (last_receipt or {}).get("verifier_nondiscriminating"),
+        },
+        # Back-compat: status used to dump the raw state; tests and leaders
+        # read those keys directly, so keep them at top level.
+        **state,
+    }
+    return _emit(out)
+
+
+def cmd_journal(args):
+    """A6 (#73): acknowledge resolved orphaned dispatches so they stop
+    re-reporting (alert fatigue is a regression, not a mitigation).
+    Accepts multiple --ack <dispatch_id> values; appends one record per id."""
+    ws = str(Path(args.workspace).resolve())
+    sroot = _state_root(ws, args.state_dir)
+    if not args.ack:
+        raise SystemExit(_emit({"error": "nothing to acknowledge; "
+                                         "pass --ack <dispatch_id>"}, 1))
+    acked = []
+    for did in args.ack:
+        rec = _journal_append(sroot, {"event": "dispatch_ack",
+                                      "dispatch_id": did})
+        acked.append(rec["journal_seq"])
+    return _emit({"acknowledged": args.ack, "journal": str(_journal_path(sroot))})
 
 
 def main(argv=None):
@@ -1041,7 +1372,23 @@ def main(argv=None):
             p.add_argument("--wire", nargs="+", default=None,
                            help="one or more wire.jsonl files for usage metering")
             p.add_argument("--pricing", default=None)
+        if name == "accept":
+            # A3 (#73): the reviewed-decision override for a green receipt
+            # produced with zero dispatches; counted on state.
+            p.add_argument("--allow-zero-dispatch", action="store_true",
+                           help="accept a zero-dispatch nondiscriminating "
+                                "green receipt as a reviewed decision "
+                                "(counted on state)")
+    # A6 (#73): resolve orphaned opens without re-reporting them forever.
+    p = sub.add_parser("journal")
+    p.add_argument("--workspace", required=True)
+    p.add_argument("--state-dir", default=None)
+    p.add_argument("--ack", action="append", default=None,
+                   help="acknowledge a resolved dispatch_id so it stops "
+                        "re-reporting as orphaned")
     args = parser.parse_args(argv)
+    if args.cmd == "journal":
+        return cmd_journal(args)
     return {
         "lane": cmd_lane, "init": cmd_init, "dispatch": cmd_dispatch,
         "verify": cmd_verify, "accept": cmd_accept, "record": cmd_record,
