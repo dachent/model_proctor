@@ -152,3 +152,88 @@ detect that the vendor bundle changed underneath it. Tracked in #69.
 4. A wire-shape test against its harness's real hook/tool contract, with negative cases.
 5. A row in `core/tests/test_kimi_parity.py`-style parity coverage if the harness has
    its own lane implementation rather than calling the core directly.
+
+## Rejected alternatives
+
+Recorded per AGENTS.md: design decisions that survive debate are written down with the
+alternatives and the reason, so a later reader does not re-argue a settled question or
+re-adopt a design that was tried and failed.
+
+### Conformance corpus with per-harness adapters
+
+JSON cases (`input -> expected decision`) plus a thin adapter per harness, run as a
+cross-product. **This was the original design and it was built up to the point of
+failing.** Rejected because:
+
+- ZCode's enforced rules live in JavaScript. A Python adapter answering the budget and
+  stagnation cases would be a **third** implementation of those rules, inside the very
+  mechanism whose purpose is to prove there is one.
+- A `case in -> decision out` shape cannot represent side effects, sequences, filesystem
+  semantics, wire shape, or fail direction — so two harnesses could be 100% conformant
+  while disagreeing on whether a gate is a gate.
+- The corpus was justified as a way to *discover* divergence. Discovery was never the
+  bottleneck: reading both implementations found roughly eleven divergences in under an
+  hour, and one drift had already occurred *inside a single harness* while a 51-test
+  suite stayed green.
+
+Replaced by: one decision core, policy-free native shims, an exhaustively enumerated
+lane truth table, and a wire-shape test.
+
+### A shared library that every harness imports
+
+Rejected in the first draft on the grounds that "a shared Python module buys nothing if
+a future harness's adapter is not Python". That reasoning was **wrong**, and the
+correction is the current design: `zproctor_gate.mjs` is a Node shim that reads
+`lane.json` and `events.jsonl` written by Python. A shared core does not need to be
+*importable* — it needs to be **runnable or persistable**. Hermes and Codex can consume
+`core/decisions.py` the same way regardless of their implementation language.
+
+### No parity mechanism — let harnesses diverge deliberately
+
+Rejected. Parity is the research claim this repo exists to support; without a consumer
+it is an assertion. This repo's own bug record is precisely about mechanisms with no
+consumer — #36 (`tamper_detected` detected-but-never-consumed) and #58 (a report-only
+field that "reads as protection and provides none"). GitHub issues are not a consumer.
+
+### Separate repositories per harness
+
+Rejected. It removes the drift problem by removing the ability to observe it, and the
+shared decisions — lane table, fingerprints, stagnation thresholds — would be copied
+into each repo with no mechanism holding them equal.
+
+### `self` as a shared lane
+
+The first draft made `self` a fourth lane in the contract. Rejected: it is what a
+harness binds `cheap` to when it has no cheap worker, i.e. a **roster binding**. As a
+lane it silently changed Kimi's semantics and inverted in the dangerous direction — a
+task declared `{bounded, known_location, objective_acceptance, marathon}` would have
+gone from Kimi's `k3` to `self`, meaning **no dispatch at all for a marathon task**. It
+also erased Kimi's cheap worker tier, which exists on measured evidence (#23).
+
+Keeping `self` in the roster is what lets contract v1 land with **zero changes to
+`runner.py`**.
+
+### Model ids in the roster
+
+The first draft put `"custom:fireworks/glm-5p2"` in a tracked `roster.json`. Rejected:
+`.gitignore` untracks `delegate/agents.json` and `install.py` ACL-hardens it on purpose
+(#63), so a tracked file in a public repo reverses that decision and creates a third
+source of truth alongside `DEFAULT_AGENT_MAP` and `agents.json`. Rosters carry **names**;
+model and argv binding stays machine-local.
+
+### Pure fail-closed for ZCode
+
+Rejected. It would cost the internal deadline on every `Write`/`Edit`/`Bash` and let a
+single guard crash brick a session, while buying nothing the acceptance gate does not
+already provide: acceptance is the only irreversible act, and tool calls are reversible
+because the tree-bound receipt catches any change. Hence bounded fail-open — see
+**Fail direction**.
+
+### Renaming Kimi's internal lane ids in the harness work
+
+Rejected as a side effect. The literal string `flash` is keyed on by
+`flash_lane_forbidden_production_runner` (written from a recorded incident), the README
+refusal table, TOOL-019/#39, and `SKILL.md`'s trigger text; `LANES` carries a freeze
+comment gated on #26. Tracked separately in #71, and
+`test_lane_ids_are_not_silently_renamed` pins the current ids so it cannot happen by
+accident.
