@@ -139,16 +139,15 @@ produced it — so a green receipt states *what* was verified, not merely *that*
 ## Provenance: how this design was arrived at
 
 This section exists because the final design only makes sense as the residue of several
-**falsified or adjudicated predecessors**. Each phase is documented in this repo.
+**falsified or adjudicated predecessors**. Durable conclusions are summarized here; superseded
+working papers remain recoverable from Git history rather than living at the current repository tip.
 
 ### Phase 0 — Reverse-engineering Magnitude (2026-07)
 
 Starting question: can an open-model harness reproduce [Magnitude](https://magnitude.dev/)'s routing
 advantages — better-than-single-model quality at lower cost — inside Kimi Code CLI?
 
-`magnitude_reverse_engineered_routing_scaffold.md` is the reconstruction, adversarially reviewed by a
-5-critic swarm (source-fidelity, routing-theory, cost, security, and operations critics). Its durable
-conclusions:
+An adversarially reviewed reconstruction produced these durable conclusions:
 
 - Magnitude's defensible advantage is **not a learned model selector**. It is a hierarchical,
   stage-aware orchestration policy: persistent leader → bounded subtasks → specialized worker roles →
@@ -160,15 +159,11 @@ conclusions:
 
 ### Phase 1 — Operationalization specs (2026-07)
 
-Two independent proposals for kimi-code-cli:
-
-- `kimi_k3_glm_external_workers_final_plan.md` — two-tier architecture: Kimi K3 lead orchestrator,
-  GLM-5.2 native secondary workers, external CLI workers (DeepSeek, others) behind a lean `delegate`
-  subprocess wrapper. Key surviving decision: **do not make the wrapper impersonate the
-  secondary-model API** — a one-shot subprocess result is not a streaming model endpoint; faking one
-  requires an HTTP service and defeats the purpose.
-- `Kimi Code Multi-Model Orchestration Scaffold.pdf` — a parallel proposal, model lineup updated for
-  the current Fireworks catalog.
+Two independent Kimi Code proposals converged on a two-tier architecture: Kimi K3 as lead,
+GLM-5.2 as native secondary, and external CLI workers behind a lean `delegate` subprocess wrapper.
+The key surviving decision was **do not make the wrapper impersonate the secondary-model API** — a
+one-shot subprocess result is not a streaming model endpoint; faking one requires an HTTP service,
+tool-call translation, cancellation/state machinery, and defeats the purpose of a lean wrapper.
 
 ### Phase 2 — Dynamic per-turn routing: built, benchmarked, **rejected** (2026-07/08)
 
@@ -352,7 +347,7 @@ All work on this tool is managed through **this repository's GitHub Issues** —
   an explicit **activation trigger** so overkill stays parked instead of silently becoming urgent.
 - Closing an issue requires a non-empty `## Final evidence and handoff` section — evidence, not vibes.
 - Design decisions that survive debate are recorded in `policy/` with rejected alternatives and
-  rationale; session-boundary handoffs go through `cascade.py handoff` + the append-only decisions log.
+  rationale; live task state and evidence are owned by the active harness control plane.
 
 Start here: [Issues](../../issues).
 
