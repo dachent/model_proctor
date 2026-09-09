@@ -73,6 +73,7 @@ never through the harness root.
 - Rebuild watch: `python evals/meter.py --rebuild-watch <hours>`
 - Eval self-test: `python evals/run_eval.py --self-test`
 - Eval scorecard: `python evals/report.py`
+- Pricing contract (Flash/Fast tier relations, dated catalog pins): `python -m unittest discover -s evals/tests -v`
 - Verifier error over committed rows: `python evals/verifier_error.py [--json]`
   (free — no model runs; read `evals/PREREG-verifier-error.md` for the decision
   rule before interpreting the output, and never quote a rate without its
