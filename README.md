@@ -317,9 +317,9 @@ tasks the arms are quality-indistinguishable, so cost decides.
 
 | Role | Model | Basis |
 |---|---|---|
-| Default worker (bounded/substantial) | GLM-5.3 Flash (`glm-flash-worker`) | Roster swap 2026-08-28: Fireworks retired `deepseek-v4-flash-0731` (the measured 30/30 hidden on v3, $0.012/hidden-pass arm); 5.3-flash successor **not yet re-measured** |
+| Default worker (bounded/substantial) | GLM-5.3 Flash (`glm-flash-worker`) | Roster swap 2026-08-28; **re-measured 2026-09-09** (PREREG-v3-rotation, #91): 29/30 hidden on v3 (one flake, `q15_lru_ttl`), **$0.0096/hidden-pass** — the cheapest measured arm; retired `deepseek-v4-flash-0731` was 30/30 at $0.012 |
 | Cheap second / fallback | GPT-OSS-120B (`gpt-oss-worker`) | 29/30 hidden on v3 (one flake), $0.014/hidden-pass at corrected prices |
-| Substantial second (equal quality, faster wall) | GLM-5.3 (`glm-worker`) | Moved to 5.3 on 2026-08-28 once serving landed (morning probe 404'd, re-probe OK); predecessor GLM-5.2 measured 30/30 hidden on v3, $0.097/hidden-pass. 5.3 **not yet re-measured** |
+| Substantial second (equal quality, faster wall) | GLM-5.3 (`glm-worker`) | Moved to 5.3 on 2026-08-28; **re-measured 2026-09-09** (#91): **30/30 hidden on v3, $0.074/hidden-pass** — cheaper than predecessor GLM-5.2 (30/30, $0.097) at equal quality |
 | Marathon / open-ended | Kimi K3 (`k3-worker`) | **Hypothesis only — see Open gaps below** |
 | Cheap scout (vision, misc.) | Kimi K2.7 (`k27-scout`) | Carried from the frozen roster; live |
 | Advisors (read-only, closed triggers) | Codex CLI / Claude CLI | Flat-rate; trigger set in issue #8 — **not yet wired into the runner** (see Open gaps) |
