@@ -109,6 +109,18 @@ features honestly is still your job.
 - Budgets are hard caps (`max_dispatches`, `max_stagnant`, `timeout_s`). A refusal is final
   until state changes legally.
 
+## Stopping rules (TOOL-011, #12 — owner directive 2026-08-16)
+
+1. Max **two adversarial QC rounds per change**; a third round is an owner call.
+   Test-strength-only findings (no production defect) are record-and-ship — note
+   them on the issue, do not loop.
+2. Re-run only the **narrowest failing stage**; rebuild upstream stages only when
+   an upstream input actually changed.
+3. Gates (full suite + linters) re-run only **after a code change**.
+4. Budgets are declared at dispatch and escalate on breach instead of continuing
+   (`max_dispatches`, `max_stagnant`, `timeout_s` above; #83 M1 extends them to
+   per-attempt reservations).
+
 ## Session discipline
 
 One persistent worker session per task, closed at acceptance. Externalize verified state to
