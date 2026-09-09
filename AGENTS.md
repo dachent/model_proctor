@@ -85,6 +85,10 @@ never through the harness root.
   calls it rather than reimplementing. Contract v1, spec in
   `policy/HARNESS_CONTRACT.md`; `core/tests/test_kimi_parity.py` enumerates the full
   lane truth table against `runner.lane_for`.
+- `core/task_schema.py` — the shared task-file schema (#83 M0): strict types,
+  known feature keys only, no string booleans (A12). Every harness validates
+  task files through it at the command boundary; the kimi runner resolves it
+  in both repo and flat-install layouts (`runner._task_schema`).
 - `harnesses/zcode/` — the ZCode harness. ZCode owns subagent dispatch, so the proctor
   gates it in front of the `Agent` tool rather than owning it. Native shims contain no
   policy: every constant arrives in `lane.json` from the core.

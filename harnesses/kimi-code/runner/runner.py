@@ -155,11 +155,52 @@ def _norm(p):
 
 # ── task + lane ─────────────────────────────────────────────────────────
 
+_TASK_SCHEMA = None
+
+
+def _task_schema():
+    """core/task_schema.py — the one task-schema policy (#83 TOOL-030 M0).
+
+    Resolved for both layouts: the repo (harnesses/kimi-code/runner/ ->
+    <repo>/core/) and the flat install (a sibling file install.py ships
+    beside runner.py). Cached; a missing module is a broken install and
+    refuses loudly rather than silently validating nothing.
+    """
+    global _TASK_SCHEMA
+    if _TASK_SCHEMA is None:
+        import importlib.util
+        here = Path(__file__).resolve().parent
+        for cand in (here / "task_schema.py",
+                     here.parents[2] / "core" / "task_schema.py"):
+            if cand.is_file():
+                spec = importlib.util.spec_from_file_location("task_schema", str(cand))
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                _TASK_SCHEMA = mod
+                break
+        else:
+            raise SystemExit(_emit({"error": "task_schema_module_missing"}, 4))
+    return _TASK_SCHEMA
+
+
 def load_task(path):
     task = _load_json(path, "task file")
     missing = [k for k in ("task_id", "prompt", "scope", "verifier") if k not in task]
     if missing:
         raise SystemExit(_emit({"error": f"task missing required fields: {missing}"}, 3))
+    # M0 (#83): strict, shared type validation. Before this a string "false"
+    # feature was truthy at the lane table and routed real work to the flash
+    # lane (A12); unknown feature keys and non-numeric budgets passed the
+    # same way. The presence checks below stay for their documented shapes.
+    schema = _task_schema()
+    try:
+        schema.validate_task(task)
+    except schema.TaskSchemaError as e:
+        raise SystemExit(_emit({"error": "task_schema_invalid",
+                                "field": e.field, "detail": e.detail}, 3))
+    if task.get("lane") is not None and task["lane"] not in LANES:
+        raise SystemExit(_emit({"error": "task.lane_not_a_lane",
+                                "lane": task["lane"], "lanes": list(LANES)}, 3))
     if not isinstance(task["scope"], list) or not task["scope"]:
         raise SystemExit(_emit({"error": "task.scope must be a non-empty list"}, 3))
     argv = task["verifier"].get("argv")
