@@ -170,8 +170,15 @@ def _task_schema():
     if _TASK_SCHEMA is None:
         import importlib.util
         here = Path(__file__).resolve().parent
-        for cand in (here / "task_schema.py",
-                     here.parents[2] / "core" / "task_schema.py"):
+        # The candidates tuple must not be built eagerly: in the flat install
+        # `here` is C:/Tools/model-proctor, which has no parents[2], and the
+        # unguarded index crashed every installed command (caught by the
+        # installed smoke 2026-09-09, fixed same day; see the flat-layout
+        # regression test in test_task_schema_gate.py).
+        candidates = [here / "task_schema.py"]
+        if len(here.parents) > 2:
+            candidates.append(here.parents[2] / "core" / "task_schema.py")
+        for cand in candidates:
             if cand.is_file():
                 spec = importlib.util.spec_from_file_location("task_schema", str(cand))
                 mod = importlib.util.module_from_spec(spec)
