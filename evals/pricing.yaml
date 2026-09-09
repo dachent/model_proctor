@@ -1,11 +1,14 @@
 # Fireworks Serverless pricing (USD per 1M tokens), standard tier.
 # Source: https://docs.fireworks.ai/serverless/pricing (verified 2026-08-25 against
-# the live page; earlier table from the 2026-08-23 review). Used by evals/meter.py
+# the live page; earlier table from the 2026-08-23 review; standard tier re-verified
+# 2026-09-09, see the dated notes per row). Used by evals/meter.py
 # and runner/runner.py to price wire.jsonl usage records.
 # Fields: input, cached_input, output.
 fireworks/kimi-k3:        { input: 3.00,  cached_input: 0.30,  output: 15.00 }
 fireworks/kimi-k2p7-code: { input: 0.95,  cached_input: 0.19,  output: 4.00 }
-fireworks/deepseek-v4-pro:  { input: 1.74, cached_input: 0.145, output: 3.48 }
+# 2026-09-09 recheck (#83 TOOL-030 M3): standard DeepSeek V4 Pro (0813) is
+# 1.32/0.044/3.96; the 2026-08-25 row matched no current tier. Repriced.
+fireworks/deepseek-v4-pro:  { input: 1.32, cached_input: 0.044, output: 3.96 }
 # Undated alias 404s (2026-08-25); the live deployment is the dated 0731 snapshot.
 # Same price on both rows; the undated row stays for metering historical runs.
 # 2026-08-28 roster: kimi's synced fireworks roster dropped deepseek-v4-flash-0731
@@ -15,11 +18,14 @@ fireworks/deepseek-v4-pro:  { input: 1.74, cached_input: 0.145, output: 3.48 }
 fireworks/deepseek-v4-flash: { input: 0.22, cached_input: 0.007, output: 0.66 }
 fireworks/deepseek-v4-flash-0731: { input: 0.22, cached_input: 0.007, output: 0.66 }
 fireworks/glm-5p2:        { input: 1.40,  cached_input: 0.14,  output: 4.40 }
-# GLM 5.3 / 5.3 Fast verified against the live page 2026-08-28.
-# Serving landed later on 2026-08-28 (morning probe 404'd, direct re-probe OK) —
-# the glm lane uses this row; glm-5p2 stays for historical metering / rollback.
+# GLM 5.3 / GLM 5.3 Flash verified against the live page 2026-09-09.
+# Correction (#83 TOOL-030 M3 — Flash/Fast confusion): the 2026-08-28 entry for
+# glm-5p3-flash carried the GLM 5.2 Fast row ($2.10/$0.39/$6.60). GLM 5.3 Flash
+# standard prices are $0.15/$0.03/$0.50 per 1M — flash-lane metering ran ~14x
+# too high from 2026-08-28 to 2026-09-09. Raw usage rows are preserved; corrected
+# estimates are republished separately, not rewritten (#83 M3).
 fireworks/glm-5p3:        { input: 1.40,  cached_input: 0.26,  output: 4.40 }
-fireworks/glm-5p3-flash:  { input: 2.10,  cached_input: 0.39,  output: 6.60 }
+fireworks/glm-5p3-flash:  { input: 0.15,  cached_input: 0.03,  output: 0.50 }
 fireworks/qwen-3p8-max:   { input: 2.00,  cached_input: 0.25,  output: 6.00 }
 fireworks/minimax-m3:     { input: 0.30,  cached_input: 0.06,  output: 1.20 }
 fireworks/gpt-oss-120b:   { input: 0.15,  cached_input: 0.015, output: 0.60 }
