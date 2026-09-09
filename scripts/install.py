@@ -33,12 +33,15 @@ ICACLS = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
 
 DELEGATE_FILES = ["delegate.py", "agents.example.json", "README.md"]
 # (base, subdir, filename) copied flat into TOOL_DIR. The base is explicit
-# because runner/ lives under the harness while evals/ stays at the repo root.
+# because runner/ lives under the harness while core/ and evals/ stay at the
+# repo root. task_schema.py is the shared M0 schema (#83): the installed
+# runner resolves it as a sibling (see runner._task_schema).
 RUNNER_FILES = [(KIMI, "runner", "runner.py"), (KIMI, "runner", "pilot.py"),
+                (ROOT, "core", "task_schema.py"),
                 (ROOT, "evals", "pricing.yaml")]
 SKILLS = ("model-proctor",)
 # Everything the installed SKILL.md tells a leader to invoke or pass.
-REQUIRED_AFTER_INSTALL = ["runner.py", "delegate.py", "pricing.yaml"]
+REQUIRED_AFTER_INSTALL = ["runner.py", "delegate.py", "task_schema.py", "pricing.yaml"]
 
 
 def _sha256(path):
