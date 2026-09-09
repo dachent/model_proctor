@@ -77,6 +77,28 @@ class TaskSchemaGate(unittest.TestCase):
         rc, out = run_runner("init", "--workspace", ws, "--task", task)
         self.assertEqual(rc, 0, out)
 
+    def test_flat_install_layout_resolves_the_schema(self):
+        # Regression (2026-09-09): the eagerly-built candidates tuple indexed
+        # parents[2] unconditionally, which crashed EVERY command in the flat
+        # install (C:/Tools/model-proctor) where the runner dir has no
+        # grandparent. Run the runner from a copied flat layout and expect a
+        # normal lane decision, not a traceback.
+        flat = Path(self.tmp) / "flat"
+        flat.mkdir()
+        shutil.copy2(RUNNER, flat / "runner.py")
+        shutil.copy2(ROOT.parents[1] / "core" / "task_schema.py",
+                     flat / "task_schema.py")
+        ws = make_workspace(self.tmp)
+        task = make_task(self.tmp, features={
+            "bounded": True, "known_location": True, "objective_acceptance": True})
+        r = subprocess.run([sys.executable, str(flat / "runner.py"),
+                            "lane", "--task", task],
+                           capture_output=True, text=True, timeout=120)
+        out = json.loads(r.stdout) if r.stdout.strip() else {}
+        self.assertEqual(r.returncode, 0, out)
+        self.assertEqual(out["lane"], "flash")
+        self.assertNotIn("Traceback", r.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
