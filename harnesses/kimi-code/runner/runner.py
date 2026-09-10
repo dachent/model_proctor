@@ -605,6 +605,37 @@ def _load_state(root):
     return _load_json(p, "runner state")
 
 
+def check_state_identity(state, task, ws, sroot):
+    """M1 (#83, A03/A04): external state is bound to ONE task in ONE workspace.
+
+    dispatch/verify/accept/record all consume state selected by
+    --workspace/--state-dir, and state has recorded task_id and workspace
+    since the MVP — but nothing compared them. A different task file with the
+    same verifier text, or a --state-dir reused from another workspace with a
+    byte-identical tree, was consumed silently: task A's pinned contract,
+    sealed copies and budget judging task B. `init --reinit` is the legal,
+    counted identity change; every other boundary refuses the mismatch.
+    """
+    if state.get("task_id") != task["task_id"]:
+        raise SystemExit(_emit({
+            "error": "state_task_mismatch",
+            "state_task_id": state.get("task_id"),
+            "task_id": task["task_id"],
+            "state_dir": str(sroot),
+            "hint": "this state was initialized for a different task; "
+                    "init --reinit is the deliberate identity change",
+        }, 1))
+    if state.get("workspace") != ws:
+        raise SystemExit(_emit({
+            "error": "state_workspace_mismatch",
+            "state_workspace": state.get("workspace"),
+            "workspace": ws,
+            "state_dir": str(sroot),
+            "hint": "this state was initialized for a different workspace; a "
+                    "--state-dir reused across trees judges the wrong tree",
+        }, 1))
+
+
 def seal_files(task, ws, sroot):
     """Copy the verification payload out of the agent-writable workspace at
     init: task["seal"] entries + verifier argv file args + every config-surface
@@ -837,6 +868,7 @@ def cmd_dispatch(args):
     task = load_task(args.task)
     sroot = _state_root(ws, args.state_dir)
     state = _load_state(sroot)
+    check_state_identity(state, task, ws, sroot)
     if state["accepted"]:
         raise SystemExit(_emit({"error": "task already accepted"}, 1))
     if len(state["dispatches"]) >= state["budget"]["max_dispatches"]:
@@ -987,6 +1019,7 @@ def cmd_verify(args):
     task = load_task(args.task)
     sroot = _state_root(ws, args.state_dir)
     state = _load_state(sroot)
+    check_state_identity(state, task, ws, sroot)
 
     # A verifier that passes on the UNMODIFIED init tree has no discriminating
     # power: it will pass whatever the worker does, so acceptance means
@@ -1098,6 +1131,7 @@ def cmd_accept(args):
     task = load_task(args.task)
     sroot = _state_root(ws, args.state_dir)
     state = _load_state(sroot)
+    check_state_identity(state, task, ws, sroot)
     rp = _receipt_path(sroot, task["task_id"])
     if not rp.is_file():
         raise SystemExit(_emit({"accepted": False, "reason": "no receipt; run verify"}, 1))
@@ -1250,6 +1284,7 @@ def cmd_record(args):
     task = load_task(args.task)
     sroot = _state_root(ws, args.state_dir)
     state = _load_state(sroot)
+    check_state_identity(state, task, ws, sroot)
     row = {
         "task_id": task["task_id"],
         "lane": state["lane"],
