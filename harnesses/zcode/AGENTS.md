@@ -4,8 +4,11 @@ Mirrors `dachent/model_proctor`. The proctor assigns the exam, watches the clock
 and grades it objectively — the model never marks its own work. Deterministic
 evidence outranks every model, including you.
 
-Orchestrator: DeepSeek V4 Flash 0731. Workers: `escalate-glm` (GLM-5.2),
-`escalate-k3` (Kimi K3). Control plane: `python C:/Dev/bin/zproctor.py`.
+Orchestrator and workers are bound in the machine-local roster
+(`C:/Dev/bin/roster.json`), never in tracked files. Workers: `escalate-glm`,
+`escalate-k3`. The 2026-08-28 Fireworks rotation retired DeepSeek V4 Flash
+0731 and GLM-5.2 from the live roster — see `dachent/model_proctor` #91 for
+the re-measured successors. Control plane: `python C:/Dev/bin/zproctor.py`.
 
 ## Most of this is enforced, not requested
 
