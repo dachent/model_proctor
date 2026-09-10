@@ -94,15 +94,16 @@ def run_plain(case, out_root, agent, rep, timeout_s):
     hidden = subprocess.run([sys.executable, "hidden_check.py"], cwd=str(ws),
                             capture_output=True, timeout=120)
 
-    # Meter with the runner's own math (A13: unknown is never zero).
+    # Meter with the runner's own math. Self-contained on main's stable API
+    # (sum_usage_records); the driver enforces the prereg's operative
+    # guarantee itself: no surviving usage records -> UNKNOWN, never $0.
+    # Full malformed-record discrimination is the runner-side A13 fix (#94)
+    # and applies to these rows once merged.
     wires = pilot.find_wires([sid], t0, homes=[home] if home else [])
     records, totals = 0, {}
-    problems = {"unparseable_lines": 0, "malformed_records": 0}
     for wire in wires:
-        n, t, p = runner.scan_usage_records(wire)
+        n, t = runner.sum_usage_records(wire)
         records += n
-        problems["unparseable_lines"] += p["unparseable_lines"]
-        problems["malformed_records"] += p["malformed_records"]
         for model, bucket in t.items():
             agg = totals.setdefault(model, {"inputOther": 0, "output": 0,
                                             "inputCacheRead": 0,
@@ -110,8 +111,7 @@ def run_plain(case, out_root, agent, rep, timeout_s):
             for k in agg:
                 agg[k] += bucket[k]
     by_model, total = runner.price_tokens(totals, runner.load_pricing(PRICING))
-    usage_unknown = bool(problems["unparseable_lines"]
-                         or problems["malformed_records"] or records == 0)
+    usage_unknown = records == 0
 
     row = {
         "arm": "plain-direct", "task_id": case["id"], "rep": rep,

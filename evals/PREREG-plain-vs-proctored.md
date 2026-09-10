@@ -67,3 +67,15 @@ ceiling **$5** — abort and report beyond it.
   same corpus/protocol/driver and are reused as arm P, sealed, unmodified.
 - Screen limitation as ever: hidden checks grade the final tree; not
   decision-grade (#16).
+
+## Amendment (2026-09-09, before the first valid run)
+
+The first execution attempt crashed after one completed dispatch
+(q11 rep1, ~cent-level spend, no row appended): the driver had been written
+against #94's `scan_usage_records`, which is not on main. The driver is now
+self-contained on main's stable `sum_usage_records` and enforces the
+operative guarantee itself — zero surviving usage records means UNKNOWN and
+`api_cost_usd: null`, never $0. Full malformed-record discrimination
+remains the runner-side A13 fix (#94) and applies to these rows once
+merged. No plain-arm evidence rows existed at amendment time; arm P is
+untouched.
