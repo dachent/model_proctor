@@ -13,10 +13,31 @@ frozen research **pattern** documented here; `harnesses/kimi-code/runner/` is th
 
 ---
 
+## Status update (2026-09-09): one thin gate wins — converting to catalog-dispatched subagents
+
+The full record is [`policy/FINDINGS-2026-09-09.md`](policy/FINDINGS-2026-09-09.md); the
+conversion is tracked in [#96](../../issues/96). The short version:
+
+| Value pillar | Verdict (measured) |
+|---|---|
+| Routing by task shape | **Zero** — STOP fired twice (#30, #91) |
+| Dispatch-wrapper economics | **Negative ~12–16%** — delegate-only beat the full runner flow on cost, quality and wall time (sealed M4-early comparison) |
+| Trust boundary (receipts, seals, identity) | **Standing** — and repaired 2026-09-09: A03/A04/A12/A13 (runner), A07/A09 (ZCode) closed with regression evidence |
+| Accounting truthfulness | **Standing** — Flash/Fast pricing corrected (PR #87), unknown usage never $0 (PR #94) |
+| Leader-context protection | **Unmeasured** — the one economic experiment still unopened |
+
+Decision: **the lane table, task features, stagnation ladders and tier gates retire from
+the live path.** The tool becomes "start a subagent with model [x]" for kimi-code-cli and
+ZCode, [x] any model in the harness catalog — thin dispatch (delegate transport + wire
+metering, read-only by default, live-catalog validation that refuses rotated ids loudly)
+with the runner's verify/accept/identity gate kept for production certification. Blocking
+acceptance criterion: an interleaved plain-vs-model-mode neutrality batch, which also
+closes the open token-delta investigation.
+
 ## What this repo is
 
 - `harnesses/kimi-code/runner/` — **the live control plane** (`runner.py`): task intake with observable features, a
-  frozen lane table, worker dispatch through the delegate wrapper, leader-executed verification,
+  frozen lane table (retiring from the live path per #96 — see the status update above), worker dispatch through the delegate wrapper, leader-executed verification,
   tree-bound acceptance receipts (stale on any post-verify mutation), a sealed verification
   surface (payloads copied out of the agent-writable workspace at init; tampered inputs are
   restored and flagged at verify time), stagnation detection with failure-class switching, and an
@@ -359,6 +380,16 @@ The measured end-state for bounded/spec-complete tasks is live: fixed cheap task
 deterministic verification + failure-class switching, no economic routing. The bespoke cascade is a
 frozen research artifact (6095695; governance #16). The grid results (#29/#30): quality parity
 across K3/GLM/GPT-OSS at 3.0× cost spread → the STOP rule fired; routing complexity stays parked.
+
+**2026-09-09.** The M4-early comparison (sealed `PREREG-plain-vs-proctored`) measured the dispatch
+wrapper itself: delegate-only dispatch beat the full runner flow by 16% per hidden-pass and 2.3×
+wall time at equal-or-better quality — the wrapper's residual value is the trust boundary and
+accounting, not economics. The rotated roster was re-measured (#91): `glm-5p3` and `glm-5p3-flash`
+dominate their predecessors; glm-5p3-flash is the cheapest measured arm in the program. Six
+reproduced acceptance defects were fixed with regression evidence (A03/A04, A07, A09, A12, A13;
+PRs #88/#93/#94/#95). Consequence: conversion to catalog-dispatched subagents (#96) — see the
+status update at the top of this README and `policy/FINDINGS-2026-09-09.md` for the findings,
+conclusions, and plan.
 
 The trust boundary is sealed for the live path (TOOL-013/014, issue #31/#33): isolated per-dispatch
 `KIMI_CODE_HOME`, runner state and verifier payloads outside the agent-writable workspace,
