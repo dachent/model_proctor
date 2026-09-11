@@ -1,25 +1,81 @@
 ---
 name: model-proctor
-description: Task-owning worker policy with deterministic acceptance (model_proctor) — classify a task into a frozen lane (Flash bounded / GLM substantial / K3 marathon), dispatch through the installed runner (C:/Tools/model-proctor/runner.py), verify with tree-bound receipts, switch on stagnation rather than fixed rungs. Use for substantial coding tasks. Do NOT use for trivial tasks (known location, one edit-test cycle) — execute those directly. This is the only live/installable skill; static-cascade is preserved research only. Requires the model-proctor install (scripts/install.py).
+description: Subagent dispatch by model id + deterministic acceptance gate (model_proctor) — start a subagent with any model from the live harness catalog (delegate.py --model, validated against kimi's config at dispatch time), or run a production task through the gated path (runner.py init/dispatch/verify/accept with tree-bound receipts). The lane table is retired (#96); one fixed worker wins (STOP, twice confirmed). Use for substantial coding tasks. Do NOT use for trivial tasks — execute those directly. Requires the model-proctor install (scripts/install.py).
 ---
 
 # Model Proctor Policy
 
 The proctor assigns the exam, watches the clock, and grades it objectively — the model never
-marks its own work. You are the leader. The deterministic control plane is the installed runner,
-`C:/Tools/model-proctor/runner.py` (repo copy: `harnesses/kimi-code/runner/runner.py`; delegate transport and the
-agent roster live alongside it at `C:/Tools/model-proctor/`). Prompts do not
-enforce; the runner enforces. Deterministic evidence outranks every model, including you.
-Governance: issues #16 (measurement-first) and #26 (vNext hypothesis); this skill implements
-only the MVP slice (#27). STOP — one fixed worker wins — remains a legitimate outcome.
+marks its own work. You are the leader. Two surfaces, one doctrine (#96, the 2026-09-09
+findings): **thin dispatch** for subagents (`C:/Tools/model-proctor/delegate.py --model <id>`),
+and the **gated path** for production work (`C:/Tools/model-proctor/runner.py`
+init/dispatch/verify/accept). Prompts do not enforce; the tools enforce. Deterministic
+evidence outranks every model, including you. Governance: #16, #91, #96.
 
-## Entry gate
+## Start a subagent with a model
 
-Use the runner only for substantial tasks (unfamiliar code, multi-file, or estimated
-≥ ~3 turns). Trivial work: do it yourself. Never spend a worker dispatch on a task you can
-complete in one edit-test cycle.
+```bash
+python C:/Tools/model-proctor/catalog.py                  # what's live + what it costs
+python C:/Tools/model-proctor/delegate.py \
+    --model fireworks/glm-5p3-flash \
+    --workspace <ws> \
+    --task "<task text>"          # or --task-file <path> (preferred: no
+                                  # control-plane files in the worker's tree)
+```
 
-## Lane table (frozen for the experiment — no per-run relabeling)
+- The model id is validated against **kimi's live config** at dispatch time;
+  rotated ids refuse loudly with same-family alternatives listed. Config
+  presence ≠ serving — a listed id can still 404 at the provider; that
+  surfaces as a provider failure in the envelope.
+- Read-only by default; `--write` is explicit (and model-mode only).
+- `--resume-from <session_id>` continues a child session (the template's
+  resume_args).
+- Every child carries `PROCTOR_CHILD=1` (injected); a nested delegate refuses
+  `--model`/`--write` spawns — no unmanaged nesting.
+- Production-pattern tasks (`run_week.ps1`, `src.run_all`, ...) are REFUSED
+  in model-mode; they belong on the gated runner path below.
+
+## The gated path (production work)
+
+Runner state, receipts, and sealed verifier payloads live OUTSIDE the workspace
+(`.runner-state/` sibling) — the worker cannot rewrite its own evidence. At verify time the
+runner restores any tampered verification input from the sealed copy and flags it on the receipt.
+
+1. **Write the task file**: `task.json` with `task_id`, `prompt`, `features`, `scope`
+   (non-empty), `verifier.argv` (an argv ARRAY — never a shell string; use `{python}` for the
+   interpreter), and `budget`. Tasks that drive a known production runner also require
+   `preflight_receipts` — see **Production tasks** below.
+2. **Lane**: `python C:/Tools/model-proctor/runner.py lane --task task.json` — record the decision. Override
+   only by setting `lane` in the task file, and note why in the task record.
+3. **Init**: `python C:/Tools/model-proctor/runner.py init --workspace <w> --task task.json`. Refusal
+   (`workspace_is_not_repo_root`) is final — fix the workspace, never bypass. Init pins the
+   verification contract (`verifier`, `seal`) into external state; the task file sits inside the
+   worker-writable tree, so from here on the pinned copy is authoritative.
+4. **Dispatch**: `python C:/Tools/model-proctor/runner.py dispatch --workspace <w> --task task.json`. The
+   worker owns the engineering trajectory in its own session; you own state and acceptance.
+5. **Verify**: `python C:/Tools/model-proctor/runner.py verify --workspace <w> --task task.json`. The runner
+   rejects verification if any verification-affecting file (conftest.py, pytest.ini,
+   pyproject.toml, *.pth, ...) appeared or changed since init, if the task file's verifier
+   diverges from the pin (`verifier_changed_since_init`), or if a workspace file shadows a
+   module the verifier imports via `-m` (`module_shadow_detected` — the workspace is
+   `sys.path[0]`, so a dropped `unittest.py` would otherwise swallow the run). Then it runs
+   the verifier itself. Never trust worker-reported results.
+6. **Accept**: `python C:/Tools/model-proctor/runner.py accept --workspace <w> --task task.json`. A green
+   receipt stales automatically on any tree mutation — re-verify after every change.
+   Accept also refuses when the receipt carries `tamper_detected` (a sealed verification
+   input was altered and the runner restored it) and when any dispatch happened after the
+   receipt was written. Both clear by re-running `verify` — never by re-running `accept`.
+7. **Record**: `python C:/Tools/model-proctor/runner.py record --workspace <w> --task task.json [--wire
+   <wire.jsonl> --pricing C:/Tools/model-proctor/pricing.yaml]` — appends the append-only task
+   record. Use the **installed** pricing table, not a relative `evals/` path. Malformed or
+   missing usage meters as **unknown, never $0** (`usage_unknown` on the row).
+
+## Lane table (retired from the live path per #96 — kept for the record)
+
+One fixed worker wins (STOP, twice confirmed: #30, #91). For subagent work,
+pick the model directly via `--model` (see "Start a subagent" above). The
+runner's lane field still routes the gated path's dispatch to a roster agent;
+the table below is the frozen experiment record, not live routing policy.
 
 | Task shape | Lane |
 |---|---|

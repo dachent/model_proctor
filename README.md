@@ -91,20 +91,39 @@ python scripts/install.py
 ```
 
 This installs the `model-proctor` skill to `%USERPROFILE%\.kimi-code\skills\`
-and the runner + delegate + agent roster to `C:\Tools\model-proctor\`. If `agents.json` is missing,
+and the runner + delegate + catalog + agent roster to `C:\Tools\model-proctor\`. If `agents.json` is missing,
 regenerate it first from `harnesses/kimi-code/delegate/agents.example.json` (see `harnesses/kimi-code/delegate/README.md`).
 
-### Triggering the proctor
+### Start a subagent with a model (#96 — the default path)
+
+```bash
+python C:/Tools/model-proctor/catalog.py                # live models + prices
+python C:/Tools/model-proctor/delegate.py \
+    --model fireworks/glm-5p3-flash \
+    --workspace <ws> \
+    --task-file <path>          # or --task "<text>"; --write to grant write
+```
+
+The model id is validated against kimi's **live** config at dispatch time —
+rotated ids refuse loudly with same-family alternatives. Read-only by
+default; `--write` is explicit and model-mode-only. `--resume-from
+<session_id>` continues a child session. Every child carries the injected
+`PROCTOR_CHILD` marker; a nested delegate refuses `--model`/`--write`.
+Production-pattern tasks (`run_week.ps1`, `src.run_all`, ...) are refused
+here — they belong on the gated runner path below. Unpriced models meter as
+**unknown, never $0**.
+
+### Triggering the proctor (the gated path)
 
 Skills load at **session start**, so open a new Kimi Code session after installing. Then:
 
 - **Implicit:** give the session a substantial coding task (multi-file, unfamiliar code, anything
   past one edit-test cycle). The `model-proctor` skill fires on its own description; trivial tasks
   are deliberately executed directly.
-- **Explicit:** *"Use the model-proctor skill: classify this task, dispatch it through the runner,
-  and accept only on a fresh tree-bound receipt."*
+- **Explicit:** *"Use the model-proctor skill: run this through the gated path — init, dispatch,
+  verify, and accept only on a fresh tree-bound receipt."*
 
-The skill then drives the loop: `lane → init → dispatch → verify → accept → record`, with the
+The skill then drives the loop: `init → dispatch → verify → accept → record`, with the
 runner — not the model — owning state, verification, budgets, and receipts.
 
 ### Direct CLI use (no skill)
@@ -114,7 +133,6 @@ runner — not the model — owning state, verification, budgets, and receipts.
 #             "features": {"bounded": true, "known_location": true, "objective_acceptance": true},
 #             "scope": ["math_utils.py"], "verifier": {"argv": ["{python}", "check.py"]},
 #             "seal": ["check.py"]}
-python C:/Tools/model-proctor/runner.py lane     --task task.json
 python C:/Tools/model-proctor/runner.py init     --workspace <ws> --task task.json
 python C:/Tools/model-proctor/runner.py dispatch --workspace <ws> --task task.json
 python C:/Tools/model-proctor/runner.py verify   --workspace <ws> --task task.json

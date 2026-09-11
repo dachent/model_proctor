@@ -8,6 +8,26 @@
   "max_stdout_bytes": 65536,
   "max_stderr_bytes": 65536,
   "max_log_bytes": 67108864,
+  "model_dispatch_template": {
+    "command": [
+      "C:/absolute/path/to/kimi.exe",
+      "-m",
+      "{model}",
+      "-p"
+    ],
+    "prompt_delivery": "argument",
+    "resume_args": ["-r", "{session_id}"],
+    "default_timeout": 1800,
+    "minimum_timeout": 60,
+    "maximum_timeout": 3600,
+    "environment_allowlist": [
+      "HOME"
+    ],
+    "environment": {},
+    "required_environment": [],
+    "write_allowed": false,
+    "allow_breakaway": false
+  },
   "agents": {
     "example-coder": {
       "command": [
