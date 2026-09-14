@@ -351,7 +351,7 @@ def run_delegate(args: argparse.Namespace, *, catalog_payload: Optional[Mapping[
             result = _app_server(args.codex_executable, selection, task, workspace, sandbox, resume, catalog_events, popen_factory, child_env)
         else:
             raise ValueError("transport must be cli or app-server")
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
         return _result("operational_failure", model=selection.model, effort=selection.effort,
                        transport=args.transport, sandbox=sandbox, error=str(exc)), EXIT_OPERATIONAL
     if result["nested_dispatch_detected"]:

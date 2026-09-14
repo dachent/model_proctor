@@ -6,7 +6,9 @@ import os
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 _DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_DIR))
@@ -38,6 +40,21 @@ class FakeProcess:
     def wait(self, *args, **kwargs):
         self.wait_calls += 1
         return 0
+
+
+class UnreapableProcess(FakeProcess):
+    def __init__(self):
+        super().__init__([{"type": "turn.completed", "turn_id": "t1"}])
+        self.returncode = None
+        self.wait_timeouts = []
+        self.kill_calls = 0
+
+    def wait(self, timeout=None):
+        self.wait_timeouts.append(timeout)
+        raise delegate.subprocess.TimeoutExpired("fake-codex", timeout)
+
+    def kill(self):
+        self.kill_calls += 1
 
 
 class DelegateTransportContract(unittest.TestCase):
@@ -120,6 +137,39 @@ class DelegateTransportContract(unittest.TestCase):
                                                      popen_factory=self.fake([lines]), environ={})
                 self.assertEqual(code, delegate.EXIT_OPERATIONAL); self.assertEqual(len(self.calls), before + 1)
                 self.assertEqual(result["status"], "operational_failure")
+
+    def test_post_kill_timeout_returns_operational_envelope_with_selected_binding(self):
+        proc = UnreapableProcess()
+        result, code = delegate.run_delegate(
+            self.args(write=True, effort="low"), catalog_payload=CATALOG,
+            popen_factory=lambda *args, **kwargs: proc, environ={})
+        self.assertEqual(code, delegate.EXIT_OPERATIONAL)
+        self.assertEqual({key: result[key] for key in (
+            "schema_version", "status", "model", "effort", "transport", "sandbox", "usage")},
+            {"schema_version": 1, "status": "operational_failure", "model": "gpt-test",
+             "effort": "low", "transport": "cli", "sandbox": "workspace-write", "usage": "unknown"})
+        self.assertTrue(result["error"])
+        self.assertEqual(proc.wait_timeouts, [1, 1])
+        self.assertEqual(proc.kill_calls, 1)
+
+    def test_main_emits_one_bound_envelope_after_post_kill_timeout(self):
+        proc = UnreapableProcess()
+        run_delegate = delegate.run_delegate
+        output = io.StringIO()
+        argv = ["delegate", "--model", "gpt-test", "--transport", "cli",
+                "--task-file", str(self.task), "--workspace", str(self.workspace)]
+        with patch.object(sys, "argv", argv), patch.object(
+                delegate, "run_delegate", side_effect=lambda args: run_delegate(
+                    args, catalog_payload=CATALOG, popen_factory=lambda *args, **kwargs: proc,
+                    environ={})), redirect_stdout(output), self.assertRaises(SystemExit) as exit_result:
+            delegate.main()
+        self.assertEqual(exit_result.exception.code, delegate.EXIT_OPERATIONAL)
+        result = json.loads(output.getvalue())
+        self.assertEqual((result["status"], result["model"], result["effort"],
+                          result["transport"], result["sandbox"]),
+                         ("operational_failure", "gpt-test", "medium", "cli", "read-only"))
+        self.assertEqual(proc.wait_timeouts, [1, 1])
+        self.assertEqual(proc.kill_calls, 1)
 
     def test_child_marker_and_nested_event_refuse(self):
         result, code = delegate.run_delegate(self.args(), catalog_payload=CATALOG,
