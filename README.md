@@ -78,7 +78,14 @@ error the M4-early comparison made by not interleaving.
 **Why failure compounds.** For bare dispatch, whole-task success is `q^X`: at q = 0.90, a
 27-unit task succeeds barely 6% of the time, because one wrong unit can invalidate
 everything downstream of it. This is why long tasks and short tasks live in different
-regimes, and why a corpus of single-unit tasks cannot see the difference.
+regimes, and why a corpus of single-unit tasks cannot see the difference. **And `q^X` is
+the optimistic bound**: it assumes unit failures are independent, but in real agentic work
+they *correlate* — one misunderstood requirement poisons every unit downstream of it, so
+the true whole-task success is worse than the formula says. Correlation cuts both ways in
+the two frames: it makes bare dispatch *more* dangerous than the threshold table implies,
+and it makes the gate *more* valuable than the savings table implies — the gate catches
+the first wrong unit and stops the cascade, which is exactly the failure mode independent
+failure math cannot price.
 
 **How q gets measured on real work — the ledger is the instrument.** Every gated run
 already records what a q sample needs: the task record (`tasks.jsonl`) carries dispatch
