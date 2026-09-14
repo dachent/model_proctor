@@ -33,6 +33,27 @@ INSTALL_PY = ROOT / "scripts" / "install.py"
 _IS_WINDOWS = sys.platform == "win32"
 
 
+def _running_elevated():
+    """True when the process token carries an enabled Administrators group.
+
+    GitHub windows runners execute steps elevated, where the hardening's
+    `Administrators:F` ACE legitimately grants write — the non-writability
+    assertions below are about the NON-elevated worker threat model (a
+    worker process must not rewrite the roster it is judged by) and cannot
+    be asserted from an elevated token. Observed on CI run 34893389742.
+    """
+    if not _IS_WINDOWS:
+        return False
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+_ELEVATED = _running_elevated()
+
+
 def load_install():
     spec = importlib.util.spec_from_file_location("_install_acl_under_test",
                                                   INSTALL_PY)
@@ -85,6 +106,10 @@ class ExplicitAceTest(unittest.TestCase):
                       "load its own config")
 
     def test_not_writable(self):
+        if _ELEVATED:
+            self.skipTest("elevated context: Administrators:F grants write "
+                          "by design; this assertion is about the "
+                          "non-elevated worker threat model")
         list(self.m.harden_acl(self.f, self.principal))
         with self.assertRaises(PermissionError,
                                msg="roster writable — hardening ineffective"):
