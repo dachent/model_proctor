@@ -13,31 +13,71 @@ frozen research **pattern** documented here; `harnesses/kimi-code/runner/` is th
 
 ---
 
-## Status update (2026-09-09): one thin gate wins — converting to catalog-dispatched subagents
+## Status update (2026-09-09, corrected 2026-09-10): the gated path stays — flash-first with evidence-driven escalation
 
 The full record is [`policy/FINDINGS-2026-09-09.md`](policy/FINDINGS-2026-09-09.md); the
 conversion is tracked in [#96](../../issues/96). The short version:
 
 | Value pillar | Verdict (measured) |
 |---|---|
-| Routing by task shape | **Zero** — STOP fired twice (#30, #91) |
-| Dispatch-wrapper economics | **Negative ~12–16%** — delegate-only beat the full runner flow on cost, quality and wall time (sealed M4-early comparison) |
-| Trust boundary (receipts, seals, identity) | **Standing** — and repaired 2026-09-09: A03/A04/A12/A13 (runner), A07/A09 (ZCode) closed with regression evidence |
+| Routing by task shape | **Zero on the measured corpus** (STOP fired twice, #30/#91 — bounded ~30s tasks, quality-tied tiers); **long-task economics favor cheap-first + escalation** beyond the break-even size (see below) |
+| Dispatch-wrapper economics | **Flat** — the M4-early −16% was a run-order artifact (E-mech, p=0.89); the converted path is TOST-equivalent to plain (E-ship) |
+| Trust boundary (receipts, seals, identity) | **Standing** — and repaired 2026-09-09/10: A03/A04/A07/A09/A12/A13 closed with regression evidence |
 | Accounting truthfulness | **Standing** — Flash/Fast pricing corrected (PR #87), unknown usage never $0 (PR #94) |
 | Leader-context protection | **Unmeasured** — the one economic experiment still unopened |
 
-Decision: **the lane table, task features, stagnation ladders and tier gates retire from
-the live path.** The tool becomes "start a subagent with model [x]" for kimi-code-cli and
-ZCode, [x] any model in the harness catalog — thin dispatch (delegate transport + wire
-metering, read-only by default, live-catalog validation that refuses rotated ids loudly)
-with the runner's verify/accept/identity gate kept for production certification. Blocking
-acceptance criterion: an interleaved plain-vs-model-mode neutrality batch, which also
-closes the open token-delta investigation.
+Decision (2026-09-10, owner): **the gated path is the default for substantial work** —
+flash (`glm-5p3-flash`) first, escalating to `glm-5p3` then `kimi-k3` on recorded
+stagnation. The STOP rulings were correct for the corpus they measured and do not govern
+long agentic work (see the break-even below). The conversion's surviving deliverables are
+the **catalog** (`delegate.py --model <id>`, live-validated; `catalog.py`) for consults
+and one-shots, the defect fixes, and truthful metering — with the runner's lane table,
+stagnation switching, budgets and gates **retained as live policy**.
+
+## The routing break-even: when does cheap-first-with-escalation pay?
+
+This is the calculation that governs the whole routing question, and the benchmark corpus
+could never see it because every task was one unit long. Decompose a task's model spend:
+
+- **a** — planning (strong-model planning; a wash when the leader plans either way)
+- **b·X** — execution (X units at the cheap rate `b`)
+- **c** — switching + validation (≈ **$0** here: fingerprints, verifier runs and gates are
+  deterministic code, not model calls; E-ship measured the whole dispatch path cost-flat)
+
+Compare against a single strong model at rate `s` executing the whole task:
+
+- **vs fixed-strong:** break-even `X* = (a + c)/(s − b)`. With `c ≈ 0` and the measured
+  price ratio `b/s` ≈ **0.06** (glm-5p3-flash $0.009 vs kimi-k3 $0.153 per unit), **X\* =
+  0** — cheap-first + escalation is cheaper from the first unit, at any task size, for
+  any fraction of the work that runs on the cheap tier. Even with failures escalating to
+  the strong rate, the repair-adjusted cheap rate stays below `s` for any per-unit failure
+  rate under 100%.
+- **vs fixed-cheap (STOP's winner — the real contest):** with per-unit success `q` and
+  whole-task redo on escalation, escalation beats fixed-cheap once flash's whole-task
+  success probability drops below the price ratio: **X\* = ln(b/s) / ln(q)**.
+
+| per-unit success q | X\* (units) | ~tokens | ~continuous wall |
+|---|---:|---:|---:|
+| 0.967 (v3-measured, per-task) | ~83 | ~10.8M | ~49 min |
+| 0.95 | ~55 | ~7.1M | ~32 min |
+| 0.90 | ~27 | ~3.5M | ~16 min |
+| 0.80 | ~13 | ~1.6M | ~7 min |
+
+A "unit" is one benchmark-scale sub-task (~130k tokens, ~$0.009 on flash). The caveats,
+honestly: `q` on long agentic work is **unmeasured** (the v3 29/30 is per-task on bounded
+fixtures — the entire open question); whole-task redo is pessimistic for routing
+(escalating only the remaining units lowers X\*); rescue-by-strong succeeding where cheap
+failed is assumed; screens, not decision-grade (#16).
+
+**The point:** the benchmark corpus (single-unit, quality-tied) sits entirely below every
+row of that table — STOP was the correct ruling for it and says nothing about tasks beyond
+X\*. The architecture that captures the region above the threshold is flash-first +
+verification gates + stagnation escalation, which is exactly the runner's gated path.
 
 ## What this repo is
 
 - `harnesses/kimi-code/runner/` — **the live control plane** (`runner.py`): task intake with observable features, a
-  frozen lane table (retiring from the live path per #96 — see the status update above), worker dispatch through the delegate wrapper, leader-executed verification,
+  lane table (flash-first with evidence-driven escalation — see the routing break-even above), worker dispatch through the delegate wrapper, leader-executed verification,
   tree-bound acceptance receipts (stale on any post-verify mutation), a sealed verification
   surface (payloads copied out of the agent-writable workspace at init; tampered inputs are
   restored and flagged at verify time), stagnation detection with failure-class switching, and an
