@@ -1,0 +1,136 @@
+"""Deterministic contract tests for the bounded Codex transport adapter."""
+import argparse
+import io
+import json
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_DIR))
+
+import delegate  # noqa: E402
+
+
+CATALOG = {"data": [{"id": "gpt-test", "defaultReasoningEffort": "medium",
+                      "supportedReasoningEfforts": [
+                          {"reasoningEffort": "low"}, {"reasoningEffort": "medium"}]}]}
+
+
+class FakeProcess:
+    def __init__(self, lines):
+        self.stdin = io.BytesIO()
+        self.stdout = io.BytesIO("".join(json.dumps(x) + "\n" for x in lines).encode())
+        self.stderr = io.BytesIO()
+        self.returncode = 0
+    def wait(self): return 0
+
+
+class DelegateTransportContract(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.workspace = self.root / "workspace"; self.workspace.mkdir()
+        self.task = self.root / "task.txt"; self.task.write_text("inspect only", encoding="utf-8")
+        self.calls = []; self.processes = []
+
+    def tearDown(self): self.tmp.cleanup()
+
+    def args(self, **overrides):
+        values = dict(model="gpt-test", preset=None, transport="cli", task_file=str(self.task),
+                      workspace=str(self.workspace), write=False, effort=None,
+                      codex_executable="fake-codex", config=None, resume_identity=None)
+        values.update(overrides)
+        return argparse.Namespace(**values)
+
+    def fake(self, streams):
+        def popen(argv, **kwargs):
+            self.calls.append((argv, kwargs))
+            proc = FakeProcess(streams.pop(0)); self.processes.append(proc)
+            return proc
+        return popen
+
+    def test_cli_argv_and_stdin_are_exact_for_read_only_and_write(self):
+        for write, sandbox in ((False, "read-only"), (True, "workspace-write")):
+            with self.subTest(write=write):
+                streams = [[{"type": "thread.started", "thread_id": "s1"},
+                            {"type": "turn.completed", "turn_id": "t1"}]]
+                result, code = delegate.run_delegate(self.args(write=write), catalog_payload=CATALOG,
+                                                     popen_factory=self.fake(streams), environ={})
+                self.assertEqual(code, 0); self.assertEqual(result["sandbox"], sandbox)
+                argv, kwargs = self.calls[-1]
+                self.assertEqual(argv, ["fake-codex", "exec", "-m", "gpt-test", "-c",
+                                        "model_reasoning_effort=medium", "-s", sandbox, "-C",
+                                        str(self.workspace.resolve()), "--json", "-"])
+                self.assertNotIn("--worktree", argv); self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", argv)
+                self.assertEqual(kwargs["input"], b"inspect only")
+
+    def test_app_server_lifecycle_uses_actual_sandbox_and_policy(self):
+        streams = [[{"id": 1, "result": {}}, {"id": 2, "result": CATALOG}], [
+            {"id": 1, "result": {}}, {"id": 2, "result": CATALOG},
+            {"id": 3, "result": {"thread": {"id": "th1"}}},
+            {"id": 4, "result": {"turn": {"id": "tu1"}}},
+            {"method": "turn/updated", "params": {"turn": {"id": "tu1", "status": "completed"}}},
+        ]]
+        result, code = delegate.run_delegate(self.args(transport="app-server", write=True),
+                                             popen_factory=self.fake(streams), environ={})
+        self.assertEqual(code, 0); self.assertEqual(result["thread_id"], "th1")
+        argv, kwargs = self.calls[1]; self.assertEqual(argv, ["fake-codex", "app-server", "--stdio"])
+        sent = [json.loads(line) for line in self.processes[1].stdin.getvalue().decode().splitlines()]
+        self.assertEqual([x.get("method") for x in sent], ["initialize", "initialized", "model/list", "thread/start", "turn/start"])
+        self.assertEqual(sent[3]["params"]["sandbox"], "workspace-write")
+        self.assertEqual(sent[4]["params"]["sandboxPolicy"], {"type": "workspaceWrite", "networkAccess": False})
+        self.assertEqual(sent[4]["params"]["input"], [{"type": "text", "text": "inspect only"}])
+
+    def test_invalid_catalog_selection_refuses_without_launch(self):
+        for args in (self.args(model="unknown"), self.args(effort="ultra"), self.args(model=None, preset="missing")):
+            with self.subTest(args=args):
+                result, code = delegate.run_delegate(args, catalog_payload=CATALOG,
+                                                     popen_factory=self.fake([]), environ={})
+                self.assertEqual(code, delegate.EXIT_INVALID); self.assertEqual(self.calls, [])
+                self.assertEqual(result["status"], "invalid")
+
+    def test_transport_errors_and_missing_terminal_do_not_fallback(self):
+        for lines in ([["not-json"], [{"type": "thread.started", "thread_id": "s1"}]]):
+            with self.subTest(lines=lines):
+                before = len(self.calls)
+                result, code = delegate.run_delegate(self.args(), catalog_payload=CATALOG,
+                                                     popen_factory=self.fake([lines]), environ={})
+                self.assertEqual(code, delegate.EXIT_OPERATIONAL); self.assertEqual(len(self.calls), before + 1)
+                self.assertEqual(result["status"], "operational_failure")
+
+    def test_child_marker_and_nested_event_refuse(self):
+        result, code = delegate.run_delegate(self.args(), catalog_payload=CATALOG,
+                                             popen_factory=self.fake([]), environ={"PROCTOR_CHILD": "1"})
+        self.assertEqual(code, delegate.EXIT_INVALID); self.assertEqual(self.calls, [])
+        streams = [[{"type": "turn.completed", "collabAgentToolCall": {}}]]
+        result, code = delegate.run_delegate(self.args(), catalog_payload=CATALOG,
+                                             popen_factory=self.fake(streams), environ={})
+        self.assertEqual(code, delegate.EXIT_OPERATIONAL); self.assertTrue(result["nested_dispatch_detected"])
+        self.assertEqual(result["status"], "refused")
+
+    def test_resume_requires_bound_identity_and_reapplies_same_transport(self):
+        identity = json.dumps({"transport": "cli", "model": "gpt-test", "effort": "medium",
+                               "sandbox": "read-only", "session_id": "session-7"})
+        streams = [[{"type": "turn.completed", "session_id": "session-7"}]]
+        result, code = delegate.run_delegate(self.args(resume_identity=identity), catalog_payload=CATALOG,
+                                             popen_factory=self.fake(streams), environ={})
+        self.assertEqual(code, 0); self.assertEqual(self.calls[0][0][:4], ["fake-codex", "exec", "resume", "session-7"])
+        bad = identity.replace("read-only", "workspace-write")
+        result, code = delegate.run_delegate(self.args(resume_identity=bad), catalog_payload=CATALOG,
+                                             popen_factory=self.fake([]), environ={})
+        self.assertEqual(code, delegate.EXIT_INVALID); self.assertEqual(len(self.calls), 1)
+
+    def test_envelope_has_evidence_ids_and_never_cost_or_kimi_claim(self):
+        streams = [[{"type": "thread.started", "thread_id": "s1"}, {"type": "turn.completed", "turn_id": "t1"}]]
+        result, code = delegate.run_delegate(self.args(), catalog_payload=CATALOG,
+                                             popen_factory=self.fake(streams), environ={})
+        self.assertEqual(code, 0); self.assertEqual(result["usage"], "unknown")
+        self.assertEqual((result["session_id"], result["turn_id"]), ("s1", "t1"))
+        self.assertTrue(result["terminal_evidence"])
+        self.assertNotIn("cost", result); self.assertNotIn("kimi_acceptance", result)
+
+
+if __name__ == "__main__": unittest.main()
