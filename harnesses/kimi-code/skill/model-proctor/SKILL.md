@@ -1,37 +1,20 @@
 ---
 name: model-proctor
-description: Task-owning worker policy with deterministic acceptance (model_proctor) — classify a task into a frozen lane (Flash bounded / GLM substantial / K3 marathon), dispatch through the installed runner (C:/Tools/model-proctor/runner.py), verify with tree-bound receipts, switch on stagnation rather than fixed rungs. Use for substantial coding tasks. Do NOT use for trivial tasks (known location, one edit-test cycle) — execute those directly. This is the only live/installable skill; static-cascade is preserved research only. Requires the model-proctor install (scripts/install.py).
+description: Task-owning worker policy with deterministic acceptance and evidence-driven escalation (model_proctor) — run substantial work through the gated path (runner.py init/dispatch/verify/accept; flash-first with escalation to glm-5p3 then kimi-k3 on recorded stagnation), or start a one-shot subagent with any model from the live harness catalog (delegate.py --model). Use for substantial coding tasks. Do NOT use for trivial tasks — execute those directly. Requires the model-proctor install (scripts/install.py).
 ---
 
 # Model Proctor Policy
 
 The proctor assigns the exam, watches the clock, and grades it objectively — the model never
-marks its own work. You are the leader. The deterministic control plane is the installed runner,
-`C:/Tools/model-proctor/runner.py` (repo copy: `harnesses/kimi-code/runner/runner.py`; delegate transport and the
-agent roster live alongside it at `C:/Tools/model-proctor/`). Prompts do not
-enforce; the runner enforces. Deterministic evidence outranks every model, including you.
-Governance: issues #16 (measurement-first) and #26 (vNext hypothesis); this skill implements
-only the MVP slice (#27). STOP — one fixed worker wins — remains a legitimate outcome.
+marks its own work. You are the leader. Two surfaces, one doctrine (#96, the 2026-09-09/10
+findings): **the gated path** for substantial work (`C:/Tools/model-proctor/runner.py`
+init/dispatch/verify/accept — flash-first, escalating to glm-5p3 then kimi-k3 on recorded
+stagnation), and **thin dispatch** for consults and one-shots
+(`C:/Tools/model-proctor/delegate.py --model <id>`). Prompts do not enforce; the tools
+enforce. Deterministic evidence outranks every model, including you. Governance: #16, #91,
+#96.
 
-## Entry gate
-
-Use the runner only for substantial tasks (unfamiliar code, multi-file, or estimated
-≥ ~3 turns). Trivial work: do it yourself. Never spend a worker dispatch on a task you can
-complete in one edit-test cycle.
-
-## Lane table (frozen for the experiment — no per-run relabeling)
-
-| Task shape | Lane |
-|---|---|
-| localized + bounded + known location + objective acceptance | `flash` |
-| multi-module / unfamiliar repo / substantial refactor | `glm` |
-| open-ended exploration, research engineering, marathon | `k3` |
-| no bounded signature, substantial | `glm` (default) |
-
-Decomposition itself is the hard problem? Optionally consult K3 for a task breakdown first —
-that is a planning consult, not a mandatory planner tax.
-
-## Flow (one task-scoped worker session per task)
+## The gated path (substantial work — the default)
 
 Runner state, receipts, and sealed verifier payloads live OUTSIDE the workspace
 (`.runner-state/` sibling) — the worker cannot rewrite its own evidence. At verify time the
@@ -63,20 +46,62 @@ runner restores any tampered verification input from the sealed copy and flags i
    receipt was written. Both clear by re-running `verify` — never by re-running `accept`.
 7. **Record**: `python C:/Tools/model-proctor/runner.py record --workspace <w> --task task.json [--wire
    <wire.jsonl> --pricing C:/Tools/model-proctor/pricing.yaml]` — appends the append-only task
-   record. Use the **installed** pricing table, not a relative `evals/` path: the relative form
-   resolves only when you happen to be sitting in the repo root, and a missing pricing file drops
-   cost accounting silently rather than failing loudly.
+   record. Use the **installed** pricing table, not a relative `evals/` path. Malformed or
+   missing usage meters as **unknown, never $0** (`usage_unknown` on the row).
 
 The receipt records the tree signature, the dispatch count it was written at (`dispatch_seq`), and
 the `verifier_argv` that produced it — so a green receipt states *what* was verified, not merely
-that something was.
+that something was. It also carries `baseline_tree` and `verifier_nondiscriminating`; when
+`dispatch_seq == 0` and `verifier_nondiscriminating == true`, `accept` refuses by default —
+`--allow-zero-dispatch` is the reviewed, counted exception.
 
-It also carries `baseline_tree` (the tree had not moved since init when this verifier ran) and
-`verifier_nondiscriminating` (it *passed* on that unmodified tree). When `dispatch_seq == 0` and
-`verifier_nondiscriminating == true`, `accept` refuses by default because the receipt carries no
-worker evidence and cannot distinguish done from undone. Some tasks legitimately pass at init —
-"add a test that…" — so a reviewed exception is available via `--allow-zero-dispatch`; the runner
-counts that override in state rather than accepting silently.
+## Lane table (live routing policy — flash-first with evidence-driven escalation)
+
+Bounded/spec-complete tasks start on `flash` (glm-5p3-flash, the cheapest measured arm:
+$0.0096/hidden-pass, #91). The escalation ladder is **evidence-driven, not start-time
+guesswork** — a lane changes only on recorded stagnation (see Failure classes below).
+
+| Task shape | Lane |
+|---|---|
+| localized + bounded + known location + objective acceptance | `flash` |
+| multi-module / unfamiliar repo / substantial refactor | `glm` |
+| open-ended exploration, research engineering, marathon | `k3` |
+| no bounded signature, substantial | `glm` (default) |
+
+Why flash-first is right even though benchmarks showed "one fixed worker wins": the STOP
+rulings were measured on ~30-second bounded tasks where every tier was quality-tied — the
+regime where routing cannot help by construction. On substantial work the comparison that
+matters is **quality-matched** (keep strong-tier completion, reduce cost): flash-first
+plus gates plus escalation is cheaper than fixed-strong at ANY task size (8x vs glm-5p3,
+17x vs kimi-k3; savings ≈ q − b/s of the comparator's cost — 78–91% at benchmark
+reliability), because the gate guarantees whatever flash cannot do gets redone at the
+strong tier. See README "The routing break-even". Escalation is what earns its keep.
+
+Decomposition itself is the hard problem? Optionally consult K3 for a task breakdown first —
+that is a planning consult, not a mandatory planner tax.
+
+## Start a subagent with a model (consults and one-shots)
+
+```bash
+python C:/Tools/model-proctor/catalog.py                  # what's live + what it costs
+python C:/Tools/model-proctor/delegate.py \
+    --model fireworks/glm-5p3-flash \
+    --workspace <ws> \
+    --task "<task text>"          # or --task-file <path> (preferred: no
+                                  # control-plane files in the worker's tree)
+```
+
+- The model id is validated against **kimi's live config** at dispatch time;
+  rotated ids refuse loudly with same-family alternatives listed. Config
+  presence ≠ serving — a listed id can still 404 at the provider; that
+  surfaces as a provider failure in the envelope.
+- Read-only by default; `--write` is explicit (and model-mode only).
+- `--resume-from <session_id>` continues a child session (the template's
+  resume_args).
+- Every child carries `PROCTOR_CHILD=1` (injected); a nested delegate refuses
+  `--model`/`--write` spawns — no unmanaged nesting.
+- Production-pattern tasks (`run_week.ps1`, `src.run_all`, ...) are REFUSED
+  in model-mode; they belong on the gated runner path above.
 
 ## Production tasks
 

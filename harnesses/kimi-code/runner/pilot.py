@@ -251,7 +251,7 @@ def sweep_orphan_homes(max_age_s=3600):
 
 
 def run_case(case, out_root, dry_run, lane_override=None, max_dispatches=None,
-             rep=None, keep_homes=False, agent_map=None):
+             rep=None, keep_homes=False, agent_map=None, task_outside_ws=False):
     ws = out_root / case["id"]
     if lane_override:
         ws = ws / lane_override
@@ -278,7 +278,16 @@ def run_case(case, out_root, dry_run, lane_override=None, max_dispatches=None,
     }
     if lane_override:
         task["lane"] = lane_override
-    task_path = ws / "task.json"
+    # E-mech (#96 Phase 3, PREREG-model-mode): the default (False) preserves
+    # the historical behavior — task.json IN the worker's tree. True
+    # relocates it to the state root's parent, so the worker never sees a
+    # control-plane file. Single-variable A/B; sealed with the prereg.
+    if task_outside_ws:
+        state_root = ws.parent.parent / "mech-state" / f"{ws.name}-rep{rep or 0}"
+        state_root.mkdir(parents=True, exist_ok=True)
+        task_path = state_root / "task.json"
+    else:
+        task_path = ws / "task.json"
     task_path.write_text(json.dumps(task, indent=2), encoding="utf-8")
 
     if dry_run:
@@ -413,6 +422,11 @@ def main():
     parser.add_argument("--assert", dest="do_assert", action="store_true",
                         help="check the kimi-integration contracts on each row "
                              "and exit nonzero if any broke (release gate)")
+    parser.add_argument("--task-outside-ws", action="store_true",
+                        help="E-mech (#96): relocate task.json to the state "
+                             "root's parent instead of the worker's tree; "
+                             "single-variable A/B, sealed with "
+                             "PREREG-model-mode")
     args = parser.parse_args()
 
     cases = {c["id"]: c for c in json.loads(CASES.read_text(encoding="utf-8"))}
@@ -439,7 +453,8 @@ def main():
                          max_dispatches=args.max_dispatches,
                          rep=rep if args.reps > 1 else None,
                          keep_homes=args.keep_kimi_home,
-                         agent_map=args.agent_map)
+                         agent_map=args.agent_map,
+                         task_outside_ws=args.task_outside_ws)
             s["arm"] = args.arm_name or args.lane or "routed"
             summaries.append(s)
             print(json.dumps(s, sort_keys=True), flush=True)

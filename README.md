@@ -13,31 +13,159 @@ frozen research **pattern** documented here; `harnesses/kimi-code/runner/` is th
 
 ---
 
-## Status update (2026-09-09): one thin gate wins — converting to catalog-dispatched subagents
+## Status update (2026-09-09, corrected 2026-09-10): the gated path stays — flash-first with evidence-driven escalation
 
 The full record is [`policy/FINDINGS-2026-09-09.md`](policy/FINDINGS-2026-09-09.md); the
 conversion is tracked in [#96](../../issues/96). The short version:
 
 | Value pillar | Verdict (measured) |
 |---|---|
-| Routing by task shape | **Zero** — STOP fired twice (#30, #91) |
-| Dispatch-wrapper economics | **Negative ~12–16%** — delegate-only beat the full runner flow on cost, quality and wall time (sealed M4-early comparison) |
-| Trust boundary (receipts, seals, identity) | **Standing** — and repaired 2026-09-09: A03/A04/A12/A13 (runner), A07/A09 (ZCode) closed with regression evidence |
+| Routing by task shape | **Zero on the measured corpus** (STOP fired twice, #30/#91 — bounded ~30s tasks, quality-tied tiers); **long-task economics favor cheap-first + escalation** beyond the break-even size (see below) |
+| Dispatch-wrapper economics | **Flat** — the M4-early −16% was a run-order artifact (E-mech, p=0.89); the converted path is TOST-equivalent to plain (E-ship) |
+| Trust boundary (receipts, seals, identity) | **Standing** — and repaired 2026-09-09/10: A03/A04/A07/A09/A12/A13 closed with regression evidence |
 | Accounting truthfulness | **Standing** — Flash/Fast pricing corrected (PR #87), unknown usage never $0 (PR #94) |
 | Leader-context protection | **Unmeasured** — the one economic experiment still unopened |
 
-Decision: **the lane table, task features, stagnation ladders and tier gates retire from
-the live path.** The tool becomes "start a subagent with model [x]" for kimi-code-cli and
-ZCode, [x] any model in the harness catalog — thin dispatch (delegate transport + wire
-metering, read-only by default, live-catalog validation that refuses rotated ids loudly)
-with the runner's verify/accept/identity gate kept for production certification. Blocking
-acceptance criterion: an interleaved plain-vs-model-mode neutrality batch, which also
-closes the open token-delta investigation.
+Decision (2026-09-10, owner): **the gated path is the default for substantial work** —
+flash (`glm-5p3-flash`) first, escalating to `glm-5p3` then `kimi-k3` on recorded
+stagnation. The STOP rulings were correct for the corpus they measured and do not govern
+long agentic work (see the break-even below). The conversion's surviving deliverables are
+the **catalog** (`delegate.py --model <id>`, live-validated; `catalog.py`) for consults
+and one-shots, the defect fixes, and truthful metering — with the runner's lane table,
+stagnation switching, budgets and gates **retained as live policy**.
+
+## The routing break-even: when does cheap-first-with-escalation pay?
+
+This is the calculation that governs the whole routing question, and the benchmark corpus
+could never see it because every task was one unit long. Decompose a task's model spend:
+
+- **a** — planning (strong-model planning; a wash when the leader plans either way)
+- **b·X** — execution (X units at the cheap rate `b`)
+- **c** — switching + validation (≈ **$0** here: fingerprints, verifier runs and gates are
+  deterministic code, not model calls; E-ship measured the whole dispatch path cost-flat)
+
+### Per-unit success (q) — the one number everything hinges on
+
+**q is the probability that the cheap tier completes one unit of work correctly on the
+first pass: dispatched once, verified green, no repair dispatch, no escalation, no
+stagnation.** It is the quantity that converts the break-even arithmetic from structural
+to empirical, and it plays two different roles depending on the question:
+
+- **Quality-matched frame (substantial work):** q sets the *magnitude* of the savings —
+  `savings(q) = q − b/s` of the strong comparator's cost. You win at almost any q; better
+  q means more money kept.
+- **Bare-dispatch frame (consults/one-shots):** q sets the *threshold* at which ungated
+  dispatch stops being safe — whole-task success is `q^X`, and escalation beats bare
+  dispatch once that compounded probability drops below the price ratio
+  (`X* = ln(b/s)/ln(q)`).
+
+**What a unit is.** The calibration point is the v3 corpus, where one task = one unit:
+~130k tokens, ~$0.009 at flash rates, ~30–40s of focused sub-task. On real agentic work a
+unit is whatever the gate can verify independently — a function, a module, a test-green
+milestone. The unit is the quantum of the break-even arithmetic: `b` and `s` are per-unit
+prices, `X` is the unit count, `q` is per-unit reliability.
+
+**Where the number comes from.** The only measured value is q = 0.967 — the flash arm's
+29/30 hidden-pass on the v3 corpus (#91), which is per-task on single-unit bounded
+fixtures. It is a *calibration anchor*, not a production estimate.
+
+**What q is not.** Not a model property — it is workload-class-relative (bounded
+algorithmic fixtures ≠ agentic refactors ≠ production pipelines), and it is not static:
+it drifts with model updates and roster rotations (the 2026-08-28 rotation replaced both
+tiers; #91 re-measured). Quoting one q without naming its workload class is the same
+error the M4-early comparison made by not interleaving.
+
+**Why failure compounds.** For bare dispatch, whole-task success is `q^X`: at q = 0.90, a
+27-unit task succeeds barely 6% of the time, because one wrong unit can invalidate
+everything downstream of it. This is why long tasks and short tasks live in different
+regimes, and why a corpus of single-unit tasks cannot see the difference. **And `q^X` is
+the optimistic bound**: it assumes unit failures are independent, but in real agentic work
+they *correlate* — one misunderstood requirement poisons every unit downstream of it, so
+the true whole-task success is worse than the formula says. Correlation cuts both ways in
+the two frames: it makes bare dispatch *more* dangerous than the threshold table implies,
+and it makes the gate *more* valuable than the savings table implies — the gate catches
+the first wrong unit and stops the cascade, which is exactly the failure mode independent
+failure math cannot price.
+
+**How q gets measured on real work — the ledger is the instrument.** Every gated run
+already records what a q sample needs: the task record (`tasks.jsonl`) carries dispatch
+count, first-verify outcome, failure class, and stagnation switches. **q for a real
+workload is simply the fraction of units that verify green on dispatch 1** — so every
+substantial task run through the gated path is a q measurement for free. "q is unmeasured
+on long agentic work" therefore means exactly this: no long/agentic workload has flowed
+through the ledger yet. The instrument exists; feed it.
+
+### The comparison that matters: quality-matched (keep quality, reduce cost)
+
+The cheap tier alone does not hold the required quality on substantial work — so
+fixed-cheap is not a real alternative for it. The question is what flash-first with
+verification gates and escalation **saves against a fixed strong model that completes
+everything**, with the gate guaranteeing the same end quality (whatever flash cannot do,
+the strong tier redoes). Both comparators, measured (phase3 + #91):
+
+| Comparator | Rate per unit | Price ratio b/s | Flash must first-pass |
+|---|---:|---:|---:|
+| **glm-5p3** | $0.0739 | 0.122 (8.2x) | **> 12.2%** of units |
+| **kimi-k3** | $0.153 | 0.059 (17.0x) | **> 5.9%** of units |
+
+(flash = glm-5p3-flash, b ≈ $0.009/unit, measured $0.0084–0.0093; whole-unit redo on
+escalation — the gate catching failure partway through a unit improves these further.)
+
+**Break-even task size: X\* = 0, unconditionally, against both.** With c ≈ 0 and planning
+a wash, flash-first + escalation is cheaper from the first unit at any task size, unless
+flash first-passes less than ~12% of units (vs glm-5p3) or ~6% (vs kimi-k3) — a failure
+rate no usable cheap tier approaches. **q** — flash's per-unit first-pass completion rate
+— does not determine *whether* this wins; it determines the *magnitude* of the savings:
+**savings(q) = q − b/s** of the comparator's cost:
+
+| flash first-pass q | saves vs glm-5p3 | saves vs kimi-k3 |
+|---|---:|---:|
+| 0.967 (v3-measured, per-task) | **84.5%** | **90.8%** |
+| 0.90 | 77.8% | 84.1% |
+| 0.70 | 57.8% | 64.1% |
+| 0.50 | 37.8% | 44.1% |
+| 0.30 | 17.8% | 24.1% |
+
+Even if long agentic work degrades flash's first-pass rate from the benchmark's 96.7% to
+50%, the gated path still **saves ~38–44% of the cost of the strong model that would have
+been needed anyway**. The staged ladder is the cost-optimal form: escalate flash→glm
+(8x) first, glm→k3 (16x vs flash) only when glm also stagnates.
+
+The linchpin of the quality match is **gate reliability** — a verifier that passes wrong
+work breaks the equivalence. That is exactly what the 2026-09-09/10 trust-boundary
+repairs (A03/A04/A07/A09/A12/A13, PRs #88/#93/#94/#95) buy: the frame above is only
+honest because the gate now actually refuses what it claims to refuse.
+
+### Secondary: when is bare dispatch (no gate) acceptable?
+
+For consults and one-shots — the `--model` surface — the relevant threshold is vs
+fixed-cheap: how long can flash go ungated before its compounded failure probability
+(q^X) makes the gate's insurance worth paying for? **X\* = ln(b/s) / ln(q)**: ~83 units
+at q=0.967, ~27 at q=0.90, ~13 at q=0.80 (a unit ≈ one benchmark sub-task, ~130k tokens).
+Higher q pushes this threshold *out* — reliable flash stays viable bare for longer —
+which is why that table's wall time rises with q. Below the threshold, bare `--model`
+dispatch is fine; above it, use the gated path.
+
+### Caveats, honestly
+
+`q` on long agentic work is **unmeasured** (the v3 29/30 is per-task on bounded fixtures —
+a calibration anchor, not a production estimate); rescue-by-strong succeeding where flash
+failed is assumed (measured on v3, assumed beyond); whole-unit redo is pessimistic;
+screens, not decision-grade (#16).
+
+**The point:** the benchmark corpus (single-unit, quality-tied) could never exercise this
+arithmetic — STOP was the correct ruling for it and governs only the bare-dispatch
+surface. For substantial work, the quality-matched comparison says the gated path —
+flash-first, gates, staged escalation — is cheaper at any task size, and the savings grow
+with flash's first-pass reliability. The remaining unknown is q — and the gated path
+measures it on every substantial task it runs: the ledger is the instrument, production
+work is the corpus, and a marathon-shaped eval would only be the controlled version of
+what the ledger accumulates for free.
 
 ## What this repo is
 
 - `harnesses/kimi-code/runner/` — **the live control plane** (`runner.py`): task intake with observable features, a
-  frozen lane table (retiring from the live path per #96 — see the status update above), worker dispatch through the delegate wrapper, leader-executed verification,
+  lane table (flash-first with evidence-driven escalation — see the routing break-even above), worker dispatch through the delegate wrapper, leader-executed verification,
   tree-bound acceptance receipts (stale on any post-verify mutation), a sealed verification
   surface (payloads copied out of the agent-writable workspace at init; tampered inputs are
   restored and flagged at verify time), stagnation detection with failure-class switching, and an
@@ -91,20 +219,39 @@ python scripts/install.py
 ```
 
 This installs the `model-proctor` skill to `%USERPROFILE%\.kimi-code\skills\`
-and the runner + delegate + agent roster to `C:\Tools\model-proctor\`. If `agents.json` is missing,
+and the runner + delegate + catalog + agent roster to `C:\Tools\model-proctor\`. If `agents.json` is missing,
 regenerate it first from `harnesses/kimi-code/delegate/agents.example.json` (see `harnesses/kimi-code/delegate/README.md`).
 
-### Triggering the proctor
+### Start a subagent with a model (#96 — the default path)
+
+```bash
+python C:/Tools/model-proctor/catalog.py                # live models + prices
+python C:/Tools/model-proctor/delegate.py \
+    --model fireworks/glm-5p3-flash \
+    --workspace <ws> \
+    --task-file <path>          # or --task "<text>"; --write to grant write
+```
+
+The model id is validated against kimi's **live** config at dispatch time —
+rotated ids refuse loudly with same-family alternatives. Read-only by
+default; `--write` is explicit and model-mode-only. `--resume-from
+<session_id>` continues a child session. Every child carries the injected
+`PROCTOR_CHILD` marker; a nested delegate refuses `--model`/`--write`.
+Production-pattern tasks (`run_week.ps1`, `src.run_all`, ...) are refused
+here — they belong on the gated runner path below. Unpriced models meter as
+**unknown, never $0**.
+
+### Triggering the proctor (the gated path)
 
 Skills load at **session start**, so open a new Kimi Code session after installing. Then:
 
 - **Implicit:** give the session a substantial coding task (multi-file, unfamiliar code, anything
   past one edit-test cycle). The `model-proctor` skill fires on its own description; trivial tasks
   are deliberately executed directly.
-- **Explicit:** *"Use the model-proctor skill: classify this task, dispatch it through the runner,
-  and accept only on a fresh tree-bound receipt."*
+- **Explicit:** *"Use the model-proctor skill: run this through the gated path — init, dispatch,
+  verify, and accept only on a fresh tree-bound receipt."*
 
-The skill then drives the loop: `lane → init → dispatch → verify → accept → record`, with the
+The skill then drives the loop: `init → dispatch → verify → accept → record`, with the
 runner — not the model — owning state, verification, budgets, and receipts.
 
 ### Direct CLI use (no skill)
@@ -114,7 +261,6 @@ runner — not the model — owning state, verification, budgets, and receipts.
 #             "features": {"bounded": true, "known_location": true, "objective_acceptance": true},
 #             "scope": ["math_utils.py"], "verifier": {"argv": ["{python}", "check.py"]},
 #             "seal": ["check.py"]}
-python C:/Tools/model-proctor/runner.py lane     --task task.json
 python C:/Tools/model-proctor/runner.py init     --workspace <ws> --task task.json
 python C:/Tools/model-proctor/runner.py dispatch --workspace <ws> --task task.json
 python C:/Tools/model-proctor/runner.py verify   --workspace <ws> --task task.json

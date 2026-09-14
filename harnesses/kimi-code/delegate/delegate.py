@@ -278,6 +278,95 @@ def _validate_env_name(name, agent_label):
     _check_nul(name, f"agent '{agent_label}' env name")
 
 
+# ---------------------------------------------------------------------------
+# Model-mode dispatch (#96 / TOOL-031): "start subagent with model [x]"
+# ---------------------------------------------------------------------------
+
+# Twin of runner.PRODUCTION_RUNNER_PATTERNS — keep in sync. Model-mode has
+# no task.json/scope/verifier surface, so the denylist runs over the task
+# text only; production work belongs on the runner's gated path.
+PRODUCTION_ENTRYPOINT_PATTERNS = (
+    "run_week.ps1",
+    "src.run_all",
+    "src.run_weekly",
+    "run_readiness_doctor",
+    "morning_battery",
+)
+
+_CHILD_MARKER = "PROCTOR_CHILD"
+
+
+def _harness_config_path():
+    """kimi's own config.toml — the LIVE catalog, read at dispatch time.
+
+    KIMI_CODE_HOME wins (the child home is injected separately, after this
+    read), else ~/.kimi-code. A synced or pinned copy is exactly the surface
+    that desynced on 2026-08-28 (#23), so nothing here is ever cached.
+    """
+    root = os.environ.get("KIMI_CODE_HOME") or os.path.join(
+        os.path.expanduser("~"), ".kimi-code")
+    return Path(root) / "config.toml"
+
+
+def live_harness_models():
+    """Model ids kimi currently resolves (the [models."id"] headers).
+
+    Returns (ids, note). A note (missing/unreadable config) is reported, not
+    swallowed: an unreadable catalog cannot validate anything, so callers
+    refuse with the note. Regex-scan on purpose — stdlib has no TOML parser
+    on 3.10 and only the header keys are needed; if kimi changes shape this
+    returns nothing and dispatch fails loudly rather than guessing.
+    """
+    path = _harness_config_path()
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        return set(), f"harness config unreadable: {path} ({e})"
+    ids = set()
+    for m in re.finditer(r'^\[models\."([^"]+)"\]', text, re.M):
+        ids.add(m.group(1))
+    if not ids:
+        return set(), f"no [models.*] entries found in {path}"
+    return ids, None
+
+
+def _model_family(model_id):
+    """Same-family grouping for refusal alternatives: provider + base name
+    before speed-tier suffixes (fireworks/glm-5p3-flash -> fireworks/glm-5p3)."""
+    provider, _, name = model_id.partition("/")
+    for suffix in ("-flash", "-fast", "-turbo", "-us", "-pro"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    return f"{provider}/{name}"
+
+
+def resolve_model_agent(cfg, model_id, write):
+    """Synthesize the model-mode agent entry from the hardened template.
+
+    The template lives in agents.json (ACL-hardened, worker-unwritable), so
+    only the *validated* model id is ever interpolated into a command. The
+    synthesized entry enforces the conversion's safety defaults regardless
+    of the template: allow_breakaway is forced off and write_allowed is the
+    caller's explicit --write (roster agents keep their own flag — one gate
+    per surface).
+    """
+    template = cfg.get("model_dispatch_template")
+    if not isinstance(template, dict):
+        raise ConfigError(
+            "model_dispatch_template missing from agents.json — model-mode "
+            "dispatch requires the hardened template (see agents.example.json)")
+    agent = json.loads(json.dumps(template))  # deep copy, no shared state
+    agent["command"] = [tok.replace("{model}", model_id)
+                        for tok in agent["command"]]
+    if agent.get("resume_args"):
+        agent["resume_args"] = [tok.replace("{model}", model_id)
+                                for tok in agent["resume_args"]]
+    agent["allow_breakaway"] = False
+    agent["write_allowed"] = bool(write)
+    return agent
+
+
 def load_config():
     """Load and validate agents.json. Returns the parsed config dict. Raises ConfigError on any issue."""
     path = _resolve_config_path()
@@ -343,6 +432,19 @@ def _validate_config(cfg, cfg_path):
         raise ConfigError("agents must not be empty")
     for name, agent in cfg["agents"].items():
         _validate_agent(name, agent, cfg["max_timeout_seconds"])
+    # #96: optional hardened template for model-mode dispatch.
+    if "model_dispatch_template" in cfg:
+        tpl = cfg["model_dispatch_template"]
+        _validate_agent("model_dispatch_template", tpl,
+                        cfg["max_timeout_seconds"])
+        if not any("{model}" in tok for tok in tpl["command"]):
+            raise ConfigError(
+                "model_dispatch_template.command must contain a {model} "
+                "placeholder token")
+        if tpl.get("allow_breakaway"):
+            raise ConfigError(
+                "model_dispatch_template.allow_breakaway must be false "
+                "(it is also forced off at resolve time)")
 
 
 def _validate_agent(name, agent, global_max_timeout, check_executable=False):
@@ -861,9 +963,9 @@ def run_delegate(args):
     one sanitized internal_error JSON envelope (error = class name only).
     """
     start_time = time.monotonic()
-    agent_name = args.agent
+    agent_name = args.agent or ("model:" + args.model if getattr(args, "model", None) else None)
     try:
-        return _run_delegate_inner(args, start_time, agent_name)
+        result, code = _run_delegate_inner(args, start_time, agent_name)
     except (ConfigError, InputError):
         raise  # already handled inside _run_delegate_inner
     except Exception as e:
@@ -874,10 +976,32 @@ def run_delegate(args):
             raise
         return _make_result("internal_error", agent=agent_name,
                             error=type(e).__name__), EXIT_INTERNAL
+    # #96: the envelope states what was dispatched and with what write grant.
+    if getattr(args, "model", None):
+        result["model"] = args.model
+        result["write_requested"] = bool(getattr(args, "write", False))
+    return result, code
 
 
 def _run_delegate_inner(args, start_time, agent_name):
     """Actual run logic. Raises ConfigError/InputError for validation, returns (dict, code) otherwise."""
+
+    # #96 (QC E4): no unmanaged nesting. Every delegate child is marked with
+    # the INJECTED PROCTOR_CHILD env var; a delegate that finds the marker in
+    # its own environment is itself running inside a worker and may not open
+    # new --model / --write dispatches (#86's unmanaged-nesting class).
+    if os.environ.get(_CHILD_MARKER) and (getattr(args, "model", None)
+                                          or getattr(args, "write", False)):
+        return _make_result(
+            "invalid", agent=agent_name,
+            error="nested_dispatch_refused: this delegate is running inside "
+                  "a worker; --model/--write spawns are not authorized from "
+                  "child context"), EXIT_INVALID
+    if getattr(args, "write", False) and not getattr(args, "model", None):
+        return _make_result(
+            "invalid", agent=agent_name,
+            error="--write applies only to --model dispatch (#96): roster "
+                  "agents carry their own write_allowed"), EXIT_INVALID
 
     # Load config
     try:
@@ -885,18 +1009,50 @@ def _run_delegate_inner(args, start_time, agent_name):
     except ConfigError as e:
         return _make_result("invalid", error=str(e), agent=agent_name), EXIT_INVALID
 
-    # Find agent
-    agents = cfg["agents"]
-    if agent_name not in agents:
-        return _make_result("invalid", error=f"Unknown agent: {agent_name}", agent=agent_name), EXIT_INVALID
-    agent = agents[agent_name]
+    # Find agent — by name, or synthesize from the hardened template for
+    # model-mode dispatch (#96).
+    if getattr(args, "model", None):
+        # Live-catalog validation: a read of kimi's OWN config, never a
+        # cached copy (#23). Config presence != serving — a listed id can
+        # still 404 at the provider; that surfaces as a provider failure in
+        # the envelope, which is the honest place for it.
+        model_ids, note = live_harness_models()
+        if note or args.model not in model_ids:
+            alts = sorted(m for m in model_ids
+                          if m != args.model
+                          and _model_family(m) == _model_family(args.model))
+            res = _make_result(
+                "invalid", agent=agent_name,
+                error="model_not_in_harness_catalog: "
+                      + args.model + (f" ({note})" if note else ""),
+            )
+            res["catalog_size"] = len(model_ids)
+            res["same_family_alternatives"] = alts
+            res["hint"] = ("run catalog.py for the live list; kimi's config "
+                           "is the catalog, and it rotates")
+            return res, EXIT_INVALID
+        try:
+            agent = resolve_model_agent(cfg, args.model,
+                                        getattr(args, "write", False))
+        except ConfigError as e:
+            return _make_result("invalid", error=str(e), agent=agent_name), EXIT_INVALID
+        try:
+            _validate_agent(agent_name, agent, cfg["max_timeout_seconds"],
+                            check_executable=True)
+        except ConfigError as e:
+            return _make_result("invalid", error=str(e), agent=agent_name), EXIT_INVALID
+    else:
+        agents = cfg["agents"]
+        if agent_name not in agents:
+            return _make_result("invalid", error=f"Unknown agent: {agent_name}", agent=agent_name), EXIT_INVALID
+        agent = agents[agent_name]
 
-    # Lazily validate the invoked agent's executable (existence checks are deferred
-    # from config load so an unrelated agent's missing CLI cannot block this run).
-    try:
-        _validate_agent(agent_name, agent, cfg["max_timeout_seconds"], check_executable=True)
-    except ConfigError as e:
-        return _make_result("invalid", error=str(e), agent=agent_name), EXIT_INVALID
+        # Lazily validate the invoked agent's executable (existence checks are deferred
+        # from config load so an unrelated agent's missing CLI cannot block this run).
+        try:
+            _validate_agent(agent_name, agent, cfg["max_timeout_seconds"], check_executable=True)
+        except ConfigError as e:
+            return _make_result("invalid", error=str(e), agent=agent_name), EXIT_INVALID
 
     # Validate --resume-from and build the substituted resume argv. The invoked
     # agent must declare resume_args; substitution inserts the args immediately
@@ -941,6 +1097,23 @@ def _run_delegate_inner(args, start_time, agent_name):
     except InputError as e:
         return _make_result("invalid", error=str(e), agent=agent_name), EXIT_INVALID
 
+    # #96 (QC C1): production-pattern work is not dispatchable ungated. The
+    # denylist is the runner's, matched over the task text (model-mode has
+    # no scope/verifier surface); production work belongs on the runner's
+    # gated path, which owns the preflight-receipt and rollback doctrine.
+    if getattr(args, "model", None):
+        matched = [p for p in PRODUCTION_ENTRYPOINT_PATTERNS
+                   if p in task_text.lower()]
+        if matched:
+            res = _make_result(
+                "invalid", agent=agent_name,
+                error="production_entrypoint_refused: model-mode dispatch is "
+                      "ungated; tasks driving production entrypoints belong "
+                      "on the runner path (init/verify/accept + preflight "
+                      "receipts)")
+            res["matched_patterns"] = matched
+            return res, EXIT_INVALID
+
     # Validate task
     try:
         validate_task(task_text, cfg["max_task_bytes"])
@@ -972,6 +1145,11 @@ def _run_delegate_inner(args, start_time, agent_name):
     child_home = create_isolated_home()
     if child_home is not None:
         child_env["KIMI_CODE_HOME"] = child_home
+    # #96 (QC E4): the nesting marker is INJECTED, never inherited — the
+    # default allowlist builds the child env from scratch, so an inherited
+    # marker would be stripped. Every delegate child carries it; a nested
+    # delegate refuses --model/--write spawns (checked at entry above).
+    child_env[_CHILD_MARKER] = "1"
 
     # Create run directory
     run_dir, acl_warning = create_run_dir()
@@ -1281,8 +1459,18 @@ def main():
         description="Launch one configured external CLI worker with a bounded task.",
         add_help=True,
     )
-    parser.add_argument("--agent", required=True, help="Configured agent name")
     parser.add_argument("--workspace", required=True, help="Workspace directory path")
+    selector = parser.add_mutually_exclusive_group(required=True)
+    selector.add_argument("--agent", help="Configured agent name (roster)")
+    selector.add_argument("--model",
+                          help="Dispatch by model id from the LIVE harness "
+                               "catalog (#96): any [models.*] key in kimi's "
+                               "config, validated at dispatch time")
+    parser.add_argument("--write", action="store_true",
+                        help="Model-mode only: mark the dispatch "
+                             "write-capable (default read-only; "
+                             "write_allowed is envelope metadata per the "
+                             "delegate doctrine)")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--task", help="Task text")
     group.add_argument("--task-file", help="Path to a UTF-8 task file")
