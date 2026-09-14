@@ -59,7 +59,8 @@ def _load_config(path: Optional[str], preset: Optional[str]) -> LocalConfig:
 
 def _nested(value: Any) -> bool:
     if isinstance(value, dict):
-        return any(key in {"collabAgentToolCall", "subAgentActivity"} or _nested(item)
+        return value.get("type") in {"collabAgentToolCall", "subAgentActivity"} or any(
+                   key in {"collabAgentToolCall", "subAgentActivity"} or _nested(item)
                    for key, item in value.items())
     if isinstance(value, list):
         return any(_nested(item) for item in value)
@@ -75,6 +76,22 @@ def _terminal_event(event: Mapping[str, Any]) -> bool:
         turn = params.get("turn")
         return isinstance(turn, dict) and turn.get("status") in {"completed", "failed", "interrupted"}
     return False
+
+
+def _terminal_status(event: Mapping[str, Any]) -> str:
+    event_type = str(event.get("type", ""))
+    if event_type.startswith("turn."):
+        return event_type.rsplit(".", 1)[-1]
+    return event["params"]["turn"]["status"]
+
+
+def _usage(events: list[Mapping[str, Any]]) -> Any:
+    for event in events:
+        for parent in (event, event.get("params"),
+                       event.get("params", {}).get("turn") if isinstance(event.get("params"), dict) else None):
+            if isinstance(parent, dict) and parent.get("usage") is not None:
+                return parent["usage"]
+    return "unknown"
 
 
 def _id_from(event: Mapping[str, Any], *names: str) -> Optional[str]:
@@ -109,8 +126,16 @@ def _json_lines(raw: bytes | str) -> list[dict[str, Any]]:
 
 
 def _run(process: Callable[..., Any], argv: list[str], *, input: bytes, cwd: Optional[str], env: Mapping[str, str]) -> tuple[list[dict[str, Any]], Any]:
-    proc = process(argv, input=input, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    proc = process(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                    cwd=cwd, env=dict(env))
+    if proc.stdin is None or proc.stdout is None:
+        raise ValueError("CLI transport did not provide stdio streams")
+    proc.stdin.write(input)
+    proc.stdin.flush()
+    try:
+        proc.stdin.close()
+    except Exception:
+        pass
     stdout = getattr(proc, "stdout", b"")
     if hasattr(stdout, "read"):
         stdout = stdout.read()
@@ -119,7 +144,8 @@ def _run(process: Callable[..., Any], argv: list[str], *, input: bytes, cwd: Opt
 
 def _catalog_rpc(executable: str, process: Callable[..., Any], env: Mapping[str, str]) -> tuple[Mapping[str, Any], list[dict[str, Any]]]:
     requests = [
-        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "clientInfo": {"name": "model-proctor", "version": "1", "capabilities": {}}}},
         {"jsonrpc": "2.0", "method": "initialized", "params": {}},
         {"jsonrpc": "2.0", "id": 2, "method": "model/list", "params": {}},
     ]
@@ -130,47 +156,63 @@ def _catalog_rpc(executable: str, process: Callable[..., Any], env: Mapping[str,
     raise ValueError("app-server model/list did not return a catalog")
 
 
+class _RpcSession:
+    """Popen-compatible JSON-RPC conversation that tolerates notifications."""
+    def __init__(self, process: Callable[..., Any], argv: list[str], *, cwd: Optional[str], env: Mapping[str, str]):
+        self.proc = process(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            cwd=cwd, env=dict(env))
+        if self.proc.stdin is None or self.proc.stdout is None:
+            raise ValueError("app-server did not provide stdio streams")
+        self.events: list[dict[str, Any]] = []
+
+    def send(self, request: dict[str, Any]) -> None:
+        self.proc.stdin.write((json.dumps(request) + "\n").encode("utf-8"))
+        self.proc.stdin.flush()
+
+    def read_response(self, required_id: int) -> dict[str, Any]:
+        while True:
+            raw = self.proc.stdout.readline()
+            if not raw:
+                raise ValueError("app-server ended before required response")
+            event = _json_lines(raw)[0]
+            self.events.append(event)
+            if "method" in event:  # notifications may legally interleave RPC responses.
+                continue
+            if event.get("id") != required_id:
+                raise ValueError("app-server response order was invalid")
+            return event
+
+    def read_terminal(self) -> list[dict[str, Any]]:
+        while True:
+            raw = self.proc.stdout.readline()
+            if not raw:
+                break
+            event = _json_lines(raw)[0]
+            self.events.append(event)
+            if _terminal_event(event):
+                return [item for item in self.events if _terminal_event(item)]
+        raise ValueError("app-server transport did not expose a terminal turn event")
+
+    def close(self) -> None:
+        try:
+            self.proc.stdin.close()
+        except Exception:
+            pass
+        try:
+            self.proc.wait()
+        except Exception:
+            pass
+
+
 def _rpc(process: Callable[..., Any], argv: list[str], requests: list[dict[str, Any]], *,
          cwd: Optional[str], env: Mapping[str, str]) -> list[dict[str, Any]]:
-    """Run JSON-RPC in lifecycle order; never issue turn work before catalog proof."""
-    proc = process(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                   cwd=cwd, env=dict(env))
-    if proc.stdin is None or proc.stdout is None:
-        raise ValueError("app-server did not provide stdio streams")
-    events: list[dict[str, Any]] = []
-    def send(request: dict[str, Any]) -> None:
-        proc.stdin.write((json.dumps(request) + "\n").encode("utf-8"))
-        proc.stdin.flush()
-    def read_one(required_id: Optional[int] = None) -> dict[str, Any]:
-        raw = proc.stdout.readline()
-        if not raw:
-            raise ValueError("app-server ended before required response")
-        event = _json_lines(raw)[0]
-        events.append(event)
-        if required_id is not None and event.get("id") != required_id:
-            raise ValueError("app-server response order was invalid")
-        return event
-    send(requests[0]); read_one(1)
-    send(requests[1])
-    send(requests[2]); read_one(2)
-    for request in requests[3:]:
-        send(request)
-        if request.get("id") == 3:
-            read_one(3)
-        elif request.get("id") == 4:
-            read_one(4)
-    while True:
-        raw = proc.stdout.readline()
-        if not raw:
-            break
-        events.extend(_json_lines(raw))
-        if _terminal_event(events[-1]):
-            break
+    session = _RpcSession(process, argv, cwd=cwd, env=env)
     try:
-        proc.wait()
-    except Exception:
-        pass
-    return events
+        session.send(requests[0]); session.read_response(1)
+        session.send(requests[1]); session.send(requests[2]); session.read_response(2)
+        return session.events
+    finally:
+        session.close()
 
 
 def _identity(raw: Optional[str], *, transport: str, model: str, effort: str, sandbox: str) -> Optional[str]:
@@ -196,59 +238,65 @@ def _identity(raw: Optional[str], *, transport: str, model: str, effort: str, sa
 
 def _cli(executable: str, selection: Any, task: str, workspace: Path, sandbox: str,
          resume: Optional[str], process: Callable[..., Any], env: Mapping[str, str]) -> dict[str, Any]:
-    if resume is None:
-        argv = [executable, "exec", "-m", selection.model, "-c", f"model_reasoning_effort={selection.effort}",
-                "-s", sandbox, "-C", str(workspace), "--json", "-"]
-    else:
-        # The installed resume protocol intentionally has no sandbox/cwd override.
-        argv = [executable, "exec", "resume", resume, "-m", selection.model,
-                "-c", f"model_reasoning_effort={selection.effort}", "--json", "-"]
+    if resume is not None:
+        raise ValueError("CLI resume is refused: installed resume cannot reapply sandbox/cwd binding")
+    argv = [executable, "exec", "-m", selection.model, "-c", f"model_reasoning_effort={selection.effort}",
+            "-s", sandbox, "-C", str(workspace), "--json", "-"]
     events, _ = _run(process, argv, input=task.encode("utf-8"), cwd=str(workspace), env=env)
     terminal = [event for event in events if _terminal_event(event)]
     if not terminal:
         raise ValueError("CLI transport did not expose a terminal turn event")
     last = terminal[-1]
-    return _result("completed", model=selection.model, effort=selection.effort, transport="cli", sandbox=sandbox,
+    status = _terminal_status(last)
+    return _result(status, model=selection.model, effort=selection.effort, transport="cli", sandbox=sandbox,
                    session_id=next((_id_from(event, "session_id", "thread_id") for event in events
                                     if _id_from(event, "session_id", "thread_id")), None),
                    turn_id=_id_from(last, "turn_id"),
-                   terminal_evidence=terminal, nested_dispatch_detected=any(_nested(event) for event in events))
+                   terminal_evidence=terminal, nested_dispatch_detected=any(_nested(event) for event in events),
+                   usage=_usage(events))
 
 
 def _app_server(executable: str, selection: Any, task: str, workspace: Path, sandbox: str,
                 resume: Optional[str], catalog_events: list[dict[str, Any]], process: Callable[..., Any],
                 env: Mapping[str, str]) -> dict[str, Any]:
-    thread_method = "thread/resume" if resume else "thread/start"
-    thread_params = {"threadId": resume} if resume else {"cwd": str(workspace), "sandbox": sandbox}
     policy = {"type": "workspaceWrite" if sandbox == "workspace-write" else "readOnly", "networkAccess": False}
-    requests = [
-        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
-        {"jsonrpc": "2.0", "method": "initialized", "params": {}},
-        {"jsonrpc": "2.0", "id": 2, "method": "model/list", "params": {}},
-        {"jsonrpc": "2.0", "id": 3, "method": thread_method, "params": thread_params},
-        {"jsonrpc": "2.0", "id": 4, "method": "turn/start", "params": {
-            "threadId": resume or "__from_thread_start__", "input": [{"type": "text", "text": task}],
-            "sandboxPolicy": policy}},
-    ]
-    events = _rpc(process, [executable, "app-server", "--stdio"], requests, cwd=str(workspace), env=env)
-    # A live response is mandatory; catalog_events exists only to retain terminal evidence from preflight callers.
-    if not any(event.get("id") == 2 and isinstance(event.get("result"), dict) for event in events):
-        raise ValueError("app-server model/list did not return a catalog")
-    thread_id = resume
-    for event in events:
-        if event.get("id") == 3:
-            thread_id = _id_from(event, "thread_id", "threadId", "id") or thread_id
-    terminal = [event for event in events if _terminal_event(event)]
-    if not terminal:
-        raise ValueError("app-server transport did not expose a terminal turn event")
-    last = terminal[-1]
-    return _result("completed", model=selection.model, effort=selection.effort, transport="app-server", sandbox=sandbox,
-                   thread_id=thread_id, session_id=thread_id, turn_id=_id_from(last, "turn_id", "turnId", "id"),
-                   terminal_evidence=terminal, nested_dispatch_detected=any(_nested(event) for event in events))
+    session = _RpcSession(process, [executable, "app-server", "--stdio"], cwd=str(workspace), env=env)
+    try:
+        session.send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "clientInfo": {"name": "model-proctor", "version": "1", "capabilities": {}}}})
+        session.read_response(1)
+        session.send({"jsonrpc": "2.0", "method": "initialized", "params": {}})
+        session.send({"jsonrpc": "2.0", "id": 2, "method": "model/list", "params": {}})
+        live_catalog = session.read_response(2).get("result")
+        # Bind this exact process session to the already-selected identity before any thread work.
+        live = resolve_selection(parse_catalog(live_catalog), _empty_config(),
+                                 model=selection.model, effort=selection.effort)
+        thread_method = "thread/resume" if resume else "thread/start"
+        thread_params = {"cwd": str(workspace), "model": live.model, "sandbox": sandbox}
+        if resume:
+            thread_params["threadId"] = resume
+        session.send({"jsonrpc": "2.0", "id": 3, "method": thread_method, "params": thread_params})
+        thread_response = session.read_response(3)
+        thread_id = _id_from(thread_response, "thread_id", "threadId", "id")
+        if thread_id is None:
+            raise ValueError("app-server thread response lacked a thread id")
+        session.send({"jsonrpc": "2.0", "id": 4, "method": "turn/start", "params": {
+            "threadId": thread_id, "model": live.model, "effort": live.effort,
+            "input": [{"type": "text", "text": task}], "sandboxPolicy": policy}})
+        session.read_response(4)
+        terminal = session.read_terminal()
+        last = terminal[-1]
+        status = _terminal_status(last)
+        return _result(status, model=live.model, effort=live.effort, transport="app-server", sandbox=sandbox,
+                       thread_id=thread_id, session_id=thread_id, turn_id=_id_from(last, "turn_id", "turnId", "id"),
+                       terminal_evidence=terminal, nested_dispatch_detected=any(_nested(event) for event in session.events),
+                       usage=_usage(session.events))
+    finally:
+        session.close()
 
 
 def run_delegate(args: argparse.Namespace, *, catalog_payload: Optional[Mapping[str, Any]] = None,
-                 popen_factory: Callable[..., Any] = subprocess.run,
+                 popen_factory: Callable[..., Any] = subprocess.Popen,
                  environ: Optional[Mapping[str, str]] = None) -> tuple[dict[str, Any], int]:
     """Perform exactly the named transport; test callers may supply a catalog fixture."""
     env = dict(os.environ if environ is None else environ)
@@ -266,6 +314,8 @@ def run_delegate(args: argparse.Namespace, *, catalog_payload: Optional[Mapping[
         else:
             catalog_events = []
         selection = resolve_selection(parse_catalog(catalog_payload), config, model=args.model, preset=args.preset, effort=args.effort)
+        if args.transport == "cli" and args.resume_identity is not None:
+            raise ValueError("CLI resume is refused: installed resume cannot reapply sandbox/cwd binding")
         resume = _identity(args.resume_identity, transport=args.transport, model=selection.model,
                            effort=selection.effort, sandbox=sandbox)
     except (OSError, UnicodeError, ValueError, CatalogContractError) as exc:
@@ -284,7 +334,7 @@ def run_delegate(args: argparse.Namespace, *, catalog_payload: Optional[Mapping[
     if result["nested_dispatch_detected"]:
         result["status"] = "refused"; result["error"] = "nested Codex activity observed; result refused"
         return result, EXIT_OPERATIONAL
-    return result, EXIT_OK
+    return result, EXIT_OK if result["status"] == "completed" else EXIT_OPERATIONAL
 
 
 def build_parser() -> argparse.ArgumentParser:

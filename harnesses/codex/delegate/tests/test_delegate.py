@@ -19,9 +19,13 @@ CATALOG = {"data": [{"id": "gpt-test", "defaultReasoningEffort": "medium",
                           {"reasoningEffort": "low"}, {"reasoningEffort": "medium"}]}]}
 
 
+class FakeStdin(io.BytesIO):
+    def close(self): pass
+
+
 class FakeProcess:
     def __init__(self, lines):
-        self.stdin = io.BytesIO()
+        self.stdin = FakeStdin()
         self.stdout = io.BytesIO("".join(json.dumps(x) + "\n" for x in lines).encode())
         self.stderr = io.BytesIO()
         self.returncode = 0
@@ -65,11 +69,13 @@ class DelegateTransportContract(unittest.TestCase):
                                         "model_reasoning_effort=medium", "-s", sandbox, "-C",
                                         str(self.workspace.resolve()), "--json", "-"])
                 self.assertNotIn("--worktree", argv); self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", argv)
-                self.assertEqual(kwargs["input"], b"inspect only")
+                self.assertEqual(self.processes[-1].stdin.getvalue(), b"inspect only")
 
     def test_app_server_lifecycle_uses_actual_sandbox_and_policy(self):
         streams = [[{"id": 1, "result": {}}, {"id": 2, "result": CATALOG}], [
-            {"id": 1, "result": {}}, {"id": 2, "result": CATALOG},
+            {"method": "server/notice", "params": {"phase": "boot"}},
+            {"id": 1, "result": {}}, {"method": "server/notice", "params": {"phase": "catalog"}},
+            {"id": 2, "result": CATALOG},
             {"id": 3, "result": {"thread": {"id": "th1"}}},
             {"id": 4, "result": {"turn": {"id": "tu1"}}},
             {"method": "turn/updated", "params": {"turn": {"id": "tu1", "status": "completed"}}},
@@ -80,7 +86,11 @@ class DelegateTransportContract(unittest.TestCase):
         argv, kwargs = self.calls[1]; self.assertEqual(argv, ["fake-codex", "app-server", "--stdio"])
         sent = [json.loads(line) for line in self.processes[1].stdin.getvalue().decode().splitlines()]
         self.assertEqual([x.get("method") for x in sent], ["initialize", "initialized", "model/list", "thread/start", "turn/start"])
+        self.assertIn("clientInfo", sent[0]["params"])
+        self.assertEqual(sent[3]["params"]["model"], "gpt-test")
         self.assertEqual(sent[3]["params"]["sandbox"], "workspace-write")
+        self.assertEqual(sent[4]["params"]["threadId"], "th1")
+        self.assertEqual((sent[4]["params"]["model"], sent[4]["params"]["effort"]), ("gpt-test", "medium"))
         self.assertEqual(sent[4]["params"]["sandboxPolicy"], {"type": "workspaceWrite", "networkAccess": False})
         self.assertEqual(sent[4]["params"]["input"], [{"type": "text", "text": "inspect only"}])
 
@@ -105,23 +115,50 @@ class DelegateTransportContract(unittest.TestCase):
         result, code = delegate.run_delegate(self.args(), catalog_payload=CATALOG,
                                              popen_factory=self.fake([]), environ={"PROCTOR_CHILD": "1"})
         self.assertEqual(code, delegate.EXIT_INVALID); self.assertEqual(self.calls, [])
-        streams = [[{"type": "turn.completed", "collabAgentToolCall": {}}]]
-        result, code = delegate.run_delegate(self.args(), catalog_payload=CATALOG,
-                                             popen_factory=self.fake(streams), environ={})
-        self.assertEqual(code, delegate.EXIT_OPERATIONAL); self.assertTrue(result["nested_dispatch_detected"])
-        self.assertEqual(result["status"], "refused")
+        for event_type in ("collabAgentToolCall", "subAgentActivity"):
+            with self.subTest(event_type=event_type):
+                streams = [[{"type": event_type}, {"type": "turn.completed"}]]
+                result, code = delegate.run_delegate(self.args(), catalog_payload=CATALOG,
+                                                     popen_factory=self.fake(streams), environ={})
+                self.assertEqual(code, delegate.EXIT_OPERATIONAL); self.assertTrue(result["nested_dispatch_detected"])
+                self.assertEqual(result["status"], "refused")
 
-    def test_resume_requires_bound_identity_and_reapplies_same_transport(self):
+    def test_cli_resume_is_refused_even_with_a_bound_identity(self):
         identity = json.dumps({"transport": "cli", "model": "gpt-test", "effort": "medium",
                                "sandbox": "read-only", "session_id": "session-7"})
-        streams = [[{"type": "turn.completed", "session_id": "session-7"}]]
         result, code = delegate.run_delegate(self.args(resume_identity=identity), catalog_payload=CATALOG,
-                                             popen_factory=self.fake(streams), environ={})
-        self.assertEqual(code, 0); self.assertEqual(self.calls[0][0][:4], ["fake-codex", "exec", "resume", "session-7"])
-        bad = identity.replace("read-only", "workspace-write")
-        result, code = delegate.run_delegate(self.args(resume_identity=bad), catalog_payload=CATALOG,
                                              popen_factory=self.fake([]), environ={})
-        self.assertEqual(code, delegate.EXIT_INVALID); self.assertEqual(len(self.calls), 1)
+        self.assertEqual(code, delegate.EXIT_INVALID); self.assertEqual(self.calls, [])
+
+    def test_app_server_resume_reapplies_binding_and_uses_returned_thread_id(self):
+        identity = json.dumps({"transport": "app-server", "model": "gpt-test", "effort": "medium",
+                               "sandbox": "read-only", "thread_id": "old-thread"})
+        streams = [[{"id": 1, "result": {}}, {"id": 2, "result": CATALOG}], [
+            {"id": 1, "result": {}}, {"id": 2, "result": CATALOG},
+            {"id": 3, "result": {"thread": {"id": "resumed-thread"}}}, {"id": 4, "result": {}},
+            {"method": "turn/updated", "params": {"turn": {"id": "turn-2", "status": "completed"}}},
+        ]]
+        result, code = delegate.run_delegate(self.args(transport="app-server", resume_identity=identity),
+                                             popen_factory=self.fake(streams), environ={})
+        self.assertEqual(code, 0); sent = [json.loads(line) for line in self.processes[1].stdin.getvalue().decode().splitlines()]
+        self.assertEqual(sent[3]["method"], "thread/resume")
+        self.assertEqual(sent[3]["params"], {"threadId": "old-thread", "cwd": str(self.workspace.resolve()), "model": "gpt-test", "sandbox": "read-only"})
+        self.assertEqual((sent[4]["params"]["threadId"], sent[4]["params"]["model"], sent[4]["params"]["effort"]), ("resumed-thread", "gpt-test", "medium"))
+
+    def test_in_session_catalog_drift_refuses_before_thread_work(self):
+        drifted = {"data": [{"id": "gpt-other", "defaultReasoningEffort": "medium", "supportedReasoningEfforts": [{"reasoningEffort": "medium"}]}]}
+        streams = [[{"id": 1, "result": {}}, {"id": 2, "result": CATALOG}], [{"id": 1, "result": {}}, {"id": 2, "result": drifted}]]
+        result, code = delegate.run_delegate(self.args(transport="app-server"), popen_factory=self.fake(streams), environ={})
+        self.assertEqual(code, delegate.EXIT_OPERATIONAL); self.assertEqual(result["status"], "operational_failure")
+        sent = [json.loads(line) for line in self.processes[1].stdin.getvalue().decode().splitlines()]
+        self.assertEqual([item["method"] for item in sent], ["initialize", "initialized", "model/list"])
+
+    def test_failed_and_interrupted_turns_are_not_successes(self):
+        for terminal in ("failed", "interrupted"):
+            with self.subTest(terminal=terminal):
+                streams = [[{"type": f"turn.{terminal}", "turn_id": "t1"}]]
+                result, code = delegate.run_delegate(self.args(), catalog_payload=CATALOG, popen_factory=self.fake(streams), environ={})
+                self.assertEqual((result["status"], code), (terminal, delegate.EXIT_OPERATIONAL))
 
     def test_envelope_has_evidence_ids_and_never_cost_or_kimi_claim(self):
         streams = [[{"type": "thread.started", "thread_id": "s1"}, {"type": "turn.completed", "turn_id": "t1"}]]
@@ -131,6 +168,12 @@ class DelegateTransportContract(unittest.TestCase):
         self.assertEqual((result["session_id"], result["turn_id"]), ("s1", "t1"))
         self.assertTrue(result["terminal_evidence"])
         self.assertNotIn("cost", result); self.assertNotIn("kimi_acceptance", result)
+
+    def test_concrete_provider_usage_is_preserved(self):
+        usage = {"input_tokens": 12, "output_tokens": 3}
+        streams = [[{"type": "turn.completed", "turn_id": "t1", "usage": usage}]]
+        result, code = delegate.run_delegate(self.args(), catalog_payload=CATALOG, popen_factory=self.fake(streams), environ={})
+        self.assertEqual(code, 0); self.assertEqual(result["usage"], usage); self.assertNotIn("cost", result)
 
 
 if __name__ == "__main__": unittest.main()
