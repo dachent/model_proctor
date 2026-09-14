@@ -86,16 +86,17 @@ def _terminal_status(event: Mapping[str, Any]) -> str:
 
 
 def _usage(events: list[Mapping[str, Any]]) -> Any:
+    observed: Any = "unknown"
     for event in events:
         params = event.get("params")
         if event.get("method") == "thread/tokenUsage/updated" and isinstance(params, dict):
             if params.get("tokenUsage") is not None:
-                return params["tokenUsage"]
+                observed = params["tokenUsage"]
         for parent in (event, event.get("params"),
                        event.get("params", {}).get("turn") if isinstance(event.get("params"), dict) else None):
             if isinstance(parent, dict) and parent.get("usage") is not None:
-                return parent["usage"]
-    return "unknown"
+                observed = parent["usage"]
+    return observed
 
 
 def _id_from(event: Mapping[str, Any], *names: str) -> Optional[str]:
@@ -130,7 +131,7 @@ def _json_lines(raw: bytes | str) -> list[dict[str, Any]]:
 
 
 def _run(process: Callable[..., Any], argv: list[str], *, input: bytes, cwd: Optional[str], env: Mapping[str, str]) -> tuple[list[dict[str, Any]], Any]:
-    proc = process(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    proc = process(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                    cwd=cwd, env=dict(env))
     if proc.stdin is None or proc.stdout is None:
         raise ValueError("CLI transport did not provide stdio streams")
@@ -143,6 +144,11 @@ def _run(process: Callable[..., Any], argv: list[str], *, input: bytes, cwd: Opt
     stdout = getattr(proc, "stdout", b"")
     if hasattr(stdout, "read"):
         stdout = stdout.read()
+    try:
+        proc.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=1)
     return _json_lines(stdout), proc
 
 
@@ -163,7 +169,7 @@ def _catalog_rpc(executable: str, process: Callable[..., Any], env: Mapping[str,
 class _RpcSession:
     """Popen-compatible JSON-RPC conversation that tolerates notifications."""
     def __init__(self, process: Callable[..., Any], argv: list[str], *, cwd: Optional[str], env: Mapping[str, str]):
-        self.proc = process(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        self.proc = process(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                             cwd=cwd, env=dict(env))
         if self.proc.stdin is None or self.proc.stdout is None:
             raise ValueError("app-server did not provide stdio streams")

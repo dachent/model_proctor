@@ -34,7 +34,10 @@ class FakeProcess:
         self.stdout = io.BytesIO("".join(json.dumps(x) + "\n" for x in lines).encode())
         self.stderr = io.BytesIO()
         self.returncode = 0
-    def wait(self): return 0
+        self.wait_calls = 0
+    def wait(self, *args, **kwargs):
+        self.wait_calls += 1
+        return 0
 
 
 class DelegateTransportContract(unittest.TestCase):
@@ -75,6 +78,8 @@ class DelegateTransportContract(unittest.TestCase):
                                         str(self.workspace.resolve()), "--json", "-"])
                 self.assertNotIn("--worktree", argv); self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", argv)
                 self.assertEqual(self.processes[-1].stdin.getvalue(), b"inspect only")
+                self.assertEqual(kwargs["stderr"], delegate.subprocess.DEVNULL)
+                self.assertGreaterEqual(self.processes[-1].wait_calls, 1)
 
     def test_app_server_lifecycle_uses_actual_sandbox_and_policy(self):
         streams = [[{"id": 1, "result": {}}, {"id": 2, "result": CATALOG}], [
@@ -189,6 +194,18 @@ class DelegateTransportContract(unittest.TestCase):
         ]]
         result, code = delegate.run_delegate(self.args(transport="app-server"), popen_factory=self.fake(streams), environ={})
         self.assertEqual(code, 0); self.assertEqual(result["usage"], TOKEN_USAGE)
+
+    def test_latest_token_usage_notification_wins(self):
+        latest = dict(TOKEN_USAGE, modelContextWindow=256000)
+        streams = [[{"id": 1, "result": {}}, {"id": 2, "result": CATALOG}], [
+            {"id": 1, "result": {}}, {"id": 2, "result": CATALOG},
+            {"id": 3, "result": {"thread": {"id": "th1"}}}, {"id": 4, "result": {}},
+            {"method": "thread/tokenUsage/updated", "params": {"threadId": "th1", "turnId": "t1", "tokenUsage": TOKEN_USAGE}},
+            {"method": "thread/tokenUsage/updated", "params": {"threadId": "th1", "turnId": "t1", "tokenUsage": latest}},
+            {"method": "turn/updated", "params": {"turn": {"id": "t1", "status": "completed"}}},
+        ]]
+        result, code = delegate.run_delegate(self.args(transport="app-server"), popen_factory=self.fake(streams), environ={})
+        self.assertEqual(code, 0); self.assertEqual(result["usage"], latest)
 
     def test_server_request_is_refused_and_receives_json_rpc_error(self):
         request = {"jsonrpc": "2.0", "id": "approval-7", "method": "item/commandExecution/requestApproval",
