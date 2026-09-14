@@ -69,10 +69,13 @@ guesswork** — a lane changes only on recorded stagnation (see Failure classes 
 | no bounded signature, substantial | `glm` (default) |
 
 Why flash-first is right even though benchmarks showed "one fixed worker wins": the STOP
-rulings were measured on ~30-second bounded tasks where every tier was quality-tied. On
-long agentic work, per-unit failure compounds; cheap-first-plus-gates beats both
-fixed-strong (always — the price ratio is ~16x) and fixed-cheap (beyond the break-even
-task size; see README "The routing break-even"). Escalation is what earns its keep there.
+rulings were measured on ~30-second bounded tasks where every tier was quality-tied — the
+regime where routing cannot help by construction. On substantial work the comparison that
+matters is **quality-matched** (keep strong-tier completion, reduce cost): flash-first
+plus gates plus escalation is cheaper than fixed-strong at ANY task size (8x vs glm-5p3,
+17x vs kimi-k3; savings ≈ q − b/s of the comparator's cost — 78–91% at benchmark
+reliability), because the gate guarantees whatever flash cannot do gets redone at the
+strong tier. See README "The routing break-even". Escalation is what earns its keep.
 
 Decomposition itself is the hard problem? Optionally consult K3 for a task breakdown first —
 that is a planning consult, not a mandatory planner tax.

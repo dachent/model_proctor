@@ -44,35 +44,70 @@ could never see it because every task was one unit long. Decompose a task's mode
 - **c** — switching + validation (≈ **$0** here: fingerprints, verifier runs and gates are
   deterministic code, not model calls; E-ship measured the whole dispatch path cost-flat)
 
-Compare against a single strong model at rate `s` executing the whole task:
+### The comparison that matters: quality-matched (keep quality, reduce cost)
 
-- **vs fixed-strong:** break-even `X* = (a + c)/(s − b)`. With `c ≈ 0` and the measured
-  price ratio `b/s` ≈ **0.06** (glm-5p3-flash $0.009 vs kimi-k3 $0.153 per unit), **X\* =
-  0** — cheap-first + escalation is cheaper from the first unit, at any task size, for
-  any fraction of the work that runs on the cheap tier. Even with failures escalating to
-  the strong rate, the repair-adjusted cheap rate stays below `s` for any per-unit failure
-  rate under 100%.
-- **vs fixed-cheap (STOP's winner — the real contest):** with per-unit success `q` and
-  whole-task redo on escalation, escalation beats fixed-cheap once flash's whole-task
-  success probability drops below the price ratio: **X\* = ln(b/s) / ln(q)**.
+The cheap tier alone does not hold the required quality on substantial work — so
+fixed-cheap is not a real alternative for it. The question is what flash-first with
+verification gates and escalation **saves against a fixed strong model that completes
+everything**, with the gate guaranteeing the same end quality (whatever flash cannot do,
+the strong tier redoes). Both comparators, measured (phase3 + #91):
 
-| per-unit success q | X\* (units) | ~tokens | ~continuous wall |
+| Comparator | Rate per unit | Price ratio b/s | Flash must first-pass |
 |---|---:|---:|---:|
-| 0.967 (v3-measured, per-task) | ~83 | ~10.8M | ~49 min |
-| 0.95 | ~55 | ~7.1M | ~32 min |
-| 0.90 | ~27 | ~3.5M | ~16 min |
-| 0.80 | ~13 | ~1.6M | ~7 min |
+| **glm-5p3** | $0.0739 | 0.122 (8.2x) | **> 12.2%** of units |
+| **kimi-k3** | $0.153 | 0.059 (17.0x) | **> 5.9%** of units |
 
-A "unit" is one benchmark-scale sub-task (~130k tokens, ~$0.009 on flash). The caveats,
-honestly: `q` on long agentic work is **unmeasured** (the v3 29/30 is per-task on bounded
-fixtures — the entire open question); whole-task redo is pessimistic for routing
-(escalating only the remaining units lowers X\*); rescue-by-strong succeeding where cheap
-failed is assumed; screens, not decision-grade (#16).
+(flash = glm-5p3-flash, b ≈ $0.009/unit, measured $0.0084–0.0093; whole-unit redo on
+escalation — the gate catching failure partway through a unit improves these further.)
 
-**The point:** the benchmark corpus (single-unit, quality-tied) sits entirely below every
-row of that table — STOP was the correct ruling for it and says nothing about tasks beyond
-X\*. The architecture that captures the region above the threshold is flash-first +
-verification gates + stagnation escalation, which is exactly the runner's gated path.
+**Break-even task size: X\* = 0, unconditionally, against both.** With c ≈ 0 and planning
+a wash, flash-first + escalation is cheaper from the first unit at any task size, unless
+flash first-passes less than ~12% of units (vs glm-5p3) or ~6% (vs kimi-k3) — a failure
+rate no usable cheap tier approaches. **q** — flash's per-unit first-pass completion rate
+— does not determine *whether* this wins; it determines the *magnitude* of the savings:
+**savings(q) = q − b/s** of the comparator's cost:
+
+| flash first-pass q | saves vs glm-5p3 | saves vs kimi-k3 |
+|---|---:|---:|
+| 0.967 (v3-measured, per-task) | **84.5%** | **90.8%** |
+| 0.90 | 77.8% | 84.1% |
+| 0.70 | 57.8% | 64.1% |
+| 0.50 | 37.8% | 44.1% |
+| 0.30 | 17.8% | 24.1% |
+
+Even if long agentic work degrades flash's first-pass rate from the benchmark's 96.7% to
+50%, the gated path still **saves ~38–44% of the cost of the strong model that would have
+been needed anyway**. The staged ladder is the cost-optimal form: escalate flash→glm
+(8x) first, glm→k3 (16x vs flash) only when glm also stagnates.
+
+The linchpin of the quality match is **gate reliability** — a verifier that passes wrong
+work breaks the equivalence. That is exactly what the 2026-09-09/10 trust-boundary
+repairs (A03/A04/A07/A09/A12/A13, PRs #88/#93/#94/#95) buy: the frame above is only
+honest because the gate now actually refuses what it claims to refuse.
+
+### Secondary: when is bare dispatch (no gate) acceptable?
+
+For consults and one-shots — the `--model` surface — the relevant threshold is vs
+fixed-cheap: how long can flash go ungated before its compounded failure probability
+(q^X) makes the gate's insurance worth paying for? **X\* = ln(b/s) / ln(q)**: ~83 units
+at q=0.967, ~27 at q=0.90, ~13 at q=0.80 (a unit ≈ one benchmark sub-task, ~130k tokens).
+Higher q pushes this threshold *out* — reliable flash stays viable bare for longer —
+which is why that table's wall time rises with q. Below the threshold, bare `--model`
+dispatch is fine; above it, use the gated path.
+
+### Caveats, honestly
+
+`q` on long agentic work is **unmeasured** (the v3 29/30 is per-task on bounded fixtures —
+the entire open question, and the most valuable measurement left in the repo);
+rescue-by-strong succeeding where flash failed is assumed (measured on v3, assumed
+beyond); whole-unit redo is pessimistic; screens, not decision-grade (#16).
+
+**The point:** the benchmark corpus (single-unit, quality-tied) could never exercise this
+arithmetic — STOP was the correct ruling for it and governs only the bare-dispatch
+surface. For substantial work, the quality-matched comparison says the gated path —
+flash-first, gates, staged escalation — is cheaper at any task size, and the savings grow
+with flash's first-pass reliability. The remaining unknown is q; the marathon-shaped
+corpus is what measures it.
 
 ## What this repo is
 
