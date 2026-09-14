@@ -44,6 +44,50 @@ could never see it because every task was one unit long. Decompose a task's mode
 - **c** — switching + validation (≈ **$0** here: fingerprints, verifier runs and gates are
   deterministic code, not model calls; E-ship measured the whole dispatch path cost-flat)
 
+### Per-unit success (q) — the one number everything hinges on
+
+**q is the probability that the cheap tier completes one unit of work correctly on the
+first pass: dispatched once, verified green, no repair dispatch, no escalation, no
+stagnation.** It is the quantity that converts the break-even arithmetic from structural
+to empirical, and it plays two different roles depending on the question:
+
+- **Quality-matched frame (substantial work):** q sets the *magnitude* of the savings —
+  `savings(q) = q − b/s` of the strong comparator's cost. You win at almost any q; better
+  q means more money kept.
+- **Bare-dispatch frame (consults/one-shots):** q sets the *threshold* at which ungated
+  dispatch stops being safe — whole-task success is `q^X`, and escalation beats bare
+  dispatch once that compounded probability drops below the price ratio
+  (`X* = ln(b/s)/ln(q)`).
+
+**What a unit is.** The calibration point is the v3 corpus, where one task = one unit:
+~130k tokens, ~$0.009 at flash rates, ~30–40s of focused sub-task. On real agentic work a
+unit is whatever the gate can verify independently — a function, a module, a test-green
+milestone. The unit is the quantum of the break-even arithmetic: `b` and `s` are per-unit
+prices, `X` is the unit count, `q` is per-unit reliability.
+
+**Where the number comes from.** The only measured value is q = 0.967 — the flash arm's
+29/30 hidden-pass on the v3 corpus (#91), which is per-task on single-unit bounded
+fixtures. It is a *calibration anchor*, not a production estimate.
+
+**What q is not.** Not a model property — it is workload-class-relative (bounded
+algorithmic fixtures ≠ agentic refactors ≠ production pipelines), and it is not static:
+it drifts with model updates and roster rotations (the 2026-08-28 rotation replaced both
+tiers; #91 re-measured). Quoting one q without naming its workload class is the same
+error the M4-early comparison made by not interleaving.
+
+**Why failure compounds.** For bare dispatch, whole-task success is `q^X`: at q = 0.90, a
+27-unit task succeeds barely 6% of the time, because one wrong unit can invalidate
+everything downstream of it. This is why long tasks and short tasks live in different
+regimes, and why a corpus of single-unit tasks cannot see the difference.
+
+**How q gets measured on real work — the ledger is the instrument.** Every gated run
+already records what a q sample needs: the task record (`tasks.jsonl`) carries dispatch
+count, first-verify outcome, failure class, and stagnation switches. **q for a real
+workload is simply the fraction of units that verify green on dispatch 1** — so every
+substantial task run through the gated path is a q measurement for free. "q is unmeasured
+on long agentic work" therefore means exactly this: no long/agentic workload has flowed
+through the ledger yet. The instrument exists; feed it.
+
 ### The comparison that matters: quality-matched (keep quality, reduce cost)
 
 The cheap tier alone does not hold the required quality on substantial work — so
@@ -98,16 +142,18 @@ dispatch is fine; above it, use the gated path.
 ### Caveats, honestly
 
 `q` on long agentic work is **unmeasured** (the v3 29/30 is per-task on bounded fixtures —
-the entire open question, and the most valuable measurement left in the repo);
-rescue-by-strong succeeding where flash failed is assumed (measured on v3, assumed
-beyond); whole-unit redo is pessimistic; screens, not decision-grade (#16).
+a calibration anchor, not a production estimate); rescue-by-strong succeeding where flash
+failed is assumed (measured on v3, assumed beyond); whole-unit redo is pessimistic;
+screens, not decision-grade (#16).
 
 **The point:** the benchmark corpus (single-unit, quality-tied) could never exercise this
 arithmetic — STOP was the correct ruling for it and governs only the bare-dispatch
 surface. For substantial work, the quality-matched comparison says the gated path —
 flash-first, gates, staged escalation — is cheaper at any task size, and the savings grow
-with flash's first-pass reliability. The remaining unknown is q; the marathon-shaped
-corpus is what measures it.
+with flash's first-pass reliability. The remaining unknown is q — and the gated path
+measures it on every substantial task it runs: the ledger is the instrument, production
+work is the corpus, and a marathon-shaped eval would only be the controlled version of
+what the ledger accumulates for free.
 
 ## What this repo is
 
