@@ -1225,11 +1225,27 @@ def load_pricing(path):
     return pricing
 
 
-def sum_usage_records(wire_path):
-    """Sum usage.record events in one wire.jsonl (meter.py idiom: usage.record
-    only — step.end also carries usage and would double-count)."""
+_USAGE_FIELDS = ("inputOther", "output", "inputCacheRead", "inputCacheCreation")
+
+
+def scan_usage_records(wire_path):
+    """Sum usage.record events in one wire.jsonl, separating KNOWN from
+    UNKNOWN (A13, #83 M3: missing/truncated usage is unknown, never free).
+
+    meter.py idiom: usage.record only — step.end also carries usage and would
+    double-count. Returns (records, totals, problems):
+
+    - a line that does not parse counts as ``unparseable_lines`` (the torn-
+      write shape a killed child leaves behind);
+    - a usage.record whose usage block is not an object carrying all four
+      numeric token fields, or that names no model, counts as
+      ``malformed_records`` and contributes NOTHING to totals — the absence
+      of numbers must not be read as a zero-priced call;
+    - only well-formed records feed totals.
+    """
     totals = {}
     records = 0
+    problems = {"unparseable_lines": 0, "malformed_records": 0}
     for line in Path(wire_path).read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
@@ -1237,17 +1253,31 @@ def sum_usage_records(wire_path):
         try:
             evt = json.loads(line)
         except json.JSONDecodeError:
+            problems["unparseable_lines"] += 1
             continue
         if evt.get("type") != "usage.record":
             continue
-        model = evt.get("model") or "unknown"
-        usage = evt.get("usage", {})
+        model = evt.get("model")
+        usage = evt.get("usage")
+        if (not isinstance(model, str) or not model
+                or not isinstance(usage, dict)
+                or not all(isinstance(usage.get(k), (int, float))
+                           and not isinstance(usage.get(k), bool)
+                           for k in _USAGE_FIELDS)):
+            problems["malformed_records"] += 1
+            continue
         records += 1
         bucket = totals.setdefault(model, {"inputOther": 0, "output": 0,
                                            "inputCacheRead": 0,
                                            "inputCacheCreation": 0})
         for k in bucket:
-            bucket[k] += usage.get(k, 0)
+            bucket[k] += usage[k]
+    return records, totals, problems
+
+
+def sum_usage_records(wire_path):
+    """Compat 2-tuple over scan_usage_records (S6 cross-checks this shape)."""
+    records, totals, _problems = scan_usage_records(wire_path)
     return records, totals
 
 
@@ -1302,9 +1332,12 @@ def cmd_record(args):
     if args.wire:
         records = 0
         totals = {}
+        problems = {"unparseable_lines": 0, "malformed_records": 0}
         for wire in args.wire:
-            n, t = sum_usage_records(wire)
+            n, t, p = scan_usage_records(wire)
             records += n
+            problems["unparseable_lines"] += p["unparseable_lines"]
+            problems["malformed_records"] += p["malformed_records"]
             for model, bucket in t.items():
                 agg = totals.setdefault(model, {"inputOther": 0, "output": 0,
                                                 "inputCacheRead": 0,
@@ -1313,10 +1346,21 @@ def cmd_record(args):
                     agg[k] += bucket[k]
         row["usage_records"] = records
         row["tokens_by_model"] = totals
+        # A13 (#83 M3): missing, unreadable, truncated or incomplete expected
+        # usage is UNKNOWN, never free — an unobserved call must not be
+        # recorded as $0. Dispatches happened but no usage.record survived, or
+        # a record/wire line was malformed: the total is null, the row says
+        # why, and the valid per-model partials stay visible.
+        row["usage_unknown"] = bool(
+            problems["unparseable_lines"] or problems["malformed_records"]
+            or (records == 0 and len(state["dispatches"]) > 0))
+        if row["usage_unknown"]:
+            row["usage_problems"] = problems
         if args.pricing:
             by_model, total = price_tokens(totals, load_pricing(args.pricing))
             row["cost_usd_by_model"] = by_model
-            row["api_cost_usd"] = total
+            row["api_cost_usd"] = (None if row["usage_unknown"] or total is None
+                                   else total)
     out = Path(sroot) / "tasks.jsonl"
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "a", encoding="utf-8") as f:
