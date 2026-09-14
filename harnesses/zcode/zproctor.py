@@ -325,22 +325,34 @@ def read_fail_open(since_ms):
 
     The shims cannot append to the hash-chained journal - two writers would break
     the chain - so they write here and acceptance reads it.
+
+    A09 (#84): an unreadable log is UNKNOWN, not clean. The old `except
+    OSError: return []` read a missing or unreadable evidence file as "no
+    gaps ever happened". Missing (never written) stays clean - the shims
+    create the file on the first gap - but present-and-unreadable returns
+    None, and a line that does not parse is a torn record that cannot be
+    dated, so it is counted as malformed rather than dropped silently.
+    Returns (gaps, malformed); gaps is None when the log is unreadable.
     """
-    out = []
+    out, malformed = [], 0
     try:
-        for line in FAIL_OPEN_LOG.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            parts = line.split("	")
-            try:
-                ms = int(parts[0])
-            except (ValueError, IndexError):
-                continue
-            if ms >= since_ms:
-                out.append({"epoch_ms": ms, "detail": "	".join(parts[1:])[:160]})
+        text = FAIL_OPEN_LOG.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return out, malformed
     except OSError:
-        return []
-    return out
+        return None, malformed
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("	")
+        try:
+            ms = int(parts[0])
+        except (ValueError, IndexError):
+            malformed += 1
+            continue
+        if ms >= since_ms:
+            out.append({"epoch_ms": ms, "detail": "	".join(parts[1:])[:160]})
+    return out, malformed
 
 
 def load_roster():
@@ -535,6 +547,26 @@ def main():
         verifier = a.verifier or st.get("verifier")
         if not verifier:
             emit({"ok": False, "error": "not_initialized", "hint": "run init first"}, 2)
+        # A07 (#84): the verification contract is pinned at init. A verifier
+        # supplied at verify time that differs from the pin is a substitution,
+        # not an override - `verify --verifier python -c pass` used to accept
+        # bad source on the strength of a no-op exam. Re-init deliberately to
+        # change the exam.
+        pinned_verifier = st.get("verifier")
+        if (a.verifier and pinned_verifier is not None
+                and list(a.verifier) != list(pinned_verifier)):
+            append_event(td, "VERIFY_FAILED",
+                         {"tree": tree_id(ws), "rc": None,
+                          "reason": "verifier_changed_since_init",
+                          "pinned_argv": list(pinned_verifier),
+                          "supplied_argv": list(a.verifier),
+                          "fingerprint": "verifier_changed_since_init"})
+            emit({"ok": False, "cmd": "verify", "passed": False,
+                  "error": "verifier_changed_since_init",
+                  "pinned_argv": list(pinned_verifier),
+                  "supplied_argv": list(a.verifier),
+                  "hint": "the verifier is pinned at init; re-init deliberately "
+                          "to change the exam"}, 1)
         init_pl = st.get("init_payload") or {}
         sealed = init_pl.get("sealed") or {}
         scope = init_pl.get("scope") or []
@@ -630,8 +662,24 @@ def main():
         # Fail-open is bounded, not free: the shims allow a tool call they could
         # not adjudicate, but acceptance refuses if any such gap opened during the
         # task. Fast path stays fast; the irreversible boundary stays closed.
+        # A09 (#84): unreadable or torn evidence is UNKNOWN, not clean - a
+        # missing log is legitimately clean (the shims create it on the first
+        # gap), but one that exists and cannot be read, or carries undatable
+        # torn lines, refuses acceptance.
         init_ms = int((st.get("init_payload") or {}).get("epoch_ms") or 0)
-        gaps = read_fail_open(init_ms)
+        gaps, malformed = read_fail_open(init_ms)
+        if gaps is None:
+            emit({"ok": False, "error": "gate_evidence_unreadable",
+                  "path": str(FAIL_OPEN_LOG),
+                  "hint": "the fail-open record exists but cannot be read; "
+                          "that is UNKNOWN evidence, not clean. Inspect and "
+                          "repair it before accepting."}, 1)
+        if malformed:
+            emit({"ok": False, "error": "gate_evidence_malformed",
+                  "count": malformed, "path": str(FAIL_OPEN_LOG),
+                  "hint": "torn fail-open lines cannot be dated, so they may "
+                          "belong to this task. Inspect and repair the log "
+                          "before accepting."}, 1)
         if gaps:
             emit({"ok": False, "error": "gate_failed_open",
                   "count": len(gaps), "events": gaps[:5],

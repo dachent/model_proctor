@@ -21,7 +21,10 @@ probe never ran.
 Not a unittest module on purpose (the suite's discover pattern is `test*`):
 these document PRE-fix behavior. When the #84 fixes land, each probe flips to
 NOT-REPRODUCED and should then be converted into a refusing regression test
-in this directory.
+in this directory. A07 and A09 were fixed and converted 2026-09-09 — see
+test_gate_refusals.py; those two probes now report NOT-REPRODUCED, which is
+the expected post-fix flip. A08 (dispatch reservation) and C02 (keyed hash
+chain) remain open until #83 M1 lands its transactional admission design.
 
 Usage: python harnesses/zcode/tests/probe_defects.py
 Exit code is always 0 — this is evidence collection, not a gate.
