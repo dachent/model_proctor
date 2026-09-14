@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  suites:
+    # windows-latest per HARNESS-004 (#70): the control plane is Windows-native
+    # (icacls ACL hardening, Job Objects, path semantics), and the flat-install
+    # regression (#92) shipped precisely because nothing ran the installed
+    # layout anywhere. Ubuntu would green-light code that cannot run here.
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Suite matrix
+        shell: pwsh
+        run: |
+          $suites = @(
+            "harnesses/kimi-code/delegate/tests",
+            "harnesses/kimi-code/runner/tests",
+            "core/tests",
+            "scripts/tests",
+            "evals/tests",
+            "harnesses/zcode/tests"
+          )
+          $failed = 0
+          foreach ($s in $suites) {
+            Write-Host "=== $s ==="
+            python -m unittest discover -s $s 2>&1 | Tee-Object -Variable out
+            if ($LASTEXITCODE -ne 0) { $failed = 1; Write-Host "SUITE FAILED: $s" }
+          }
+          if ($failed -eq 1) { exit 1 }
+      - name: Required tools present after a flat install into a temp dir
+        shell: pwsh
+        run: |
+          # Smoke the installer's own contract without touching C:\Tools:
+          # every REQUIRED_AFTER_INSTALL file must exist in the copy set.
+          python -c "import sys; sys.path.insert(0, 'scripts'); import install; missing = [n for n in install.REQUIRED_AFTER_INSTALL if not (install.KIMI / 'delegate' / n).is_file() and not (install.KIMI / 'runner' / n).is_file() and not (install.ROOT / 'core' / n).is_file() and not (install.ROOT / 'evals' / n).is_file()]; print('missing:', missing); sys.exit(1 if missing else 0)"

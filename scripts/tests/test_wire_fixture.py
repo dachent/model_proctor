@@ -132,21 +132,20 @@ class RenameDetectionTest(unittest.TestCase):
             drifted = tf.name
 
         try:
-            n, totals = runner.sum_usage_records(drifted)
-            # The tell-tale shape: records still found...
-            self.assertGreater(n, 0)
-            # ...but the bucket is silently zero...
-            for buckets in totals.values():
-                self.assertEqual(buckets.get("inputOther", 0), 0)
-            # ...and cost is a NUMBER, not None, so a null-check passes.
-            _, total = runner.price_tokens(
-                totals, runner.load_pricing(str(PRICING)))
-            self.assertIsNotNone(total,
-                                 "the danger is precisely that this is not None")
-            # The non-zero assertion is what catches it.
-            with self.assertRaises(AssertionError):
-                for buckets in totals.values():
-                    self.assertGreater(buckets.get("inputOther", 0), 0)
+            # A13 (#94, merged) strengthened the contract this test pinned:
+            # a renamed field no longer silently zeroes a bucket — the
+            # record is malformed, excluded from totals, and counted.
+            rec, tot, problems = runner.scan_usage_records(drifted)
+            self.assertEqual(rec, 0,
+                             "renamed-field records must not meter as valid")
+            self.assertGreater(problems["malformed_records"], 0,
+                               "the rename is caught AS malformed, named")
+            self.assertEqual(totals := tot, {} if not tot else tot)
+            # The compat wrapper surfaces the same fact: zero valid records.
+            n, _ = runner.sum_usage_records(drifted)
+            self.assertEqual(n, 0)
+            # And cmd_record's row would flag usage_unknown on exactly this
+            # shape (records == 0 with dispatches present) — never $0.
         finally:
             Path(drifted).unlink(missing_ok=True)
 

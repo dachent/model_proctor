@@ -80,6 +80,11 @@ never through the harness root.
   denominator)
 - Real-dispatch pilot: `python harnesses/kimi-code/runner/pilot.py --cases <id> --lane <lane> --max-dispatches 1`
   (spends real tokens)
+- First-pass reliability (q) from ledger/eval rows: `python evals/q_report.py <rows.jsonl>...`
+  (free — the ledger is the q instrument; see README "The routing break-even")
+- CI: GitHub Actions runs every suite on `windows-latest` on push/PR to main
+  (`.github/workflows/ci.yml`, HARNESS-004 #70) — the control plane is
+  Windows-native; green on ubuntu would lie
 
 - `core/decisions.py` — the shared decision core: lane table, failure fingerprints,
   stagnation thresholds, scope matching, verification-affecting set. Every harness
