@@ -18,37 +18,53 @@ from catalog import (  # noqa: E402
 
 
 CATALOG_PAYLOAD = {
+    "nextCursor": "opaque-next-page",
     "data": [
         {
+            "description": "Fast Codex worker.",
+            "displayName": "GPT-5.6 Luna",
+            "hidden": False,
             "id": "gpt-5.6-luna",
+            "isDefault": False,
+            "model": "gpt-5.6-luna",
             "defaultReasoningEffort": "medium",
             "supportedReasoningEfforts": [
-                {"reasoningEffort": "low"},
-                {"reasoningEffort": "medium"},
-                {"reasoningEffort": "high"},
-                {"reasoningEffort": "max"},
+                {"description": "Low", "reasoningEffort": "low"},
+                {"description": "Medium", "reasoningEffort": "medium"},
+                {"description": "High", "reasoningEffort": "high"},
+                {"description": "Maximum", "reasoningEffort": "max"},
             ],
         },
         {
+            "description": "Balanced Codex worker.",
+            "displayName": "GPT-5.6 Terra",
+            "hidden": False,
             "id": "gpt-5.6-terra",
+            "isDefault": True,
+            "model": "gpt-5.6-terra",
             "defaultReasoningEffort": "medium",
             "supportedReasoningEfforts": [
-                {"reasoningEffort": "low"},
-                {"reasoningEffort": "medium"},
-                {"reasoningEffort": "high"},
-                {"reasoningEffort": "max"},
-                {"reasoningEffort": "ultra"},
+                {"description": "Low", "reasoningEffort": "low"},
+                {"description": "Medium", "reasoningEffort": "medium"},
+                {"description": "High", "reasoningEffort": "high"},
+                {"description": "Maximum", "reasoningEffort": "max"},
+                {"description": "Ultra", "reasoningEffort": "ultra"},
             ],
         },
         {
+            "description": "Highest-capability Codex worker.",
+            "displayName": "GPT-6 Astra",
+            "hidden": False,
             "id": "gpt-6-astra",
-            "defaultReasoningEffort": "medium",
+            "isDefault": False,
+            "model": "gpt-6-astra",
+            "defaultReasoningEffort": "low",
             "supportedReasoningEfforts": [
-                {"reasoningEffort": "low"},
-                {"reasoningEffort": "medium"},
-                {"reasoningEffort": "high"},
-                {"reasoningEffort": "max"},
-                {"reasoningEffort": "ultra"},
+                {"description": "Low", "reasoningEffort": "low"},
+                {"description": "Medium", "reasoningEffort": "medium"},
+                {"description": "High", "reasoningEffort": "high"},
+                {"description": "Maximum", "reasoningEffort": "max"},
+                {"description": "Ultra", "reasoningEffort": "ultra"},
             ],
         },
     ]
@@ -93,6 +109,13 @@ class CatalogAndPresetContract(unittest.TestCase):
         self.assertEqual((selected.model, selected.effort),
                          ("gpt-5.6-luna", "medium"))
 
+    def test_direct_astra_uses_its_live_catalog_default_effort(self):
+        selected = resolve_selection(
+            self.catalog, self.config, model="gpt-6-astra"
+        )
+        self.assertEqual((selected.model, selected.effort),
+                         ("gpt-6-astra", "low"))
+
     def test_supported_explicit_effort_overrides_a_preset(self):
         selected = resolve_selection(
             self.catalog, self.config, preset="terra", effort="ultra"
@@ -119,6 +142,8 @@ class CatalogAndPresetContract(unittest.TestCase):
         malformed_configs = (
             "not json",
             json.dumps({"schema": 2, "presets": {}}),
+            json.dumps({"schema": True, "presets": {}}),
+            json.dumps({"schema": 1.0, "presets": {}}),
             json.dumps({"schema": 1, "presets": {"luna": {"model": "x"}}}),
             '{"schema": 1, "presets": {"luna": {"model": "x", "effort": "low"}, '
             '"luna": {"model": "y", "effort": "high"}}}',

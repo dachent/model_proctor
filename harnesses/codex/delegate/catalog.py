@@ -45,8 +45,8 @@ def _nonempty_string(value: Any, label: str) -> str:
 
 def parse_catalog(payload: Any) -> Mapping[str, ModelRecord]:
     """Validate an app-server ``model/list`` payload into immutable records."""
-    if not isinstance(payload, dict) or set(payload) != {"data"}:
-        raise CatalogContractError("catalog must be an object containing only data")
+    if not isinstance(payload, dict) or "data" not in payload:
+        raise CatalogContractError("catalog must be an object containing data")
     data = payload["data"]
     if not isinstance(data, list):
         raise CatalogContractError("catalog data must be an array")
@@ -55,10 +55,11 @@ def parse_catalog(payload: Any) -> Mapping[str, ModelRecord]:
     for index, entry in enumerate(data):
         if not isinstance(entry, dict):
             raise CatalogContractError(f"catalog record {index} must be an object")
-        if set(entry) != {
+        required_fields = {
             "id", "defaultReasoningEffort", "supportedReasoningEfforts"
-        }:
-            raise CatalogContractError(f"catalog record {index} has invalid fields")
+        }
+        if not required_fields.issubset(entry):
+            raise CatalogContractError(f"catalog record {index} is missing required fields")
         model_id = _nonempty_string(entry["id"], f"catalog record {index} id")
         default = _nonempty_string(
             entry["defaultReasoningEffort"],
@@ -71,7 +72,7 @@ def parse_catalog(payload: Any) -> Mapping[str, ModelRecord]:
             )
         efforts = set()
         for effort_index, effort_entry in enumerate(supported_raw):
-            if not isinstance(effort_entry, dict) or set(effort_entry) != {"reasoningEffort"}:
+            if not isinstance(effort_entry, dict) or "reasoningEffort" not in effort_entry:
                 raise CatalogContractError(
                     f"catalog record {index} supported effort {effort_index} is malformed"
                 )
@@ -114,7 +115,9 @@ def load_local_config(path: str | Path) -> LocalConfig:
         raise CatalogContractError("local config is not valid JSON") from exc
     if not isinstance(payload, dict) or set(payload) != {"schema", "presets"}:
         raise CatalogContractError("local config must contain only schema and presets")
-    if payload["schema"] != 1:
+    if (isinstance(payload["schema"], bool)
+            or not isinstance(payload["schema"], int)
+            or payload["schema"] != 1):
         raise CatalogContractError("local config schema must be 1")
     raw_presets = payload["presets"]
     if not isinstance(raw_presets, dict):
