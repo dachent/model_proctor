@@ -17,6 +17,11 @@ import delegate  # noqa: E402
 CATALOG = {"data": [{"id": "gpt-test", "defaultReasoningEffort": "medium",
                       "supportedReasoningEfforts": [
                           {"reasoningEffort": "low"}, {"reasoningEffort": "medium"}]}]}
+TOKEN_USAGE = {"last": {"cachedInputTokens": 1, "inputTokens": 2, "outputTokens": 3,
+                        "reasoningOutputTokens": 4, "totalTokens": 10},
+               "total": {"cachedInputTokens": 5, "inputTokens": 6, "outputTokens": 7,
+                         "reasoningOutputTokens": 8, "totalTokens": 26},
+               "modelContextWindow": 128000}
 
 
 class FakeStdin(io.BytesIO):
@@ -86,7 +91,7 @@ class DelegateTransportContract(unittest.TestCase):
         argv, kwargs = self.calls[1]; self.assertEqual(argv, ["fake-codex", "app-server", "--stdio"])
         sent = [json.loads(line) for line in self.processes[1].stdin.getvalue().decode().splitlines()]
         self.assertEqual([x.get("method") for x in sent], ["initialize", "initialized", "model/list", "thread/start", "turn/start"])
-        self.assertIn("clientInfo", sent[0]["params"])
+        self.assertEqual(sent[0]["params"], {"clientInfo": {"name": "model-proctor", "version": "1"}, "capabilities": {}})
         self.assertEqual(sent[3]["params"]["model"], "gpt-test")
         self.assertEqual(sent[3]["params"]["sandbox"], "workspace-write")
         self.assertEqual(sent[4]["params"]["threadId"], "th1")
@@ -174,6 +179,27 @@ class DelegateTransportContract(unittest.TestCase):
         streams = [[{"type": "turn.completed", "turn_id": "t1", "usage": usage}]]
         result, code = delegate.run_delegate(self.args(), catalog_payload=CATALOG, popen_factory=self.fake(streams), environ={})
         self.assertEqual(code, 0); self.assertEqual(result["usage"], usage); self.assertNotIn("cost", result)
+
+    def test_schema_shaped_token_usage_notification_is_preserved(self):
+        streams = [[{"id": 1, "result": {}}, {"id": 2, "result": CATALOG}], [
+            {"id": 1, "result": {}}, {"id": 2, "result": CATALOG},
+            {"id": 3, "result": {"thread": {"id": "th1"}}}, {"id": 4, "result": {}},
+            {"method": "thread/tokenUsage/updated", "params": {"threadId": "th1", "turnId": "t1", "tokenUsage": TOKEN_USAGE}},
+            {"method": "turn/updated", "params": {"turn": {"id": "t1", "status": "completed"}}},
+        ]]
+        result, code = delegate.run_delegate(self.args(transport="app-server"), popen_factory=self.fake(streams), environ={})
+        self.assertEqual(code, 0); self.assertEqual(result["usage"], TOKEN_USAGE)
+
+    def test_server_request_is_refused_and_receives_json_rpc_error(self):
+        request = {"jsonrpc": "2.0", "id": "approval-7", "method": "item/commandExecution/requestApproval",
+                   "params": {"command": "do not run"}}
+        streams = [[{"id": 1, "result": {}}, {"id": 2, "result": CATALOG}], [
+            {"id": 1, "result": {}}, {"id": 2, "result": CATALOG}, request,
+        ]]
+        result, code = delegate.run_delegate(self.args(transport="app-server"), popen_factory=self.fake(streams), environ={})
+        self.assertEqual((result["status"], code), ("operational_failure", delegate.EXIT_OPERATIONAL))
+        sent = [json.loads(line) for line in self.processes[1].stdin.getvalue().decode().splitlines()]
+        self.assertEqual(sent[-1], {"jsonrpc": "2.0", "id": "approval-7", "error": {"code": -32000, "message": "server request refused by bounded delegate"}})
 
 
 if __name__ == "__main__": unittest.main()

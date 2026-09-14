@@ -87,6 +87,10 @@ def _terminal_status(event: Mapping[str, Any]) -> str:
 
 def _usage(events: list[Mapping[str, Any]]) -> Any:
     for event in events:
+        params = event.get("params")
+        if event.get("method") == "thread/tokenUsage/updated" and isinstance(params, dict):
+            if params.get("tokenUsage") is not None:
+                return params["tokenUsage"]
         for parent in (event, event.get("params"),
                        event.get("params", {}).get("turn") if isinstance(event.get("params"), dict) else None):
             if isinstance(parent, dict) and parent.get("usage") is not None:
@@ -145,7 +149,7 @@ def _run(process: Callable[..., Any], argv: list[str], *, input: bytes, cwd: Opt
 def _catalog_rpc(executable: str, process: Callable[..., Any], env: Mapping[str, str]) -> tuple[Mapping[str, Any], list[dict[str, Any]]]:
     requests = [
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-            "clientInfo": {"name": "model-proctor", "version": "1", "capabilities": {}}}},
+            "clientInfo": {"name": "model-proctor", "version": "1"}, "capabilities": {}}},
         {"jsonrpc": "2.0", "method": "initialized", "params": {}},
         {"jsonrpc": "2.0", "id": 2, "method": "model/list", "params": {}},
     ]
@@ -174,8 +178,7 @@ class _RpcSession:
             raw = self.proc.stdout.readline()
             if not raw:
                 raise ValueError("app-server ended before required response")
-            event = _json_lines(raw)[0]
-            self.events.append(event)
+            event = self._record(raw)
             if "method" in event:  # notifications may legally interleave RPC responses.
                 continue
             if event.get("id") != required_id:
@@ -187,11 +190,19 @@ class _RpcSession:
             raw = self.proc.stdout.readline()
             if not raw:
                 break
-            event = _json_lines(raw)[0]
-            self.events.append(event)
+            event = self._record(raw)
             if _terminal_event(event):
                 return [item for item in self.events if _terminal_event(item)]
         raise ValueError("app-server transport did not expose a terminal turn event")
+
+    def _record(self, raw: bytes) -> dict[str, Any]:
+        event = _json_lines(raw)[0]
+        self.events.append(event)
+        if "method" in event and "id" in event:
+            self.send({"jsonrpc": "2.0", "id": event["id"], "error": {
+                "code": -32000, "message": "server request refused by bounded delegate"}})
+            raise ValueError("app-server server-to-client request refused")
+        return event
 
     def close(self) -> None:
         try:
@@ -199,7 +210,13 @@ class _RpcSession:
         except Exception:
             pass
         try:
-            self.proc.wait()
+            self.proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            try:
+                self.proc.kill()
+                self.proc.wait(timeout=1)
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -263,7 +280,7 @@ def _app_server(executable: str, selection: Any, task: str, workspace: Path, san
     session = _RpcSession(process, [executable, "app-server", "--stdio"], cwd=str(workspace), env=env)
     try:
         session.send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-            "clientInfo": {"name": "model-proctor", "version": "1", "capabilities": {}}}})
+            "clientInfo": {"name": "model-proctor", "version": "1"}, "capabilities": {}}})
         session.read_response(1)
         session.send({"jsonrpc": "2.0", "method": "initialized", "params": {}})
         session.send({"jsonrpc": "2.0", "id": 2, "method": "model/list", "params": {}})
