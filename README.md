@@ -208,6 +208,16 @@ python -m unittest discover -s harnesses/kimi-code/cascade/tests -v
 python -m unittest discover -s scripts/tests -v
 ```
 
+## Codex catalog delegate
+
+[`harnesses/codex/delegate/`](harnesses/codex/delegate/) is a separate,
+explicit-dispatch adapter. Operators select `--model` or a named local preset;
+it never routes by a Kimi lane or task shape. It validates the live Codex
+app-server catalog, requires a prompt file outside the target workspace, and
+uses exactly the requested `cli` or `app-server` transport with no fallback.
+See its README for the schema-1 Luna/Terra/Astra presets, read-only/write
+sandbox boundary, evidence semantics, and explicit-destination-only installer.
+
 ---
 
 ## Using it from Kimi Code CLI
