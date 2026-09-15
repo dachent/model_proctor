@@ -36,6 +36,26 @@ SKILL_MD = KIMI / "skill" / "model-proctor" / "SKILL.md"
 _IS_WINDOWS = sys.platform == "win32"
 
 
+def _running_elevated():
+    """True when the process token carries an enabled Administrators group.
+
+    GitHub windows runners execute steps elevated, where the hardening's
+    `Administrators:F` ACE legitimately grants write — the non-writability
+    assertions are about the NON-elevated worker threat model. Observed on
+    CI run 34893389742 (test_hardened_roster_is_not_writable).
+    """
+    if not _IS_WINDOWS:
+        return False
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+_ELEVATED = _running_elevated()
+
+
 def load_install():
     """Import install.py under its own name without executing main()."""
     spec = importlib.util.spec_from_file_location("_install_under_test",
@@ -170,6 +190,10 @@ class InstallRerunTest(unittest.TestCase):
     @unittest.skipUnless(_IS_WINDOWS, "icacls hardening is Windows-only")
     def test_hardened_roster_is_not_writable(self):
         """...and the hardening must still actually harden."""
+        if _ELEVATED:
+            self.skipTest("elevated context: Administrators:F grants write "
+                          "by design; this assertion is about the "
+                          "non-elevated worker threat model")
         self.mod.main()
         dst = self.mod.TOOL_DIR / "agents.json"
         with self.assertRaises(PermissionError,
