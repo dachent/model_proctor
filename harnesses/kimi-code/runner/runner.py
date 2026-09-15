@@ -874,6 +874,33 @@ def cmd_dispatch(args):
     if len(state["dispatches"]) >= state["budget"]["max_dispatches"]:
         raise SystemExit(_emit({"error": "dispatch budget exhausted",
                                 "dispatches": len(state["dispatches"])}, 1))
+    # Provider-failure circuit breaker (#75, folded into M1): three trailing
+    # failures with the same provider:<status> fingerprint means the provider
+    # is down for this lane — burning more dispatch budget into the same
+    # wall is the 2026-08-28 incident class (five dispatches into timeouts/
+    # 429 storms before a scripted approach finished the run). The gate
+    # opens via an explicit, counted --reset-provider-gate (the
+    # refuse-unless-explicit pattern), and clears implicitly when a verify
+    # goes green (the task progressed) or the lane legitimately changed.
+    reset_gate = bool(getattr(args, "reset_provider_gate", False))
+    if reset_gate:
+        state["provider_gate_resets"] = int(
+            state.get("provider_gate_resets", 0)) + 1
+        _write_json_atomic(_state_path(sroot), state)
+    else:
+        recent = state["failures"][-3:]
+        if (len(recent) == 3
+                and all(f.get("kind") == "provider_or_tool" for f in recent)
+                and len({f.get("fingerprint") for f in recent}) == 1):
+            raise SystemExit(_emit({
+                "error": "provider_circuit_open",
+                "fingerprint": recent[-1]["fingerprint"],
+                "consecutive_failures": 3,
+                "hint": "the provider is failing repeatedly for this lane; "
+                        "switch lane/provider, or re-run dispatch with "
+                        "--reset-provider-gate as a reviewed decision "
+                        "(counted on state)",
+            }, 1))
     # A6 (#73): orphan surfacing is ADVISORY — fields in the JSON output only.
     # Neither dispatch nor status refuses on orphans: blocking would wedge
     # every legal dispatch after any crash. Age beyond the delegate ceiling
@@ -1084,11 +1111,66 @@ def cmd_verify(args):
         return _emit(receipt, 1)
 
     argv = [sys.executable if a == "{python}" else a for a in task["verifier"]["argv"]]
-    with tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as tf:
-        r = subprocess.run(argv, cwd=ws, stdout=tf, stderr=subprocess.STDOUT,
-                           timeout=state["budget"]["timeout_s"])
-        tf.seek(0)
-        output = tf.read()
+    # A05 (#83 M2 slice): the verifier runs in a sanitized environment. An
+    # inherited PYTHONOPTIMIZE strips every assert in the verifier — a
+    # failing exam silently passes (reproduced in the 2026-09-07 review);
+    # PYTHONSTARTUP would inject arbitrary code into a bare `python` start.
+    # PYTHONDONTWRITEBYTECODE prevents stale .pyc reuse (the full fresh-
+    # cache namespace is M2-proper; this closes the env door).
+    verifier_env = {k: v for k, v in os.environ.items()
+                    if k not in ("PYTHONOPTIMIZE", "PYTHONSTARTUP")}
+    verifier_env["PYTHONDONTWRITEBYTECODE"] = "1"
+    try:
+        with tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as tf:
+            r = subprocess.run(argv, cwd=ws, stdout=tf, stderr=subprocess.STDOUT,
+                               timeout=state["budget"]["timeout_s"],
+                               env=verifier_env)
+            tf.seek(0)
+            output = tf.read()
+    except subprocess.TimeoutExpired:
+        # A01 (#83 M1): a verifier timeout is a REFUSED receipt, never a
+        # crash. The pre-fix behavior — the exception propagating, state
+        # untouched — left the previous green receipt in place, so
+        # verify(green) -> verify(timeout) -> accept certified work whose
+        # latest verification never finished. The red receipt below
+        # invalidates that path: accept now refuses on "receipt not green".
+        receipt = {
+            "task_id": task["task_id"],
+            "passed": False,
+            "rejected": "verifier_timeout",
+            "verifier_exit": None,
+            "timeout_s": state["budget"]["timeout_s"],
+            "dispatch_seq": len(state["dispatches"]),
+            "verifier_argv": task["verifier"]["argv"],
+            "tree_sig": tree_signature(ws),
+            "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        _write_json_atomic(_receipt_path(sroot, task["task_id"]), receipt)
+        return _emit({"error": "verifier_timeout",
+                      "detail": "the verifier exceeded the task's timeout "
+                                "budget; this refusal replaces any earlier "
+                                "receipt, so acceptance is blocked until a "
+                                "verify completes",
+                      "timeout_s": state["budget"]["timeout_s"],
+                      "receipt": receipt}, 1)
+    except OSError as exc:
+        # A01 companion: the verifier could not launch at all (missing
+        # interpreter/binary) — same refused-receipt contract.
+        receipt = {
+            "task_id": task["task_id"],
+            "passed": False,
+            "rejected": "verifier_launch_failed",
+            "verifier_exit": None,
+            "launch_error": type(exc).__name__,
+            "dispatch_seq": len(state["dispatches"]),
+            "verifier_argv": task["verifier"]["argv"],
+            "tree_sig": tree_signature(ws),
+            "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        _write_json_atomic(_receipt_path(sroot, task["task_id"]), receipt)
+        return _emit({"error": "verifier_launch_failed",
+                      "launch_error": type(exc).__name__,
+                      "receipt": receipt}, 1)
     passed = r.returncode == 0
     receipt = {
         "task_id": task["task_id"],
@@ -1123,6 +1205,16 @@ def cmd_verify(args):
         cls, rec = classify_and_recommend(state, state["lane"])
         receipt["failure_class"] = cls
         receipt["recommendation"] = rec
+    elif state["failures"]:
+        # A06 (#83 M1): a green verify clears the failure history. The
+        # zcode projection already had this semantics ("a pass clears the
+        # stagnation run") — without it here, failures from BEFORE a green
+        # verify survived and counted toward a later stagnation switch,
+        # ordering a lateral switch on a task that was actually progressing.
+        # It also implicitly clears the provider circuit breaker: green
+        # verification is the definition of "the task progressed".
+        state["failures"] = []
+        _write_json_atomic(_state_path(sroot), state)
     return _emit(receipt, 0 if passed else 1)
 
 
@@ -1132,6 +1224,32 @@ def cmd_accept(args):
     sroot = _state_root(ws, args.state_dir)
     state = _load_state(sroot)
     check_state_identity(state, task, ws, sroot)
+    # A02-lite (#83 M1): acceptance refuses while a dispatch is in flight.
+    # The journal's dispatch_open entries (fsync'd before spawn, #73/A1) are
+    # the live-writer signal: an open entry younger than the delegate
+    # ceiling (timeout + 120s) means a worker may be mutating the tree RIGHT
+    # NOW — accepting mid-write certifies a tree that is still changing.
+    # Older open entries are orphans (advisory per #73), not live writers.
+    # The residual race (dispatch finishing between this check and the
+    # state write below) is M1-proper's transactional-store territory; this
+    # closes the reproduction: accept during a live writer.
+    _open = _journal_open(sroot)
+    _ceiling = (state.get("budget", {}).get("timeout_s",
+                                            DEFAULT_BUDGET["timeout_s"]) + 120)
+    _live = sorted(
+        did for did, e in _open.items()
+        if (_t := _ts_to_epoch(e.get("at"))) is not None
+        and time.time() - _t <= _ceiling)
+    if _live:
+        raise SystemExit(_emit({
+            "accepted": False,
+            "reason": "dispatch_in_flight: a dispatch is currently open for "
+                      "this task's journal; the tree may be mutating under "
+                      "this acceptance",
+            "live_dispatch_ids": _live,
+            "hint": "wait for the dispatch to finish (status shows it), or "
+                    "journal --ack <id> if it is a confirmed orphan",
+        }, 1))
     rp = _receipt_path(sroot, task["task_id"])
     if not rp.is_file():
         raise SystemExit(_emit({"accepted": False, "reason": "no receipt; run verify"}, 1))
@@ -1495,6 +1613,13 @@ def main(argv=None):
         if name == "dispatch":
             p.add_argument("--delegate", default=None)
             p.add_argument("--agent-map", default=None)
+            # #75 (folded into M1): explicit, counted override for the
+            # provider-failure circuit breaker — the refuse-unless-explicit
+            # pattern shared with --reinit / --allow-zero-dispatch.
+            p.add_argument("--reset-provider-gate", action="store_true",
+                           help="reset the provider-failure circuit breaker "
+                                "as a reviewed decision (the trip count is "
+                                "recorded on state)")
         if name == "record":
             p.add_argument("--wire", nargs="+", default=None,
                            help="one or more wire.jsonl files for usage metering")
