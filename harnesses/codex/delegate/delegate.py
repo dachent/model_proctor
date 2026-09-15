@@ -142,15 +142,36 @@ def _load_config(path: Optional[str], preset: Optional[str]) -> LocalConfig:
     return load_local_config(path)
 
 
-def _nested(value: Any) -> bool:
-    if isinstance(value, dict):
-        if "type" in value and not isinstance(value["type"], str):
+def _nested(event: Mapping[str, Any]) -> bool:
+    # Only protocol event/item nodes have Codex discriminators. Tool payloads
+    # (including MCP arguments and structuredContent) are opaque application data.
+    containers = [event]
+    for name in ("params", "result"):
+        value = event.get(name)
+        if isinstance(value, dict):
+            containers.append(value)
+    for container in list(containers):
+        turn = container.get("turn")
+        if isinstance(turn, dict):
+            containers.append(turn)
+        thread = container.get("thread")
+        turns = thread.get("turns") if isinstance(thread, dict) else None
+        if isinstance(turns, list):
+            containers.extend(turn for turn in turns if isinstance(turn, dict))
+    nodes = [event]
+    for container in containers:
+        item = container.get("item")
+        if isinstance(item, dict):
+            nodes.append(item)
+        items = container.get("items")
+        if isinstance(items, list):
+            nodes.extend(item for item in items if isinstance(item, dict))
+    for node in nodes:
+        if "type" in node and not isinstance(node["type"], str):
             raise ValueError("Codex event type must be a string")
-        return value.get("type") in ("collabAgentToolCall", "subAgentActivity") or any(
-                   key in {"collabAgentToolCall", "subAgentActivity"} or _nested(item)
-                   for key, item in value.items())
-    if isinstance(value, list):
-        return any(_nested(item) for item in value)
+        if (node.get("type") in ("collabAgentToolCall", "subAgentActivity")
+                or any(name in node for name in ("collabAgentToolCall", "subAgentActivity"))):
+            return True
     return False
 
 
@@ -190,6 +211,11 @@ def _usage(events: list[Mapping[str, Any]]) -> Any:
             if isinstance(parent, dict) and parent.get("usage") is not None:
                 observed = parent["usage"]
     return observed
+
+
+def _direct_id(value: Any, name: str) -> Optional[str]:
+    identity = value.get(name) if isinstance(value, dict) else None
+    return identity if isinstance(identity, str) and identity else None
 
 
 def _id_from(event: Mapping[str, Any], *names: str) -> Optional[str]:
@@ -234,8 +260,8 @@ def _observe(event: dict[str, Any], result: dict[str, Any]) -> None:
                 and params.get("threadId") == result["thread_id"]):
             # Until turn/start responds, a matching-thread notification is still evidence.
             turn = params.get("turn")
-            observed_turn = _id_from(turn, "id") if isinstance(turn, dict) else None
-            result["turn_id"] = result["turn_id"] or observed_turn or _id_from(params, "turn_id", "turnId")
+            result["turn_id"] = (result["turn_id"] or _direct_id(turn, "id")
+                                 or _direct_id(params, "turn_id") or _direct_id(params, "turnId"))
     if "method" in event and not isinstance(event["method"], str):
         raise ValueError("Codex RPC method must be a string")
     if _terminal_event(event):
@@ -341,8 +367,6 @@ class _RpcSession:
                 continue
             if event.get("id") != required_id:
                 raise ValueError("app-server response order was invalid")
-            if "error" in event:
-                raise RpcFailure()
             return event
 
     def read_terminal(self, thread_id: str, turn_id: str) -> dict[str, Any]:
@@ -351,7 +375,7 @@ class _RpcSession:
             turn = params.get("turn") if isinstance(params, dict) else None
             return ("method" in event and isinstance(params, dict)
                     and params.get("threadId") == thread_id
-                    and isinstance(turn, dict) and _id_from(turn, "id") == turn_id
+                    and _direct_id(turn, "id") == turn_id
                     and _terminal_event(event))
         for event in self.events:
             if matches(event):
@@ -373,6 +397,8 @@ class _RpcSession:
             self.send({"jsonrpc": "2.0", "id": event["id"], "error": {
                 "code": -32000, "message": "server request refused by bounded delegate"}})
             raise ValueError("app-server server-to-client request refused")
+        if "method" not in event and "error" in event:
+            raise RpcFailure()
         return event
 
     def close(self) -> None:
@@ -444,7 +470,7 @@ def _app_server(executable: str, selection: Any, task: str, workspace: Path, san
             "input": [{"type": "text", "text": task}], "sandboxPolicy": policy})
         payload = turn_response.get("result")
         turn = payload.get("turn") if isinstance(payload, dict) else None
-        turn_id = _id_from(turn, "id") if isinstance(turn, dict) else None
+        turn_id = _direct_id(turn, "id")
         if turn_id is None:
             raise ValueError("app-server turn response lacked a turn id")
         result["turn_id"] = turn_id

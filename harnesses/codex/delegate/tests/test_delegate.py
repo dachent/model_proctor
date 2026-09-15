@@ -302,6 +302,48 @@ class DelegateTransportContract(unittest.TestCase):
                                      (delegate.EXIT_OPERATIONAL, "failed" if matching_follows else "operational_failure",
                                       "th1", "tu1"))
 
+    def test_rpc_error_during_terminal_wait_emits_one_bound_failure(self):
+        """An error after turn acknowledgement must defeat a later matching terminal."""
+        for response_id in (4, "other-response", None):
+            with self.subTest(response_id=response_id):
+                prior_terminal = {"method": "turn/completed", "params": {
+                    "threadId": "other-thread", "turn": {"id": "other-turn", "status": "completed"}}}
+                events = self.app_events()
+                events[-1:-1] = [prior_terminal,
+                    {"method": "thread/tokenUsage/updated", "params": {
+                        "threadId": "th1", "turnId": "tu1", "tokenUsage": TOKEN_USAGE}},
+                    {"jsonrpc": "2.0", "id": response_id,
+                     "error": {"code": -32000, "message": "private server detail"}}]
+                proc = FakeProcess(events)
+                run = delegate.run_delegate
+                output = io.StringIO()
+                with patch.object(sys, "argv", ["delegate", "--model", "gpt-test",
+                        "--transport", "app-server", "--workspace", str(self.workspace),
+                        "--task-file", str(self.task)]), patch.object(delegate, "run_delegate",
+                        side_effect=lambda args: run(args, catalog_payload=CATALOG,
+                            popen_factory=lambda *args, **kwargs: proc, environ={})), \
+                        redirect_stdout(output), self.assertRaises(SystemExit) as stopped:
+                    delegate.main()
+                self.assertEqual(len(output.getvalue().splitlines()), 1)
+                result = json.loads(output.getvalue())
+                self.assert_bound_failure(result, stopped.exception.code, "app-server")
+                self.assertEqual((result["thread_id"], result["turn_id"], result["usage"],
+                                  result["terminal_evidence"], result["error"]),
+                                 ("th1", "tu1", TOKEN_USAGE, [prior_terminal], "RpcFailure"))
+
+    def test_server_request_during_terminal_wait_is_refused(self):
+        """A server request still receives its refusal response while waiting for a turn."""
+        events = self.app_events()
+        events.insert(-1, {"jsonrpc": "2.0", "id": "approval-7",
+            "method": "item/commandExecution/requestApproval", "params": {"command": "do not run"}})
+        result, code = delegate.run_delegate(self.args(transport="app-server"),
+            catalog_payload=CATALOG, popen_factory=self.fake([events]), environ={})
+        self.assert_bound_failure(result, code, "app-server")
+        self.assertEqual(result["error"], "ValueError")
+        sent = [json.loads(line) for line in self.processes[0].stdin.getvalue().splitlines()]
+        self.assertEqual(sent[-1], {"jsonrpc": "2.0", "id": "approval-7", "error": {
+            "code": -32000, "message": "server request refused by bounded delegate"}})
+
     def test_matching_terminal_before_turn_response_is_retained(self):
         """A terminal notification racing the response must remain matchable."""
         events = self.app_events()
@@ -329,6 +371,48 @@ class DelegateTransportContract(unittest.TestCase):
         result, code = delegate.run_delegate(self.args(transport="app-server"), catalog_payload=CATALOG,
             popen_factory=self.fake([events]), environ={})
         self.assert_bound_failure(result, code, "app-server")
+
+    def test_turn_start_rejects_surrogate_turn_ids(self):
+        """Only direct result.turn.id may authorize terminal matching."""
+        for container in ("result", "params", "arguments"):
+            for early in (None, "direct", "surrogate"):
+                with self.subTest(container=container, early=early):
+                    events = self.app_events()
+                    events[3]["result"]["turn"] = {container: {"id": "tu1"}}
+                    if early == "surrogate":
+                        events[-1]["params"]["turn"] = {
+                            "status": "completed", container: {"id": "tu1"}}
+                    if early:
+                        events[-2:] = [events[-1], events[-2]]
+                    result, code = delegate.run_delegate(self.args(transport="app-server"),
+                        catalog_payload=CATALOG, popen_factory=self.fake([events]), environ={})
+                    self.assert_bound_failure(result, code, "app-server")
+                    self.assertEqual(result["thread_id"], "th1")
+                    self.assertEqual(result["turn_id"], "tu1" if early == "direct" else None)
+                    self.assertEqual(result["terminal_evidence"], [events[-2]] if early else [])
+
+    def test_terminal_surrogate_turn_ids_do_not_match(self):
+        """Surrogate terminal IDs must not complete either side of the response race."""
+        for container in ("result", "params", "arguments"):
+            for early in (False, True):
+                for matching_follows in (False, True):
+                    with self.subTest(container=container, early=early, matching=matching_follows):
+                        events = self.app_events()
+                        events[-1]["params"]["turn"] = {
+                            "status": "completed", container: {"id": "tu1"}}
+                        surrogate = events[-1]
+                        if early:
+                            events[-2:] = [events[-1], events[-2]]
+                        if matching_follows:
+                            events.append({"method": "turn/completed", "params": {"threadId": "th1",
+                                "turn": {"id": "tu1", "status": "failed"}}})
+                        result, code = delegate.run_delegate(self.args(transport="app-server"),
+                            catalog_payload=CATALOG, popen_factory=self.fake([events]), environ={})
+                        self.assertEqual((code, result["status"], result["thread_id"], result["turn_id"]),
+                            (delegate.EXIT_OPERATIONAL, "failed" if matching_follows else "operational_failure",
+                             "th1", "tu1"))
+                        self.assertEqual(result["terminal_evidence"],
+                            [surrogate, events[-1]] if matching_follows else [surrogate])
 
     def test_empty_child_marker_refuses_without_launch(self):
         """Clearing the marker value must not bypass the child-key guard."""
@@ -542,6 +626,51 @@ class DelegateTransportContract(unittest.TestCase):
                                                      popen_factory=self.fake(streams), environ={})
                 self.assertEqual(code, delegate.EXIT_OPERATIONAL); self.assertTrue(result["nested_dispatch_detected"])
                 self.assertEqual(result["status"], "refused")
+
+    def test_mcp_payloads_are_not_codex_discriminators(self):
+        """MCP arguments and structured results may contain arbitrary type fields."""
+        payloads = [{"type": None}, {"type": []}, {"type": {}},
+                    {"type": "collabAgentToolCall"}, {"subAgentActivity": {"type": None}}]
+        for field in ("arguments", "structuredContent"):
+            for payload in payloads:
+                with self.subTest(field=field, payload=payload):
+                    item = {"id": "mcp-1", "type": "mcpToolCall", "server": "fixture",
+                            "tool": "inspect", "status": "completed", "arguments": {},
+                            "result": {"content": [], "structuredContent": None}, "error": None}
+                    if field == "arguments":
+                        item["arguments"] = payload
+                    else:
+                        item["result"]["structuredContent"] = payload
+                    events = self.app_events()
+                    events.insert(-1, {"method": "item/completed", "params": {
+                        "threadId": "th1", "turnId": "tu1", "item": item}})
+                    result, code = delegate.run_delegate(self.args(transport="app-server"),
+                        catalog_payload=CATALOG, popen_factory=self.fake([events]), environ={})
+                    self.assertEqual((code, result["status"], result["nested_dispatch_detected"]),
+                                     (0, "completed", False))
+                    self.assertEqual(result["terminal_evidence"], [events[-1]])
+
+    def test_actual_codex_item_discriminators_still_refuse(self):
+        """Restricting payload traversal must retain real item-level nesting evidence."""
+        for event_type in ("collabAgentToolCall", "subAgentActivity"):
+            for location in ("cli-item", "notification-item", "response-items", "terminal-items"):
+                with self.subTest(event_type=event_type, location=location):
+                    item = {"id": "nested-1", "type": event_type}
+                    transport = "cli" if location == "cli-item" else "app-server"
+                    events = self.app_events()
+                    if location == "cli-item":
+                        events = [{"type": "item.completed", "item": item}, {"type": "turn.completed"}]
+                    elif location == "notification-item":
+                        events.insert(-1, {"method": "item/completed", "params": {
+                            "threadId": "th1", "turnId": "tu1", "item": item}})
+                    elif location == "response-items":
+                        events[3]["result"]["turn"]["items"] = [item]
+                    else:
+                        events[-1]["params"]["turn"]["items"] = [item]
+                    result, code = delegate.run_delegate(self.args(transport=transport),
+                        catalog_payload=CATALOG, popen_factory=self.fake([events]), environ={})
+                    self.assertEqual((code, result["status"], result["nested_dispatch_detected"]),
+                                     (delegate.EXIT_OPERATIONAL, "refused", True))
 
     def test_cli_resume_is_refused_even_with_a_bound_identity(self):
         identity = json.dumps({"transport": "cli", "model": "gpt-test", "effort": "medium",
