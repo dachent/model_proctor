@@ -204,6 +204,7 @@ Python 3.10+, standard library only, everywhere.
 ```bash
 python -m unittest discover -s harnesses/kimi-code/runner/tests -v    # live path smoke suite (S1–S7)
 python -m unittest discover -s harnesses/kimi-code/delegate/tests -v
+python -m unittest discover -s harnesses/codex/delegate/tests -v
 python -m unittest discover -s harnesses/kimi-code/cascade/tests -v
 python -m unittest discover -s scripts/tests -v
 ```

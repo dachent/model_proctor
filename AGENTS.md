@@ -15,6 +15,9 @@ never through the harness root.
 
 - `harnesses/kimi-code/delegate/` — the wrapper (`delegate.py`), live config (`agents.json`), annotated example
   (`agents.example.json`), tests (`tests/test_delegate.py`), docs (`README.md`).
+- `harnesses/codex/delegate/` — explicit Codex catalog dispatch (`delegate.py`, `catalog.py`), tracked local-config
+  example, tests, and operator documentation. It is a separate adapter with its own explicit-destination installer;
+  it does not inherit Kimi routing or acceptance authority.
 - `harnesses/kimi-code/cascade/` — the deterministic static-cascade controller (`cascade.py`), **frozen research
   artifact**, with plan schema (`cascade-schema.json`), tests (`tests/test_cascade.py` + fixture delegate fake), docs
   (`README.md`). Owns cascade-state.json transitions, caps, legal escalation transitions,
@@ -61,6 +64,7 @@ never through the harness root.
 ## Commands
 
 - Wrapper tests: `python -m unittest discover -s harnesses/kimi-code/delegate/tests -v`
+- Codex catalog delegate tests: `python -m unittest discover -s harnesses/codex/delegate/tests -v`
 - Cascade tests: `python -m unittest discover -s harnesses/kimi-code/cascade/tests -v`
 - Extractor tests: `python -m unittest discover -s scripts/tests -v`
 - Runner smoke suite (MVP-001): `python -m unittest discover -s harnesses/kimi-code/runner/tests -v`
