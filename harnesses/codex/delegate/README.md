@@ -18,7 +18,10 @@ you keep untracked). The tracked example contains the only supplied presets:
 
 Select either an explicit model or one preset. A preset requires `--config`.
 The adapter validates the requested model and effort against live Codex
-`app-server` `model/list` data before dispatch; a catalog mismatch refuses.
+`app-server` `model/list` data before dispatch. It follows every catalog page;
+a catalog mismatch or invalid pagination cursor refuses dispatch.
+
+From the source checkout root:
 
 ```powershell
 python harnesses/codex/delegate/delegate.py `
@@ -39,13 +42,25 @@ Codex app-server session. Pick one explicitly. The adapter performs the live
 app-server catalog check and then runs exactly the requested transport—there is
 no fallback from one transport to the other.
 
+`--timeout SECONDS` sets one deadline shared by catalog preflight and the selected
+transport. It defaults to `1800` seconds and must be finite, positive, and no more
+than `7200`. The option belongs to the adapter and does not change the Codex child
+arguments. A timeout returns `operational_failure` with error class
+`TransportTimeout`; process cleanup uses at most two additional one-second waits.
+
 Each result is one normalized JSON envelope with the selected
 model/effort/transport/sandbox, terminal IDs/evidence, nested-dispatch state,
 and provider usage when it was observed. Usage is otherwise `"unknown"`.
 The adapter never invents a dollar cost, and it makes no Kimi runner receipt or
 production-acceptance claim.
 
-It refuses a dispatch started beneath `PROCTOR_CHILD`. It also refuses a result
+Parsed IDs, terminal evidence, and observed nesting survive later stream or
+cleanup failures. CLI success requires a zero child exit code. App-server success
+requires a terminal notification matching the returned thread and turn IDs and a
+reaped session; an RPC error stops the lifecycle.
+
+It refuses a dispatch whenever the `PROCTOR_CHILD` environment key is present,
+including an empty value. It also refuses a result
 when it observes nested Codex activity (`collabAgentToolCall` or
 `subAgentActivity`), even if a turn otherwise completed.
 
@@ -56,7 +71,8 @@ is refused because the installed CLI cannot reassert that cwd/sandbox binding.
 ## Explicit-destination copy
 
 The separate installer has no default directory and never performs a durable
-installation on its own. Supply the destination deliberately:
+installation on its own. Choose a fresh destination with no manifest-name
+collisions and supply it deliberately:
 
 ```powershell
 python harnesses/codex/delegate/install.py --destination C:\chosen\codex-delegate
@@ -65,4 +81,16 @@ python harnesses/codex/delegate/install.py --destination C:\chosen\codex-delegat
 It copies only `delegate.py`, `catalog.py`, this README, and the tracked config
 example. It never copies a live local config, credentials, or a machine-specific
 Codex executable path. A destination is allowed to be temporary; verify that
-choice before using a durable location.
+choice before using a durable location. If any of those four filenames already
+exists at the destination, installation fails before copying anything. There is
+no force option.
+
+From a flat installed directory, invoke its local `delegate.py`:
+
+```powershell
+Set-Location C:\chosen\codex-delegate
+python .\delegate.py `
+  --preset terra --config C:\safe-local\codex-local-config.json `
+  --transport cli --codex-executable C:\path\to\codex.exe `
+  --workspace C:\work\checkout --task-file C:\safe-local\task.txt
+```

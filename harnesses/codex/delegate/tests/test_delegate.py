@@ -3,8 +3,11 @@ import argparse
 import io
 import json
 import os
+import queue
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -43,8 +46,8 @@ class FakeProcess:
 
 
 class UnreapableProcess(FakeProcess):
-    def __init__(self):
-        super().__init__([{"type": "turn.completed", "turn_id": "t1"}])
+    def __init__(self, lines=None):
+        super().__init__(lines if lines is not None else [{"type": "turn.completed", "turn_id": "t1"}])
         self.returncode = None
         self.wait_timeouts = []
         self.kill_calls = 0
@@ -81,6 +84,307 @@ class DelegateTransportContract(unittest.TestCase):
             return proc
         return popen
 
+    def app_events(self):
+        return [{"id": 1, "result": {}}, {"id": 2, "result": CATALOG},
+                {"id": 3, "result": {"thread": {"id": "th1"}}},
+                {"id": 4, "result": {"turn": {"id": "tu1"}}},
+                {"method": "turn/completed", "params": {"threadId": "th1",
+                 "turn": {"id": "tu1", "status": "completed"}}}]
+
+    def assert_bound_failure(self, result, code, transport="cli"):
+        self.assertEqual((code, result["status"], result["model"], result["effort"],
+                          result["transport"], result["sandbox"]),
+                         (delegate.EXIT_OPERATIONAL, "operational_failure", "gpt-test",
+                          "medium", transport, "read-only"))
+
+    def test_timeout_defaults_and_adapter_only_cli_option(self):
+        """Timeout must be finite by default and must never change child argv."""
+        parser = delegate.build_parser()
+        argv = ["--model", "gpt-test", "--transport", "cli", "--task-file", str(self.task),
+                "--workspace", str(self.workspace)]
+        self.assertEqual(getattr(parser.parse_args(argv), "timeout", None), 1800)
+        args = parser.parse_args(argv + ["--timeout", "7200", "--codex-executable", "fake-codex"])
+        result, code = delegate.run_delegate(args, catalog_payload=CATALOG,
+            popen_factory=self.fake([[{"type": "turn.completed"}]]), environ={})
+        self.assertEqual((code, result["status"]), (0, "completed"))
+        self.assertEqual(self.calls[0][0], ["fake-codex", "exec", "-m", "gpt-test", "-c",
+            "model_reasoning_effort=medium", "-s", "read-only", "-C",
+            str(self.workspace.resolve()), "--json", "-"])
+
+    def test_invalid_timeout_refuses_before_any_process(self):
+        """NaN, infinities, non-positive values and over-cap timeouts are invalid."""
+        for timeout in (float("nan"), float("inf"), -float("inf"), 0, -1, 7200.01):
+            with self.subTest(timeout=timeout):
+                self.calls.clear()
+                result, code = delegate.run_delegate(self.args(timeout=timeout), catalog_payload=CATALOG,
+                    popen_factory=self.fake([[{"type": "turn.completed"}]]), environ={})
+                self.assertEqual((code, result["status"], self.calls),
+                                 (delegate.EXIT_INVALID, "invalid", []))
+
+    def test_cli_stdout_deadline_is_enforced_before_process_wait(self):
+        """An expired stdout read cannot be converted into completed by wait()."""
+        clock = [0.0]
+        proc = FakeProcess([{"type": "thread.started", "thread_id": "s1"},
+                            {"type": "turn.completed", "turn_id": "t1"}])
+        class ExpiringStream(io.BytesIO):
+            def read(self, *args):
+                clock[0] = 2.0
+                return super().read(*args)
+            def readline(self, *args):
+                line = super().readline(*args)
+                if b"turn.completed" in line:
+                    clock[0] = 2.0
+                return line
+        proc.stdout = ExpiringStream(proc.stdout.getvalue())
+        with patch.object(time, "monotonic", side_effect=lambda: clock[0]):
+            result, code = delegate.run_delegate(self.args(timeout=1), catalog_payload=CATALOG,
+                popen_factory=lambda *args, **kwargs: proc, environ={})
+        self.assert_bound_failure(result, code)
+        self.assertEqual(result["error"], "TransportTimeout")
+        self.assertEqual(result["session_id"], "s1")
+
+    def test_every_app_server_wait_uses_the_deadline(self):
+        """Any stalled lifecycle response or terminal wait must fail boundedly."""
+        for expired_line in range(1, 6):
+            with self.subTest(expired_line=expired_line):
+                clock = [0.0]
+                proc = FakeProcess(self.app_events())
+                class ExpiringStream(io.BytesIO):
+                    count = 0
+                    def readline(self, *args):
+                        self.count += 1
+                        line = super().readline(*args)
+                        if self.count == expired_line:
+                            clock[0] = 2.0
+                        return line
+                proc.stdout = ExpiringStream(proc.stdout.getvalue())
+                with patch.object(time, "monotonic", side_effect=lambda: clock[0]):
+                    result, code = delegate.run_delegate(self.args(transport="app-server", timeout=1),
+                        catalog_payload=CATALOG, popen_factory=lambda *args, **kwargs: proc, environ={})
+                self.assert_bound_failure(result, code, "app-server")
+                self.assertEqual(result["error"], "TransportTimeout")
+
+    def test_preflight_and_worker_share_one_deadline(self):
+        """Starting the worker must not reset the preflight's elapsed timeout."""
+        clock = [0.0]
+        streams = [[{"id": 1, "result": {}}, {"id": 2, "result": CATALOG}],
+                   [{"type": "thread.started", "thread_id": "s1"}, {"type": "turn.completed"}]]
+        class ElapsedStream(io.BytesIO):
+            def read(self, *args):
+                clock[0] += 0.6
+                return super().read(*args)
+            def readline(self, *args):
+                clock[0] += 0.3
+                return super().readline(*args)
+        def popen(*args, **kwargs):
+            proc = FakeProcess(streams.pop(0))
+            proc.stdout = ElapsedStream(proc.stdout.getvalue())
+            return proc
+        with patch.object(time, "monotonic", side_effect=lambda: clock[0]):
+            result, code = delegate.run_delegate(self.args(timeout=1), popen_factory=popen, environ={})
+        self.assert_bound_failure(result, code)
+        self.assertEqual(result["error"], "TransportTimeout")
+
+    def test_stalled_io_worker_times_out_without_wall_clock_sleep(self):
+        """A pipe operation that never returns must still have a finite wait."""
+        for transport, stalled_call in (("cli", 1), ("cli", 2), ("app-server", 2),
+                                        ("app-server", 5), ("app-server", 7),
+                                        ("app-server", 9), ("app-server", 10)):
+            with self.subTest(transport=transport, stalled_call=stalled_call):
+                calls = [0]
+                wait_budgets = []
+                real_get = queue.Queue.get
+                class ControlledThread:
+                    def __init__(self, target, *, daemon):
+                        self.target = target
+                    def start(self):
+                        calls[0] += 1
+                        # All fake I/O completes inline except the deliberately stalled operation.
+                        if calls[0] != stalled_call:
+                            self.target()
+                def immediate_get(queued, block=True, timeout=None):
+                    wait_budgets.append(timeout)
+                    return real_get(queued, block=False)
+                proc = FakeProcess([{"type": "turn.completed"}] if transport == "cli" else self.app_events())
+                with patch.object(threading, "Thread", ControlledThread), patch.object(queue.Queue, "get", immediate_get):
+                    result, code = delegate.run_delegate(self.args(transport=transport, timeout=5),
+                        catalog_payload=CATALOG, popen_factory=lambda *args, **kwargs: proc, environ={})
+                self.assert_bound_failure(result, code, transport)
+                self.assertEqual(result["error"], "TransportTimeout")
+                self.assertTrue(wait_budgets)
+                self.assertTrue(all(budget is not None and 0 < budget <= 5 for budget in wait_budgets))
+                self.assertGreater(proc.wait_calls, 0)
+
+    def test_nonzero_cli_exit_retains_terminal_and_ids_as_failure(self):
+        """An apparent terminal event does not override a failing child exit."""
+        terminal = {"type": "turn.completed", "turn_id": "t1"}
+        proc = FakeProcess([{"type": "thread.started", "thread_id": "s1"}, terminal])
+        proc.returncode = 9
+        proc.wait = lambda timeout=None: 9
+        result, code = delegate.run_delegate(self.args(), catalog_payload=CATALOG,
+            popen_factory=lambda *args, **kwargs: proc, environ={})
+        self.assert_bound_failure(result, code)
+        self.assertEqual((result["session_id"], result["turn_id"], result["terminal_evidence"]),
+                         ("s1", "t1", [terminal]))
+
+    def test_broken_stdin_is_cleaned_up_and_normalized(self):
+        """A stdin failure must still reap the selected transport process."""
+        for transport in ("cli", "app-server"):
+            with self.subTest(transport=transport):
+                proc = FakeProcess([])
+                proc.stdin.write = lambda data: (_ for _ in ()).throw(BrokenPipeError("private detail"))
+                result, code = delegate.run_delegate(self.args(transport=transport), catalog_payload=CATALOG,
+                    popen_factory=lambda *args, **kwargs: proc, environ={})
+                self.assert_bound_failure(result, code, transport)
+                self.assertGreater(proc.wait_calls, 0)
+                self.assertNotIn("private detail", result["error"])
+
+    def test_unreaped_app_session_cannot_report_completed(self):
+        """Swallowing post-kill wait failure must not turn cleanup into success."""
+        proc = UnreapableProcess(self.app_events())
+        result, code = delegate.run_delegate(self.args(transport="app-server"), catalog_payload=CATALOG,
+            popen_factory=lambda *args, **kwargs: proc, environ={})
+        self.assert_bound_failure(result, code, "app-server")
+        self.assertEqual((result["thread_id"], result["turn_id"]), ("th1", "tu1"))
+        self.assertEqual(result["terminal_evidence"], [self.app_events()[-1]])
+        self.assertEqual(proc.wait_timeouts, [1, 1])
+        self.assertEqual(proc.kill_calls, 1)
+
+    def test_timeout_error_class_survives_failed_cleanup(self):
+        """A second failure while reaping must not hide an expired deadline."""
+        for transport in ("cli", "app-server"):
+            with self.subTest(transport=transport):
+                clock = [0.0]
+                proc = UnreapableProcess(self.app_events() if transport == "app-server" else None)
+                class ExpiringStream(io.BytesIO):
+                    def readline(self, *args):
+                        line = super().readline(*args)
+                        clock[0] = 2.0
+                        return line
+                proc.stdout = ExpiringStream(proc.stdout.getvalue())
+                with patch.object(time, "monotonic", side_effect=lambda: clock[0]):
+                    result, code = delegate.run_delegate(self.args(transport=transport, timeout=1),
+                        catalog_payload=CATALOG, popen_factory=lambda *args, **kwargs: proc, environ={})
+                self.assert_bound_failure(result, code, transport)
+                self.assertEqual(result["error"], "TransportTimeout")
+                self.assertEqual(proc.wait_timeouts, [1, 1])
+                self.assertEqual(proc.kill_calls, 1)
+
+    def test_rpc_error_stops_at_the_failed_request(self):
+        """An RPC error must terminate without issuing the next lifecycle request."""
+        methods = ("initialize", "model/list", "thread/start", "turn/start")
+        for index, method in enumerate(methods):
+            with self.subTest(method=method):
+                self.calls.clear(); self.processes.clear()
+                events = self.app_events()
+                events[index] = {"id": index + 1, "error": {"code": -1, "message": "private detail"}}
+                result, code = delegate.run_delegate(self.args(transport="app-server"), catalog_payload=CATALOG,
+                    popen_factory=self.fake([events]), environ={})
+                self.assert_bound_failure(result, code, "app-server")
+                sent = [json.loads(line) for line in self.processes[0].stdin.getvalue().splitlines()]
+                self.assertEqual(sent[-1]["method"], method)
+                self.assertNotIn("private detail", result["error"])
+
+    def test_only_matching_thread_and_turn_can_complete_app_attempt(self):
+        """Unrelated terminal notifications cannot complete the selected turn."""
+        for other_thread, other_turn in (("other", "tu1"), ("th1", "other")):
+            for matching_follows in (False, True):
+                with self.subTest(thread=other_thread, turn=other_turn, matching=matching_follows):
+                    events = self.app_events()[:-1]
+                    events.append({"method": "turn/completed", "params": {"threadId": other_thread,
+                                   "turn": {"id": other_turn, "status": "completed"}}})
+                    if matching_follows:
+                        events.append({"method": "turn/completed", "params": {"threadId": "th1",
+                                       "turn": {"id": "tu1", "status": "failed"}}})
+                    result, code = delegate.run_delegate(self.args(transport="app-server"), catalog_payload=CATALOG,
+                        popen_factory=self.fake([events]), environ={})
+                    self.assertEqual((code, result["status"], result["thread_id"], result["turn_id"]),
+                                     (delegate.EXIT_OPERATIONAL, "failed" if matching_follows else "operational_failure",
+                                      "th1", "tu1"))
+
+    def test_matching_terminal_before_turn_response_is_retained(self):
+        """A terminal notification racing the response must remain matchable."""
+        events = self.app_events()
+        events[-2:] = [events[-1], events[-2]]
+        result, code = delegate.run_delegate(self.args(transport="app-server"), catalog_payload=CATALOG,
+            popen_factory=self.fake([events]), environ={})
+        self.assertEqual((code, result["status"], result["thread_id"], result["turn_id"]),
+                         (0, "completed", "th1", "tu1"))
+        self.assertEqual(result["terminal_evidence"], [events[-2]])
+
+    def test_nested_thread_id_cannot_substitute_for_terminal_turn_id(self):
+        """Matching must use the turn ID, not an unrelated nested object's ID."""
+        events = self.app_events()
+        events[-1]["params"]["thread"] = {"id": "tu1"}
+        events[-1]["params"]["turn"]["id"] = "other-turn"
+        result, code = delegate.run_delegate(self.args(transport="app-server"), catalog_payload=CATALOG,
+            popen_factory=self.fake([events]), environ={})
+        self.assert_bound_failure(result, code, "app-server")
+        self.assertEqual(result["turn_id"], "tu1")
+
+    def test_missing_turn_response_id_cannot_be_inferred_from_a_notification(self):
+        """Turn identity must come from turn/start before matching a terminal."""
+        events = self.app_events()
+        events[3] = {"id": 4, "result": {}}
+        result, code = delegate.run_delegate(self.args(transport="app-server"), catalog_payload=CATALOG,
+            popen_factory=self.fake([events]), environ={})
+        self.assert_bound_failure(result, code, "app-server")
+
+    def test_empty_child_marker_refuses_without_launch(self):
+        """Clearing the marker value must not bypass the child-key guard."""
+        result, code = delegate.run_delegate(self.args(), catalog_payload=CATALOG,
+            popen_factory=self.fake([[{"type": "turn.completed"}]]), environ={"PROCTOR_CHILD": ""})
+        self.assertEqual((code, result["status"], self.calls), (delegate.EXIT_INVALID, "refused", []))
+
+    def test_malformed_cli_syntax_preserves_already_parsed_evidence(self):
+        """A later JSON parse error cannot erase a terminal or nesting observation."""
+        terminal = {"type": "turn.completed", "turn_id": "t1"}
+        proc = FakeProcess([{"type": "thread.started", "thread_id": "s1"},
+                            {"type": "collabAgentToolCall"}, terminal])
+        proc.stdout = io.BytesIO(proc.stdout.getvalue() + b'{"broken":\n')
+        result, code = delegate.run_delegate(self.args(), catalog_payload=CATALOG,
+            popen_factory=lambda *args, **kwargs: proc, environ={})
+        self.assert_bound_failure(result, code)
+        self.assertEqual((result["session_id"], result["turn_id"], result["terminal_evidence"],
+                          result["nested_dispatch_detected"]), ("s1", "t1", [terminal], True))
+
+    def test_malformed_app_syntax_preserves_already_parsed_evidence(self):
+        """Malformed response syntax after early events must retain those events."""
+        events = self.app_events()
+        terminal = events[-1]
+        proc = FakeProcess(events[:3] + [{"method": "item/updated", "params": {
+            "item": {"type": "subAgentActivity"}}}, terminal])
+        proc.stdout = io.BytesIO(proc.stdout.getvalue() + b'{"id":4,"result":\n')
+        result, code = delegate.run_delegate(self.args(transport="app-server"), catalog_payload=CATALOG,
+            popen_factory=lambda *args, **kwargs: proc, environ={})
+        self.assert_bound_failure(result, code, "app-server")
+        self.assertEqual((result["thread_id"], result["turn_id"], result["terminal_evidence"],
+                          result["nested_dispatch_detected"]), ("th1", "tu1", [terminal], True))
+
+    def test_unexpected_json_shapes_emit_one_selected_binding_envelope(self):
+        """Unexpected JSON types must not fall through main and erase selection."""
+        for transport, malformed in (("cli", {"type": []}), ("cli", {"type": {}}),
+                ("cli", {"type": "item.completed", "item": {"type": []}}),
+                ("app-server", {"method": "turn/completed", "params": {
+                    "threadId": "th1", "turn": {"id": "tu1", "status": []}}}),
+                ("app-server", {"method": [], "params": {
+                    "threadId": "th1", "turn": {"id": "tu1", "status": "completed"}}})):
+            with self.subTest(transport=transport, malformed=malformed):
+                lines = ([{"type": "thread.started", "thread_id": "s1"}, malformed,
+                          {"type": "turn.completed"}] if transport == "cli" else self.app_events()[:-1] + [malformed])
+                proc = FakeProcess(lines)
+                run = delegate.run_delegate
+                output = io.StringIO()
+                with patch.object(sys, "argv", ["delegate", "--model", "gpt-test", "--transport", transport,
+                        "--workspace", str(self.workspace), "--task-file", str(self.task)]), patch.object(
+                        delegate, "run_delegate", side_effect=lambda args: run(args, catalog_payload=CATALOG,
+                            popen_factory=lambda *args, **kwargs: proc, environ={})), redirect_stdout(output), \
+                        self.assertRaises(SystemExit) as stopped:
+                    delegate.main()
+                self.assertEqual(len(output.getvalue().splitlines()), 1)
+                result = json.loads(output.getvalue())
+                self.assert_bound_failure(result, stopped.exception.code, transport)
+
     def test_cli_argv_and_stdin_are_exact_for_read_only_and_write(self):
         for write, sandbox in ((False, "read-only"), (True, "workspace-write")):
             with self.subTest(write=write):
@@ -105,7 +409,7 @@ class DelegateTransportContract(unittest.TestCase):
             {"id": 2, "result": CATALOG},
             {"id": 3, "result": {"thread": {"id": "th1"}}},
             {"id": 4, "result": {"turn": {"id": "tu1"}}},
-            {"method": "turn/updated", "params": {"turn": {"id": "tu1", "status": "completed"}}},
+            {"method": "turn/updated", "params": {"threadId": "th1", "turn": {"id": "tu1", "status": "completed"}}},
         ]]
         result, code = delegate.run_delegate(self.args(transport="app-server", write=True),
                                              popen_factory=self.fake(streams), environ={})
@@ -128,6 +432,62 @@ class DelegateTransportContract(unittest.TestCase):
                                                      popen_factory=self.fake([]), environ={})
                 self.assertEqual(code, delegate.EXIT_INVALID); self.assertEqual(self.calls, [])
                 self.assertEqual(result["status"], "invalid")
+
+    def test_paginated_catalog_selects_later_page_terra_in_both_transports(self):
+        """Dropping nextCursor pages must not hide an available selected model."""
+        terra = {"id": "gpt-5.6-terra", "defaultReasoningEffort": "medium",
+                 "supportedReasoningEfforts": [{"reasoningEffort": "medium"},
+                                               {"reasoningEffort": "high"}]}
+        pages = [{"id": 1, "result": {}},
+                 {"id": 2, "result": dict(CATALOG, nextCursor="page-two")},
+                 {"id": 3, "result": {"data": [terra], "nextCursor": None}}]
+        for transport in ("cli", "app-server"):
+            with self.subTest(transport=transport):
+                self.calls.clear(); self.processes.clear()
+                worker = ([{"type": "turn.completed", "turn_id": "tu1"}]
+                          if transport == "cli" else pages + [
+                              {"id": 4, "result": {"thread": {"id": "th1"}}},
+                              {"id": 5, "result": {"turn": {"id": "tu1"}}},
+                              {"method": "turn/completed", "params": {"threadId": "th1",
+                               "turn": {"id": "tu1", "status": "completed"}}}])
+                result, code = delegate.run_delegate(
+                    self.args(model="gpt-5.6-terra", effort="high", transport=transport),
+                    popen_factory=self.fake([pages, worker]), environ={})
+                self.assertEqual((code, result["status"], result["model"], result["effort"]),
+                                 (0, "completed", "gpt-5.6-terra", "high"))
+                self.assertEqual(len(self.calls), 2)
+                self.assertEqual(self.calls[1][0][1], "exec" if transport == "cli" else "app-server")
+                for proc in self.processes[:1 if transport == "cli" else 2]:
+                    sent = [json.loads(line) for line in proc.stdin.getvalue().splitlines()]
+                    catalogs = [request for request in sent if request.get("method") == "model/list"]
+                    self.assertEqual([request["params"] for request in catalogs],
+                                     [{}, {"cursor": "page-two"}])
+
+    def test_pagination_fault_launches_no_model_work(self):
+        """Invalid or repeated cursors must refuse before CLI/thread launch."""
+        for phase in ("preflight", "session"):
+            for cursor in ("", 0, False, [], {}, "repeated"):
+                with self.subTest(phase=phase, cursor=cursor):
+                    self.calls.clear(); self.processes.clear()
+                    responses = [{"id": 1, "result": {}},
+                                 {"id": 2, "result": dict(CATALOG, nextCursor=cursor)}]
+                    if cursor == "repeated":
+                        responses.append({"id": 3, "result": {"data": [], "nextCursor": cursor}})
+                    responses += [{"id": 3, "result": {"thread": {"id": "th1"}}},
+                                  {"id": 4, "result": {"turn": {"id": "tu1"}}},
+                                  {"method": "turn/completed", "params": {"threadId": "th1",
+                                   "turn": {"id": "tu1", "status": "completed"}}}]
+                    result, code = delegate.run_delegate(
+                        self.args(transport="cli" if phase == "preflight" else "app-server"),
+                        catalog_payload=None if phase == "preflight" else CATALOG,
+                        popen_factory=self.fake([responses, [{"type": "turn.completed"}]]), environ={})
+                    self.assertNotEqual(code, 0)
+                    self.assertNotEqual(result["status"], "completed")
+                    self.assertEqual(len(self.calls), 1)
+                    self.assertEqual(self.calls[0][0], ["fake-codex", "app-server", "--stdio"])
+                    sent = [json.loads(line) for line in self.processes[0].stdin.getvalue().splitlines()]
+                    self.assertFalse(any(request.get("method", "").startswith(("thread/", "turn/"))
+                                         for request in sent))
 
     def test_transport_errors_and_missing_terminal_do_not_fallback(self):
         for lines in ([["not-json"], [{"type": "thread.started", "thread_id": "s1"}]]):
@@ -195,8 +555,9 @@ class DelegateTransportContract(unittest.TestCase):
                                "sandbox": "read-only", "thread_id": "old-thread"})
         streams = [[{"id": 1, "result": {}}, {"id": 2, "result": CATALOG}], [
             {"id": 1, "result": {}}, {"id": 2, "result": CATALOG},
-            {"id": 3, "result": {"thread": {"id": "resumed-thread"}}}, {"id": 4, "result": {}},
-            {"method": "turn/updated", "params": {"turn": {"id": "turn-2", "status": "completed"}}},
+            {"id": 3, "result": {"thread": {"id": "resumed-thread"}}},
+            {"id": 4, "result": {"turn": {"id": "turn-2"}}},
+            {"method": "turn/updated", "params": {"threadId": "resumed-thread", "turn": {"id": "turn-2", "status": "completed"}}},
         ]]
         result, code = delegate.run_delegate(self.args(transport="app-server", resume_identity=identity),
                                              popen_factory=self.fake(streams), environ={})
@@ -238,9 +599,9 @@ class DelegateTransportContract(unittest.TestCase):
     def test_schema_shaped_token_usage_notification_is_preserved(self):
         streams = [[{"id": 1, "result": {}}, {"id": 2, "result": CATALOG}], [
             {"id": 1, "result": {}}, {"id": 2, "result": CATALOG},
-            {"id": 3, "result": {"thread": {"id": "th1"}}}, {"id": 4, "result": {}},
+            {"id": 3, "result": {"thread": {"id": "th1"}}}, {"id": 4, "result": {"turn": {"id": "t1"}}},
             {"method": "thread/tokenUsage/updated", "params": {"threadId": "th1", "turnId": "t1", "tokenUsage": TOKEN_USAGE}},
-            {"method": "turn/updated", "params": {"turn": {"id": "t1", "status": "completed"}}},
+            {"method": "turn/updated", "params": {"threadId": "th1", "turn": {"id": "t1", "status": "completed"}}},
         ]]
         result, code = delegate.run_delegate(self.args(transport="app-server"), popen_factory=self.fake(streams), environ={})
         self.assertEqual(code, 0); self.assertEqual(result["usage"], TOKEN_USAGE)
@@ -249,10 +610,10 @@ class DelegateTransportContract(unittest.TestCase):
         latest = dict(TOKEN_USAGE, modelContextWindow=256000)
         streams = [[{"id": 1, "result": {}}, {"id": 2, "result": CATALOG}], [
             {"id": 1, "result": {}}, {"id": 2, "result": CATALOG},
-            {"id": 3, "result": {"thread": {"id": "th1"}}}, {"id": 4, "result": {}},
+            {"id": 3, "result": {"thread": {"id": "th1"}}}, {"id": 4, "result": {"turn": {"id": "t1"}}},
             {"method": "thread/tokenUsage/updated", "params": {"threadId": "th1", "turnId": "t1", "tokenUsage": TOKEN_USAGE}},
             {"method": "thread/tokenUsage/updated", "params": {"threadId": "th1", "turnId": "t1", "tokenUsage": latest}},
-            {"method": "turn/updated", "params": {"turn": {"id": "t1", "status": "completed"}}},
+            {"method": "turn/updated", "params": {"threadId": "th1", "turn": {"id": "t1", "status": "completed"}}},
         ]]
         result, code = delegate.run_delegate(self.args(transport="app-server"), popen_factory=self.fake(streams), environ={})
         self.assertEqual(code, 0); self.assertEqual(result["usage"], latest)

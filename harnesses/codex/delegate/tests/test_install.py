@@ -76,6 +76,19 @@ class ExplicitDestinationInstallTest(unittest.TestCase):
             self.installer.main([])
         self.assertEqual(error.exception.code, 2)
 
+    def test_existing_manifest_name_refuses_before_any_copy(self):
+        """An existing delegate or later manifest file must survive unchanged."""
+        for filename in ("delegate.py", "catalog.py", "local-config.example.json", "README.md"):
+            with self.subTest(filename=filename):
+                destination = self.tmp / filename.replace(".", "-")
+                destination.mkdir()
+                existing = destination / filename
+                existing.write_bytes(b"existing operator-owned content\n")
+                with self.assertRaises(ValueError):
+                    self.installer.install(destination)
+                self.assertEqual(existing.read_bytes(), b"existing operator-owned content\n")
+                self.assertEqual([path.name for path in destination.iterdir()], [filename])
+
 
 if __name__ == "__main__":
     unittest.main()

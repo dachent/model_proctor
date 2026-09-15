@@ -31,6 +31,10 @@ def install(destination: Path) -> list[Path]:
     missing = [source.name for source in sources if not source.is_file()]
     if missing:
         raise ValueError(f"installer source manifest is incomplete: {missing}")
+    collisions = [name for name in INSTALL_MANIFEST
+                  if (destination / name).exists() or (destination / name).is_symlink()]
+    if collisions:
+        raise ValueError(f"destination already contains manifest names: {collisions}")
     destination.mkdir(parents=True, exist_ok=True)
     copied = []
     for source in sources:
