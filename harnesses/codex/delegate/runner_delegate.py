@@ -20,8 +20,8 @@ import delegate  # noqa: E402
 
 _BINDINGS = {
     "luna": ("luna", True),
-    "terra": ("terra", False),
-    "astra": ("astra", False),
+    "terra": ("terra", True),
+    "astra": ("astra", True),
 }
 
 

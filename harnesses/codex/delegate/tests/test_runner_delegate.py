@@ -58,12 +58,12 @@ class RunnerDelegateContractTest(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def test_runner_agents_bind_fixed_presets_and_write_boundaries(self):
-        """Changing a lane's preset or write boundary must alter its child request."""
+    def test_runner_agents_bind_fixed_presets_and_kimi_write_semantics(self):
+        """Runner lanes preserve Kimi's writable worker capability in Codex."""
         expected = {
             "luna": ("luna", True),
-            "terra": ("terra", False),
-            "astra": ("astra", False),
+            "terra": ("terra", True),
+            "astra": ("astra", True),
         }
         for agent, (preset, write) in expected.items():
             with self.subTest(agent=agent):
