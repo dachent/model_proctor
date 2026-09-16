@@ -133,6 +133,23 @@ class RunnerDelegateContractTest(unittest.TestCase):
             "flash": "luna", "glm": "terra", "k3": "astra",
         })
 
+    def test_malformed_runner_argv_emits_one_invalid_json_envelope(self):
+        """An argparse usage error would leave the unchanged runner with no envelope."""
+        result = subprocess.run(
+            [sys.executable, str(BRIDGE), "--agent", "luna", "--workspace",
+             str(self.workspace), "--task-file", str(self.task_file),
+             "--timeout", "not-a-number"],
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        envelope = json.loads(result.stdout)
+        self.assertEqual(envelope["status"], "invalid")
+        self.assertEqual(envelope["agent"], "luna")
+        self.assertIsNone(envelope["child_session_id"])
+        self.assertIsNone(envelope["child_home"])
+        self.assertEqual(envelope["codex_error"], "ArgumentError")
+
 
 class RunnerCompatibilityIntegrationTest(unittest.TestCase):
     def setUp(self):

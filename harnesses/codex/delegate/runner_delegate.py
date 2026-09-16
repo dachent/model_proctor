@@ -25,6 +25,18 @@ _BINDINGS = {
 }
 
 
+class _EnvelopeParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        raise argparse.ArgumentError(None, message)
+
+
+def _argv_agent(argv: Sequence[str]) -> Optional[str]:
+    for index, value in enumerate(argv[:-1]):
+        if value == "--agent":
+            return argv[index + 1]
+    return None
+
+
 def _local_config() -> Path:
     path = _HERE / "local-config.json"
     if not path.is_file():
@@ -114,7 +126,7 @@ def run_runner_delegate(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="codex-runner-delegate")
+    parser = _EnvelopeParser(prog="codex-runner-delegate")
     parser.add_argument("--agent", required=True)
     parser.add_argument("--workspace", required=True)
     parser.add_argument("--task-file", required=True)
@@ -123,7 +135,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    args = build_parser().parse_args(argv)
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    started = time.monotonic()
+    try:
+        args = build_parser().parse_args(raw_argv)
+    except argparse.ArgumentError as exc:
+        print(json.dumps(_invalid_envelope(agent=_argv_agent(raw_argv), started=started,
+                                            error=exc, status="invalid"),
+                         separators=(",", ":")))
+        return 0
     print(json.dumps(run_runner_delegate(args), separators=(",", ":")))
     return 0
 
