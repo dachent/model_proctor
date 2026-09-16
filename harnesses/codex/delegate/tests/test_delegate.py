@@ -111,6 +111,33 @@ class DelegateTransportContract(unittest.TestCase):
             "model_reasoning_effort=medium", "-s", "read-only", "-C",
             str(self.workspace.resolve()), "--json", "-"])
 
+    def test_task_stdin_is_utf8_and_requires_no_task_file(self):
+        """A pipe delivers exact UTF-8 task text without creating a task file."""
+        task = 'Inspect "quoted" $() `backtick` and 漢字.\nKeep exact bytes.'
+        parser = delegate.build_parser()
+        args = parser.parse_args([
+            "--model", "gpt-test", "--transport", "cli", "--task-stdin",
+            "--workspace", str(self.workspace), "--codex-executable", "fake-codex",
+        ])
+        stdin = io.TextIOWrapper(io.BytesIO(task.encode("utf-8")), encoding="utf-8")
+        with patch.object(sys, "stdin", stdin):
+            result, code = delegate.run_delegate(
+                args, catalog_payload=CATALOG,
+                popen_factory=self.fake([[{"type": "thread.started", "thread_id": "s1"},
+                                          {"type": "turn.completed", "turn_id": "t1"}]]),
+                environ={},
+            )
+        self.assertEqual((code, result["status"]), (delegate.EXIT_OK, "completed"))
+        self.assertIsNone(args.task_file)
+        self.assertTrue(args.task_stdin)
+        self.assertEqual(self.processes[0].stdin.getvalue(), task.encode("utf-8"))
+
+    def test_readme_documents_stdin_without_workspace_sibling_staging(self):
+        text = (_DIR / "README.md").read_text(encoding="utf-8")
+        self.assertIn("`--task-stdin`", text)
+        self.assertIn("does not stage a task file", text)
+        self.assertNotIn("newly-created sibling directory", text)
+
     def test_invalid_timeout_refuses_before_any_process(self):
         """NaN, infinities, non-positive values and over-cap timeouts are invalid."""
         for timeout in (float("nan"), float("inf"), -float("inf"), 0, -1, 7200.01):

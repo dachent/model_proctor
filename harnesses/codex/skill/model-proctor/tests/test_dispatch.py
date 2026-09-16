@@ -34,9 +34,9 @@ class StandaloneSkillContract(unittest.TestCase):
             """import json, os, sys
 from pathlib import Path
 args = sys.argv[1:]
-task = Path(args[args.index('--task-file') + 1])
+task = sys.stdin.buffer.read().decode('utf-8')
 Path(os.environ['MODEL_PROCTOR_CAPTURE']).write_text(json.dumps({
-    'args': args, 'task_path': str(task), 'task': task.read_text(encoding='utf-8')
+    'args': args, 'task': task
 }), encoding='utf-8')
 print(json.dumps({'status': 'completed', 'agent_message': 'worker answer'}))
 """,
@@ -77,8 +77,10 @@ print(json.dumps({'status': 'completed', 'agent_message': 'worker answer'}))
         self.assertNotIn("python.exe", text)
         self.assertIn("--task-base64-stdin", text)
         self.assertNotIn("$task = @'", text)
+        self.assertIn("straight to the adapter's standard input", text)
+        self.assertNotIn("temporary sibling", text)
 
-    def test_helper_stages_stdin_outside_workspace_and_preserves_read_only_default(self):
+    def test_helper_passes_stdin_without_a_task_file_and_preserves_read_only_default(self):
         result = self.run_helper()
         self.assertEqual(result.returncode, 0, result.stderr)
         captured = json.loads(self.capture.read_text(encoding="utf-8"))
@@ -89,11 +91,8 @@ print(json.dumps({'status': 'completed', 'agent_message': 'worker answer'}))
         self.assertEqual(args[args.index("--transport") + 1], "app-server")
         self.assertEqual(args[args.index("--workspace") + 1], str(self.workspace.resolve()))
         self.assertEqual(args[args.index("--codex-executable") + 1], str(self.fake_codex.resolve()))
-        task_path = Path(captured["task_path"])
-        self.assertFalse(task_path.exists(), "helper must remove the staged task after dispatch")
-        self.assertFalse(task_path.is_relative_to(self.workspace.resolve()))
-        self.assertEqual(task_path.parent.parent, self.workspace.parent.resolve())
-        self.assertTrue(task_path.parent.name.startswith(".model-proctor-"))
+        self.assertIn("--task-stdin", args)
+        self.assertNotIn("--task-file", args)
 
     def test_helper_passes_write_only_when_explicitly_requested(self):
         result = self.run_helper("--write")

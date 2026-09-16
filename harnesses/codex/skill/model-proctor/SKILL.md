@@ -27,10 +27,10 @@ which preset they want. Do not infer one.
    workspace; if there is no unambiguous workspace, ask for it.
 2. Encode the exact requested task as one UTF-8 Base64 value before putting it
    in a shell command. Do not embed the raw task in a PowerShell here-string or
-   other shell literal. The helper creates and removes the required UTF-8 task
-   file in a temporary sibling of the workspace, resolves the desktop-bundled
-   Codex executable, and invokes the installed adapter with `app-server`
-   transport. Do not use a bare `codex` command, a daemon, MCP, or another UI.
+   other shell literal. The helper decodes it once and passes its UTF-8 bytes
+   straight to the adapter's standard input, resolves the desktop-bundled Codex
+   executable, and invokes the installed adapter with `app-server` transport.
+   Do not use a bare `codex` command, a daemon, MCP, another UI, or a task file.
 
    ```powershell
 $dispatcher = Join-Path $env:USERPROFILE '.codex\skills\model-proctor\scripts\dispatch.py'

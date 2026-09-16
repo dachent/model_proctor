@@ -140,6 +140,21 @@ def _outside_workspace(task: str, workspace: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _utf8_task_stdin() -> str:
+    """Read a task from native standard input without a filesystem staging path."""
+    stream = getattr(sys.stdin, "buffer", sys.stdin)
+    raw = stream.read()
+    if isinstance(raw, bytes):
+        task = raw.decode("utf-8")
+    elif isinstance(raw, str):
+        task = raw
+    else:
+        raise ValueError("task standard input must provide text or bytes")
+    if not task.strip():
+        raise ValueError("task standard input must not be empty")
+    return task
+
+
 def _load_config(path: Optional[str], preset: Optional[str]) -> LocalConfig:
     if path is None:
         if preset is not None:
@@ -578,7 +593,10 @@ def run_delegate(args: argparse.Namespace, *, catalog_payload: Optional[Mapping[
         deadline = _Deadline(getattr(args, "timeout", 1800))
         workspace = Path(args.workspace).resolve()
         if not workspace.is_dir(): raise ValueError("workspace must be an existing directory")
-        task = _outside_workspace(args.task_file, workspace)
+        if getattr(args, "task_stdin", False):
+            task = _utf8_task_stdin()
+        else:
+            task = _outside_workspace(args.task_file, workspace)
         config = _load_config(args.config, args.preset)
         if catalog_payload is None:
             failure_status = "operational_failure"
@@ -614,7 +632,10 @@ def build_parser() -> argparse.ArgumentParser:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--model"); group.add_argument("--preset")
     parser.add_argument("--transport", choices=("cli", "app-server"), required=True)
-    parser.add_argument("--task-file", required=True); parser.add_argument("--workspace", required=True)
+    task_group = parser.add_mutually_exclusive_group(required=True)
+    task_group.add_argument("--task-file")
+    task_group.add_argument("--task-stdin", action="store_true")
+    parser.add_argument("--workspace", required=True)
     parser.add_argument("--write", action="store_true"); parser.add_argument("--effort")
     parser.add_argument("--codex-executable", default="codex"); parser.add_argument("--config")
     parser.add_argument("--resume-identity")

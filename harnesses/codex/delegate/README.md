@@ -30,10 +30,11 @@ python harnesses/codex/delegate/delegate.py `
   --workspace C:\work\checkout --task-file C:\safe-local\task.txt
 ```
 
-The prompt must be in an external `--task-file` that resolves outside
-`--workspace`; it is intentionally not accepted from the workspace or as an
-inline prompt. The default sandbox is truly `read-only`. `--write` explicitly
-changes it to `workspace-write`; do not use it for read-only checks.
+Supply exactly one task source. An external `--task-file` must resolve outside
+`--workspace`; alternatively, `--task-stdin` reads exact UTF-8 bytes from
+standard input without any task-file staging. The default sandbox is truly
+`read-only`. `--write` explicitly changes it to `workspace-write`; do not use
+it for read-only checks.
 
 ## Transport and evidence
 
@@ -111,9 +112,8 @@ or second desktop UI is required. After a user-authorized installation into the
 local Codex skills root, invoke it in the desktop composer as
 `$model-proctor terra: <task>` (or `luna` / `astra`).
 
-The dispatcher stages its UTF-8 task in a newly-created sibling directory of
-the selected workspace, outside that workspace, then removes it after the
-adapter exits. It resolves a desktop-bundled `codex.exe` below LocalAppData and
-never falls back to an unrelated `PATH` CLI. It preserves the installed,
-untracked `local-config.json`; the source installer remains collision-safe and
-therefore is not an in-place upgrade mechanism.
+The dispatcher pipes its UTF-8 task directly to the adapter's `--task-stdin`;
+it does not stage a task file. It resolves a desktop-bundled `codex.exe` below
+LocalAppData and never falls back to an unrelated `PATH` CLI. It preserves the
+installed, untracked `local-config.json`; the source installer remains
+collision-safe and therefore is not an in-place upgrade mechanism.

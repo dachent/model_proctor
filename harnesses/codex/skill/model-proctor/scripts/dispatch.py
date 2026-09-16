@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage one Codex skill task and invoke the installed bounded adapter."""
+"""Invoke the installed bounded adapter with one Codex skill task."""
 from __future__ import annotations
 
 import argparse
@@ -8,7 +8,6 @@ import binascii
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Optional, Sequence, TextIO
 
@@ -24,21 +23,6 @@ def _desktop_codex_executable(local_app_data: Optional[str] = None) -> Path:
     if not candidates:
         raise ValueError("desktop-bundled Codex executable was not found")
     return max(candidates, key=lambda path: (path.stat().st_mtime_ns, str(path).lower()))
-
-
-def _stage_task(task: str, workspace: Path) -> Path:
-    if not task.strip():
-        raise ValueError("task standard input must not be empty")
-    staging_dir = Path(tempfile.mkdtemp(prefix=".model-proctor-", dir=str(workspace.parent))).resolve()
-    path = staging_dir / "task.txt"
-    path.write_text(task, encoding="utf-8")
-    try:
-        path.relative_to(workspace)
-    except ValueError:
-        return path
-    path.unlink(missing_ok=True)
-    staging_dir.rmdir()
-    raise ValueError("temporary task file resolved inside the target workspace")
 
 
 def _read_utf8_task(stdin: TextIO) -> str:
@@ -104,20 +88,14 @@ def dispatch(args: argparse.Namespace, *, stdin: TextIO = sys.stdin) -> int:
     if not codex.is_file():
         raise ValueError("selected Codex executable was not found")
     task = _read_base64_stdin_task(stdin) if args.task_base64_stdin else _read_utf8_task(stdin)
-    task_path = _stage_task(task, workspace)
+    if not task.strip():
+        raise ValueError("task standard input must not be empty")
     command = [sys.executable, str(adapter), "--preset", args.preset, "--config", str(config),
                "--transport", args.transport, "--codex-executable", str(codex),
-               "--workspace", str(workspace), "--task-file", str(task_path)]
+               "--workspace", str(workspace), "--task-stdin"]
     if args.write:
         command.append("--write")
-    try:
-        return subprocess.run(command, check=False).returncode
-    finally:
-        task_path.unlink(missing_ok=True)
-        try:
-            task_path.parent.rmdir()
-        except OSError:
-            pass
+    return subprocess.run(command, input=task.encode("utf-8"), check=False).returncode
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
