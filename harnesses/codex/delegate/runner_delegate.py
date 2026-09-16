@@ -31,9 +31,12 @@ class _EnvelopeParser(argparse.ArgumentParser):
 
 
 def _argv_agent(argv: Sequence[str]) -> Optional[str]:
-    for index, value in enumerate(argv[:-1]):
+    for index, value in enumerate(argv):
+        if value.startswith("--agent="):
+            return value.split("=", 1)[1]
         if value == "--agent":
-            return argv[index + 1]
+            if index + 1 < len(argv):
+                return argv[index + 1]
     return None
 
 

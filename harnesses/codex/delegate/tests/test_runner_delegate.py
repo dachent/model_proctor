@@ -150,6 +150,21 @@ class RunnerDelegateContractTest(unittest.TestCase):
         self.assertIsNone(envelope["child_home"])
         self.assertEqual(envelope["codex_error"], "ArgumentError")
 
+    def test_equals_form_agent_survives_a_malformed_runner_argv(self):
+        """Ignoring argparse's equals form would erase the runner's worker identity."""
+        result = subprocess.run(
+            [sys.executable, str(BRIDGE), "--agent=terra", "--workspace",
+             str(self.workspace), "--task-file", str(self.task_file),
+             "--timeout", "not-a-number"],
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        envelope = json.loads(result.stdout)
+        self.assertEqual(envelope["status"], "invalid")
+        self.assertEqual(envelope["agent"], "terra")
+        self.assertEqual(envelope["codex_error"], "ArgumentError")
+
 
 class RunnerCompatibilityIntegrationTest(unittest.TestCase):
     def setUp(self):
