@@ -31,13 +31,14 @@ class _EnvelopeParser(argparse.ArgumentParser):
 
 
 def _argv_agent(argv: Sequence[str]) -> Optional[str]:
+    agent = None
     for index, value in enumerate(argv):
         if value.startswith("--agent="):
-            return value.split("=", 1)[1]
+            agent = value.split("=", 1)[1]
         if value == "--agent":
             if index + 1 < len(argv):
-                return argv[index + 1]
-    return None
+                agent = argv[index + 1]
+    return agent
 
 
 def _local_config() -> Path:

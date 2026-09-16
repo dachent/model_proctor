@@ -165,6 +165,21 @@ class RunnerDelegateContractTest(unittest.TestCase):
         self.assertEqual(envelope["agent"], "terra")
         self.assertEqual(envelope["codex_error"], "ArgumentError")
 
+    def test_last_duplicate_agent_survives_a_malformed_runner_argv(self):
+        """Keeping the first duplicate agent would disagree with argparse's effective value."""
+        result = subprocess.run(
+            [sys.executable, str(BRIDGE), "--agent=terra", "--agent", "astra",
+             "--workspace", str(self.workspace), "--task-file", str(self.task_file),
+             "--timeout", "not-a-number"],
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        envelope = json.loads(result.stdout)
+        self.assertEqual(envelope["status"], "invalid")
+        self.assertEqual(envelope["agent"], "astra")
+        self.assertEqual(envelope["codex_error"], "ArgumentError")
+
 
 class RunnerCompatibilityIntegrationTest(unittest.TestCase):
     def setUp(self):
