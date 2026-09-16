@@ -93,6 +93,13 @@ class ExplicitDestinationInstallTest(unittest.TestCase):
         self.assertIn("`C:\\Tools\\model-proctor\\runner.py`", readme)
         self.assertIn("`C:\\Tools\\model-proctor\\task_schema.py`", readme)
         self.assertIn("does not copy or rewrite", readme)
+        self.assertIn(
+            "`C:\\Tools\\model-proctor\\codex-delegate\\local-config.json`", readme,
+        )
+        self.assertIn(
+            "Arbitrary `--config` paths are for direct `delegate.py` dispatch only.",
+            " ".join(readme.split()),
+        )
 
     def test_existing_manifest_name_refuses_before_any_copy(self):
         """An existing delegate or later manifest file must survive unchanged."""
