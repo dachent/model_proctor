@@ -219,17 +219,6 @@ uses exactly the requested `cli` or `app-server` transport with no fallback.
 See its README for the schema-1 Luna/Terra/Astra presets, read-only/write
 sandbox boundary, evidence semantics, and explicit-destination-only installer.
 
-The Codex installer copies this exact flat boundary to a destination chosen by
-the operator: `delegate.py`, `catalog.py`, `runner_delegate.py`,
-`runner-agent-map.json`, `local-config.example.json`, and the delegate README.
-The bridge and map sit beside the delegate, catalog, and config example. The
-Kimi runner control plane remains the existing shared
-`C:\Tools\model-proctor\runner.py` and `C:\Tools\model-proctor\task_schema.py`;
-the Codex installer neither copies nor rewrites them. It has no default or
-force destination, refuses every manifest-name collision before copying, and
-never copies a live local config, credentials, or a machine-specific Codex
-executable path.
-
 ---
 
 ## Using it from Kimi Code CLI
