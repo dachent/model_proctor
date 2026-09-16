@@ -48,6 +48,8 @@ class ExplicitDestinationInstallTest(unittest.TestCase):
         expected = {
             "harnesses/codex/delegate/delegate.py",
             "harnesses/codex/delegate/catalog.py",
+            "harnesses/codex/delegate/runner_delegate.py",
+            "harnesses/codex/delegate/runner-agent-map.json",
             "harnesses/codex/delegate/local-config.example.json",
             "harnesses/codex/delegate/README.md",
         }
@@ -61,7 +63,10 @@ class ExplicitDestinationInstallTest(unittest.TestCase):
         self.assertEqual(self.installer.main(["--destination", str(self.destination)]), 0)
         self.assertEqual(
             {path.name for path in self.destination.iterdir() if path.is_file()},
-            {"delegate.py", "catalog.py", "local-config.example.json", "README.md"},
+            {
+                "delegate.py", "catalog.py", "runner_delegate.py",
+                "runner-agent-map.json", "local-config.example.json", "README.md",
+            },
         )
         runnable = subprocess.run(
             [sys.executable, str(self.destination / "delegate.py"), "--help"],
@@ -78,7 +83,10 @@ class ExplicitDestinationInstallTest(unittest.TestCase):
 
     def test_existing_manifest_name_refuses_before_any_copy(self):
         """An existing delegate or later manifest file must survive unchanged."""
-        for filename in ("delegate.py", "catalog.py", "local-config.example.json", "README.md"):
+        for filename in (
+            "delegate.py", "catalog.py", "runner_delegate.py", "runner-agent-map.json",
+            "local-config.example.json", "README.md",
+        ):
             with self.subTest(filename=filename):
                 destination = self.tmp / filename.replace(".", "-")
                 destination.mkdir()

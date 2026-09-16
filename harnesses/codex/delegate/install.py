@@ -18,6 +18,8 @@ SOURCE_DIR = Path(__file__).resolve().parent
 INSTALL_MANIFEST = (
     "delegate.py",
     "catalog.py",
+    "runner_delegate.py",
+    "runner-agent-map.json",
     "local-config.example.json",
     "README.md",
 )
