@@ -1,55 +1,172 @@
 ---
 name: model-proctor
-description: Use when the user explicitly asks to delegate or proctor a coding task with Luna, Terra, or Astra, or invokes model-proctor. Do not use for ordinary direct work or automatic model routing.
+description: Use when substantial coding or proctor tasks require runner-governed delegation, or when the user explicitly invokes model-proctor. Do not use for trivial tasks — execute those directly. Requires the model-proctor install.
 ---
 
-# Model Proctor for Codex
+# Model Proctor Policy for Codex
 
-Use this skill as an explicit handoff to one selected Codex worker. It does not
-choose a model from task shape.
+The proctor assigns the exam, watches the clock, and grades it objectively — the model never
+marks its own work. You are the leader. Two surfaces, one doctrine: **the gated path** for
+substantial work (`C:/Tools/model-proctor/runner.py` init/dispatch/verify/accept — the
+shared runner's flash-first lifecycle with recorded-stagnation escalation), and **thin dispatch**
+for explicitly named consults and one-shots. Prompts do not enforce; the tools enforce.
+Deterministic evidence outranks every model, including you.
 
-## Select the preset
+## The gated path (substantial work — the default)
 
-Use the preset the user names:
+Runner state, receipts, and sealed verifier payloads live OUTSIDE the workspace
+(`.runner-state/` sibling) — the worker cannot rewrite its own evidence. At verify time the
+runner restores any tampered verification input from the sealed copy and flags it on the receipt.
 
-| User selection | Model and effort |
-| --- | --- |
-| Luna | `gpt-5.6-luna`, `medium` |
-| Terra | `gpt-5.6-terra`, `high` |
-| Astra | `gpt-6-astra`, `max` |
+For substantial work without an explicitly named `luna`, `terra`, or `astra` one-shot, use the
+shared runner lifecycle. The runner keeps ownership of its state, verification, acceptance,
+recording, routing, escalation, production, resume, and stopping policies.
+`C:\Tools\model-proctor\task_schema.py` remains the shared task schema; do not create a Codex
+runner or schema.
 
-If the user invokes `$model-proctor` without naming Luna, Terra, or Astra, ask
-which preset they want. Do not infer one.
+1. **Write the task file**: `task.json` with `task_id`, `prompt`, `features`, `scope`
+   (non-empty), `verifier.argv` (an argv ARRAY — never a shell string; use `{python}` for the
+   interpreter), and `budget`. Tasks that drive a known production runner also require
+   `preflight_receipts` — see **Production tasks** below.
+2. **Lane**: `python C:/Tools/model-proctor/runner.py lane --task task.json` — record the decision.
+   Override only by setting `lane` in the task file, and note why in the task record. The shared
+   lane-to-Codex mapping is `flash -> Luna`, `glm -> Terra`, and `k3 -> Astra`.
+3. **Init**: `python C:/Tools/model-proctor/runner.py init --workspace <w> --task task.json`. Refusal
+   (`workspace_is_not_repo_root`) is final — fix the workspace, never bypass. Init pins the
+   verification contract (`verifier`, `seal`) into external state; the task file sits inside
+   the worker-writable tree, so from here on the pinned copy is authoritative.
+4. **Dispatch**: `python C:/Tools/model-proctor/runner.py dispatch --workspace <w> --task task.json --delegate C:\Tools\model-proctor\codex-delegate\runner_delegate.py --agent-map C:\Tools\model-proctor\codex-delegate\runner-agent-map.json`. The
+   worker owns the engineering trajectory in its own session; you own state and acceptance. Only
+   this dispatch command receives the Codex bridge and map.
+5. **Verify**: `python C:/Tools/model-proctor/runner.py verify --workspace <w> --task task.json`. The runner
+   rejects verification if any verification-affecting file (conftest.py, pytest.ini,
+   pyproject.toml, *.pth, ...) appeared or changed since init, if the task file's verifier
+   diverges from the pin (`verifier_changed_since_init`), or if a workspace file shadows a
+   module the verifier imports via `-m` (`module_shadow_detected` — the workspace is
+   `sys.path[0]`, so a dropped `unittest.py` would otherwise swallow the run). Then it runs
+   the verifier itself. Never trust worker-reported results.
+6. **Accept**: `python C:/Tools/model-proctor/runner.py accept --workspace <w> --task task.json`. A green
+   receipt stales automatically on any tree mutation — re-verify after every change.
+   Accept also refuses when the receipt carries `tamper_detected` (a sealed verification
+   input was altered and the runner restored it) and when any dispatch happened after the
+   receipt was written. Both clear by re-running `verify` — never by re-running `accept`.
+7. **Record**: `python C:/Tools/model-proctor/runner.py record --workspace <w> --task task.json [--wire
+   <wire.jsonl> --pricing C:/Tools/model-proctor/pricing.yaml]` — appends the append-only task
+   record. Use the **installed** pricing table, not a relative `evals/` path. Malformed, missing,
+   or unavailable usage is **unknown, never $0** (`usage_unknown` on the row).
 
-## Delegate
+The receipt records the tree signature, the dispatch count it was written at (`dispatch_seq`), and
+the `verifier_argv` that produced it — so a green receipt states *what* was verified, not merely
+that something was. It also carries `baseline_tree` and `verifier_nondiscriminating`; when
+`dispatch_seq == 0` and `verifier_nondiscriminating == true`, `accept` refuses by default —
+`--allow-zero-dispatch` is the reviewed, counted exception.
 
-1. Keep the requested task text intact. Use the active repository root as the
-   workspace; if there is no unambiguous workspace, ask for it.
-2. Encode the exact requested task as one UTF-8 Base64 value before putting it
-   in a shell command. Do not embed the raw task in a PowerShell here-string or
-   other shell literal. The helper decodes it once and passes its UTF-8 bytes
-   straight to the adapter's standard input, resolves the desktop-bundled Codex
-   executable, and invokes the installed adapter with `app-server` transport.
-   Do not use a bare `codex` command, a daemon, MCP, another UI, or a task file.
+## Lane table (shared routing policy — flash-first with evidence-driven escalation)
 
-   ```powershell
+The shared runner's escalation ladder is **evidence-driven, not start-time guesswork** — a lane
+changes only on recorded stagnation (see Failure classes below). Codex identities are the fixed
+bridge mapping: `flash -> Luna`, `glm -> Terra`, `k3 -> Astra`.
+
+| Task shape | Lane |
+|---|---|
+| localized + bounded + known location + objective acceptance | `flash` |
+| multi-module / unfamiliar repo / substantial refactor | `glm` |
+| open-ended exploration, research engineering, marathon | `k3` |
+| no bounded signature, substantial | `glm` (default) |
+
+Decomposition itself is the hard problem? Optionally consult Astra for a task breakdown first —
+that is a planning consult, not a mandatory planner tax.
+
+## Direct named dispatch (consults and one-shots)
+
+Use thin dispatch only for an explicitly named request in this form:
+
+```text
+$model-proctor luna|terra|astra: <task text>
+```
+
+Keep the requested task text intact. Use the active repository root as the workspace; if there is
+no unambiguous workspace, ask for it. Encode the exact task as one UTF-8 Base64 value before putting
+it in a shell command. Do not embed raw task text in a PowerShell here-string or other shell literal.
+The helper decodes it once and passes its UTF-8 bytes straight to the adapter's standard input,
+resolves the desktop-bundled Codex executable, and invokes the installed adapter with `app-server`
+transport. Do not use a bare `codex` command, a daemon, MCP, another UI, or a task file.
+
+```powershell
 $dispatcher = Join-Path $env:USERPROFILE '.codex\skills\model-proctor\scripts\dispatch.py'
 $taskBase64 = '<Base64 of the exact requested task, encoded as UTF-8>'
 $taskBase64 | & python $dispatcher --task-base64-stdin `
     --preset <luna|terra|astra> --workspace '<absolute workspace path>'
-   ```
-
-3. Read-only is the default. Add `--write` only when the user explicitly
-   authorizes workspace changes. Never remove or overwrite `PROCTOR_CHILD`. Do
-   not put secrets, credential values, or environment dumps into the task: the
-   read-only sandbox is not credential isolation.
-4. Return the normalized result, including its selected model, effort, sandbox,
-   nested-dispatch status, and `agent_message`. A completed transport envelope
-   is not independent acceptance of the worker's work. A detected native
-   subagent activity is refused after it is observed.
-
-The reliable visible invocation is, for example:
-
-```text
-$model-proctor astra: Adversarially review this repository's authentication changes.
 ```
+
+- Read-only is the default. Add `--write` only when the user explicitly authorizes workspace
+  changes. Never remove or overwrite `PROCTOR_CHILD`. Do not put secrets, credential values, or
+  environment dumps into the task: the read-only sandbox is not credential isolation.
+- Return the normalized result, including its selected model, effort, sandbox, nested-dispatch
+  status, and `agent_message`. A completed transport envelope is not independent acceptance of the
+  worker's work. A detected native subagent activity is refused after it is observed.
+- The direct surface does not replace the gated path for substantial unnamed work. Known
+  production-pattern tasks belong on the gated runner path.
+
+## Production tasks
+
+If the prompt, scope, or verifier names a known production entrypoint (`run_week.ps1`,
+`src.run_all`, `src.run_weekly`, `run_readiness_doctor`, `morning_battery`), the runner
+treats the task as ops-class:
+
+- **The flash lane is refused** unless you set an explicit `lane` in the task file. `init`
+  and `dispatch` now agree on this; an explicit override is a reviewed decision, so record
+  why in the task record.
+- **`preflight_receipts` is mandatory** — a non-empty array of paths to logs or reports the
+  orchestrator's own probe (doctor / battery / dry-run) actually produced. Missing files
+  refuse (`preflight_receipt_required`); receipts older than 24h refuse
+  (`preflight_receipt_stale`, override with `budget.max_preflight_age_s`). Discovery is
+  what probes are for, not what dispatch budgets are for.
+
+This is a **known-entrypoint denylist over your own task text**, not a general ops-class
+detector: a prompt that never names one of those entrypoints will not trip it. Declaring
+features honestly is still your job.
+
+## Failure classes and switching (not a fixed ladder)
+
+- **Provider/tool failure** (timeout, internal_error) → switch provider/harness lane, not a
+  smarter model.
+- **Execution stagnation** (identical normalized failure fingerprint, 3 in a row) → lateral
+  switch: flash→glm, glm→k3, k3→glm. The new worker gets a compact evidence packet —
+  objective, acceptance criteria, current diff, verified test output, fingerprints, explicit
+  switch reason — never the failed model's full rationale.
+- **Localized defect after broad success** → same-worker targeted repair.
+- Budgets are hard caps (`max_dispatches`, `max_stagnant`, `timeout_s`). A refusal is final
+  until state changes legally.
+
+## Stopping rules
+
+1. Max **two adversarial QC rounds per change**; a third round is an owner call.
+   Test-strength-only findings (no production defect) are record-and-ship — note
+   them on the issue, do not loop.
+2. Re-run only the **narrowest failing stage**; rebuild upstream stages only when
+   an upstream input actually changed.
+3. Gates (full suite + linters) re-run only **after a code change**.
+4. Budgets are declared at dispatch and escalate on breach instead of continuing
+   (`max_dispatches`, `max_stagnant`, `timeout_s` above; #83 M1 extends them to
+   per-attempt reservations).
+
+## Session discipline
+
+One persistent worker session per task, closed at acceptance. Externalize verified state to
+files continuously; do not accumulate completed task detail in your own context. If you are
+asked to resume a dead trajectory, restart from the evidence packet instead.
+
+### Resuming after a gap (mandated first step)
+
+The FIRST action on any resume — new morning, reopened machine, post-crash — is
+`python C:/Tools/model-proctor/runner.py status --workspace <w>`:
+
+- `stall_suspected: true` (silence beyond `max(2x timeout_s, 1h)`) and any
+  `orphaned_dispatch_ids` are **stop-and-investigate** signals.
+- Orphans are advisory. Investigate, then clear with
+  `python C:/Tools/model-proctor/runner.py journal --workspace <w> --ack <dispatch_id>`
+  so they stop re-reporting.
+- `last_receipt` with `dispatch_seq: 0` + `verifier_nondiscriminating: true` carries no worker
+  evidence; `accept` refuses it unless `--allow-zero-dispatch` is supplied. That override is
+  counted and should be treated as a reviewed exception.

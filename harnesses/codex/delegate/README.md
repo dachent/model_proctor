@@ -86,12 +86,25 @@ collisions and supply it deliberately:
 python harnesses/codex/delegate/install.py --destination C:\chosen\codex-delegate
 ```
 
-It copies only `delegate.py`, `catalog.py`, this README, and the tracked config
-example. It never copies a live local config, credentials, or a machine-specific
-Codex executable path. A destination is allowed to be temporary; verify that
-choice before using a durable location. If any of those four filenames already
-exists at the destination, installation fails before copying anything. There is
-no force option.
+The exact flat installed boundary is `delegate.py`, `catalog.py`,
+`runner_delegate.py`, `runner-agent-map.json`, `local-config.example.json`, and
+`README.md`. The bridge and map are installed beside the delegate, catalog, and
+tracked config example so the Codex adapter can serve the existing runner
+contract. The shared Kimi control-plane files
+`C:\Tools\model-proctor\runner.py` and
+`C:\Tools\model-proctor\task_schema.py` remain required; the Codex installer
+does not copy or rewrite them. It never copies a live local config, credentials,
+or a machine-specific Codex executable path. A destination is allowed to be
+temporary; verify that choice before using a durable location. If any of those
+six filenames already exists at the destination, installation fails before
+copying anything. There is no default destination and no force option.
+
+For runner-gated bridge use, `local-config.json` is required beside
+`runner_delegate.py` in the installed bridge directory. For example, if the
+bridge is installed at `C:\Tools\model-proctor\codex-delegate`, its required
+config file is `C:\Tools\model-proctor\codex-delegate\local-config.json`. The
+bridge accepts no arbitrary config path. Arbitrary `--config` paths are for
+direct `delegate.py` dispatch only.
 
 From a flat installed directory, invoke its local `delegate.py`:
 

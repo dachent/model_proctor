@@ -80,6 +80,40 @@ print(json.dumps({'status': 'completed', 'agent_message': 'worker answer'}))
         self.assertIn("straight to the adapter's standard input", text)
         self.assertNotIn("temporary sibling", text)
 
+    def test_skill_routes_substantial_unnamed_work_through_the_shared_gated_lifecycle(self):
+        """The policy has a runner-owned surface and a named thin-dispatch surface."""
+        text = SKILL.read_text(encoding="utf-8")
+
+        self.assertIn("two surfaces", text.lower())
+        self.assertIn("gated path", text.lower())
+        self.assertIn("thin dispatch", text.lower())
+        for stage in ("lane", "init", "dispatch", "verify", "accept", "record"):
+            self.assertIn(f"runner.py {stage}", text)
+
+        self.assertIn(r"C:\Tools\model-proctor\codex-delegate\runner_delegate.py", text)
+        self.assertIn(r"C:\Tools\model-proctor\codex-delegate\runner-agent-map.json", text)
+        self.assertIn(r"C:\Tools\model-proctor\task_schema.py", text)
+        self.assertIn("--delegate", text)
+        self.assertIn("--agent-map", text)
+        self.assertIn("flash -> Luna", text)
+        self.assertIn("glm -> Terra", text)
+        self.assertIn("k3 -> Astra", text)
+
+        self.assertIn("$model-proctor luna|terra|astra:", text)
+        self.assertIn("--task-base64-stdin", text)
+        self.assertIn("Read-only is the default", text)
+        self.assertIn("`--write` only when the user explicitly authorizes", text)
+        self.assertNotIn("which preset they want", text)
+        self.assertNotIn("It does not\nchoose a model from task shape.", text)
+        self.assertNotIn("Do not use for ordinary direct work or automatic model routing.", text)
+
+    def test_resume_status_uses_only_supported_runner_arguments(self):
+        """Status reads runner state by workspace and must not receive a task file."""
+        text = SKILL.read_text(encoding="utf-8")
+
+        self.assertIn("runner.py status --workspace <w>`", text)
+        self.assertNotIn("runner.py status --workspace <w> --task", text)
+
     def test_helper_passes_stdin_without_a_task_file_and_preserves_read_only_default(self):
         result = self.run_helper()
         self.assertEqual(result.returncode, 0, result.stderr)

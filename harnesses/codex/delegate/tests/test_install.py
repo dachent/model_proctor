@@ -48,6 +48,8 @@ class ExplicitDestinationInstallTest(unittest.TestCase):
         expected = {
             "harnesses/codex/delegate/delegate.py",
             "harnesses/codex/delegate/catalog.py",
+            "harnesses/codex/delegate/runner_delegate.py",
+            "harnesses/codex/delegate/runner-agent-map.json",
             "harnesses/codex/delegate/local-config.example.json",
             "harnesses/codex/delegate/README.md",
         }
@@ -61,7 +63,10 @@ class ExplicitDestinationInstallTest(unittest.TestCase):
         self.assertEqual(self.installer.main(["--destination", str(self.destination)]), 0)
         self.assertEqual(
             {path.name for path in self.destination.iterdir() if path.is_file()},
-            {"delegate.py", "catalog.py", "local-config.example.json", "README.md"},
+            {
+                "delegate.py", "catalog.py", "runner_delegate.py",
+                "runner-agent-map.json", "local-config.example.json", "README.md",
+            },
         )
         runnable = subprocess.run(
             [sys.executable, str(self.destination / "delegate.py"), "--help"],
@@ -76,9 +81,40 @@ class ExplicitDestinationInstallTest(unittest.TestCase):
             self.installer.main([])
         self.assertEqual(error.exception.code, 2)
 
+    def test_installed_readme_states_the_complete_shared_control_plane_boundary(self):
+        """Stale copy instructions must not omit bridge artifacts or shared runner ownership."""
+        readme = (DELEGATE_DIR / "README.md").read_text(encoding="utf-8")
+        normalized_readme = " ".join(readme.split())
+        for artifact in (
+            "delegate.py", "catalog.py", "runner_delegate.py", "runner-agent-map.json",
+            "local-config.example.json", "README.md",
+        ):
+            with self.subTest(artifact=artifact):
+                self.assertIn(f"`{artifact}`", readme)
+        self.assertIn("`C:\\Tools\\model-proctor\\runner.py`", readme)
+        self.assertIn("`C:\\Tools\\model-proctor\\task_schema.py`", readme)
+        self.assertIn("does not copy or rewrite", readme)
+        self.assertIn(
+            "`local-config.json` is required beside `runner_delegate.py` in the installed "
+            "bridge directory.",
+            normalized_readme,
+        )
+        self.assertIn(
+            "For example, if the bridge is installed at "
+            "`C:\\Tools\\model-proctor\\codex-delegate`,",
+            normalized_readme,
+        )
+        self.assertIn(
+            "Arbitrary `--config` paths are for direct `delegate.py` dispatch only.",
+            normalized_readme,
+        )
+
     def test_existing_manifest_name_refuses_before_any_copy(self):
         """An existing delegate or later manifest file must survive unchanged."""
-        for filename in ("delegate.py", "catalog.py", "local-config.example.json", "README.md"):
+        for filename in (
+            "delegate.py", "catalog.py", "runner_delegate.py", "runner-agent-map.json",
+            "local-config.example.json", "README.md",
+        ):
             with self.subTest(filename=filename):
                 destination = self.tmp / filename.replace(".", "-")
                 destination.mkdir()
