@@ -81,6 +81,19 @@ class ExplicitDestinationInstallTest(unittest.TestCase):
             self.installer.main([])
         self.assertEqual(error.exception.code, 2)
 
+    def test_installed_readme_states_the_complete_shared_control_plane_boundary(self):
+        """Stale copy instructions must not omit bridge artifacts or shared runner ownership."""
+        readme = (DELEGATE_DIR / "README.md").read_text(encoding="utf-8")
+        for artifact in (
+            "delegate.py", "catalog.py", "runner_delegate.py", "runner-agent-map.json",
+            "local-config.example.json", "README.md",
+        ):
+            with self.subTest(artifact=artifact):
+                self.assertIn(f"`{artifact}`", readme)
+        self.assertIn("`C:\\Tools\\model-proctor\\runner.py`", readme)
+        self.assertIn("`C:\\Tools\\model-proctor\\task_schema.py`", readme)
+        self.assertIn("does not copy or rewrite", readme)
+
     def test_existing_manifest_name_refuses_before_any_copy(self):
         """An existing delegate or later manifest file must survive unchanged."""
         for filename in (
