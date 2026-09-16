@@ -99,10 +99,12 @@ temporary; verify that choice before using a durable location. If any of those
 six filenames already exists at the destination, installation fails before
 copying anything. There is no default destination and no force option.
 
-For runner-gated bridge use,
-`C:\Tools\model-proctor\codex-delegate\local-config.json` is required beside
-`runner_delegate.py`; the bridge accepts no arbitrary config path. Arbitrary
-`--config` paths are for direct `delegate.py` dispatch only.
+For runner-gated bridge use, `local-config.json` is required beside
+`runner_delegate.py` in the installed bridge directory. For example, if the
+bridge is installed at `C:\Tools\model-proctor\codex-delegate`, its required
+config file is `C:\Tools\model-proctor\codex-delegate\local-config.json`. The
+bridge accepts no arbitrary config path. Arbitrary `--config` paths are for
+direct `delegate.py` dispatch only.
 
 From a flat installed directory, invoke its local `delegate.py`:
 

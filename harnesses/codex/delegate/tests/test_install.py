@@ -84,6 +84,7 @@ class ExplicitDestinationInstallTest(unittest.TestCase):
     def test_installed_readme_states_the_complete_shared_control_plane_boundary(self):
         """Stale copy instructions must not omit bridge artifacts or shared runner ownership."""
         readme = (DELEGATE_DIR / "README.md").read_text(encoding="utf-8")
+        normalized_readme = " ".join(readme.split())
         for artifact in (
             "delegate.py", "catalog.py", "runner_delegate.py", "runner-agent-map.json",
             "local-config.example.json", "README.md",
@@ -94,11 +95,18 @@ class ExplicitDestinationInstallTest(unittest.TestCase):
         self.assertIn("`C:\\Tools\\model-proctor\\task_schema.py`", readme)
         self.assertIn("does not copy or rewrite", readme)
         self.assertIn(
-            "`C:\\Tools\\model-proctor\\codex-delegate\\local-config.json`", readme,
+            "`local-config.json` is required beside `runner_delegate.py` in the installed "
+            "bridge directory.",
+            normalized_readme,
+        )
+        self.assertIn(
+            "For example, if the bridge is installed at "
+            "`C:\\Tools\\model-proctor\\codex-delegate`,",
+            normalized_readme,
         )
         self.assertIn(
             "Arbitrary `--config` paths are for direct `delegate.py` dispatch only.",
-            " ".join(readme.split()),
+            normalized_readme,
         )
 
     def test_existing_manifest_name_refuses_before_any_copy(self):
