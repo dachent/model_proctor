@@ -107,6 +107,13 @@ print(json.dumps({'status': 'completed', 'agent_message': 'worker answer'}))
         self.assertNotIn("It does not\nchoose a model from task shape.", text)
         self.assertNotIn("Do not use for ordinary direct work or automatic model routing.", text)
 
+    def test_resume_status_uses_only_supported_runner_arguments(self):
+        """Status reads runner state by workspace and must not receive a task file."""
+        text = SKILL.read_text(encoding="utf-8")
+
+        self.assertIn("runner.py status --workspace <w>`", text)
+        self.assertNotIn("runner.py status --workspace <w> --task", text)
+
     def test_helper_passes_stdin_without_a_task_file_and_preserves_read_only_default(self):
         result = self.run_helper()
         self.assertEqual(result.returncode, 0, result.stderr)

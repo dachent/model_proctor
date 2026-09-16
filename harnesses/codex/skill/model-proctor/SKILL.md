@@ -160,7 +160,7 @@ asked to resume a dead trajectory, restart from the evidence packet instead.
 ### Resuming after a gap (mandated first step)
 
 The FIRST action on any resume — new morning, reopened machine, post-crash — is
-`python C:/Tools/model-proctor/runner.py status --workspace <w> --task task.json`:
+`python C:/Tools/model-proctor/runner.py status --workspace <w>`:
 
 - `stall_suspected: true` (silence beyond `max(2x timeout_s, 1h)`) and any
   `orphaned_dispatch_ids` are **stop-and-investigate** signals.
