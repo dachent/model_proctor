@@ -30,17 +30,6 @@ class _EnvelopeParser(argparse.ArgumentParser):
         raise argparse.ArgumentError(None, message)
 
 
-def _argv_agent(argv: Sequence[str]) -> Optional[str]:
-    agent = None
-    for index, value in enumerate(argv):
-        if value.startswith("--agent="):
-            agent = value.split("=", 1)[1]
-        if value == "--agent":
-            if index + 1 < len(argv):
-                agent = argv[index + 1]
-    return agent
-
-
 def _local_config() -> Path:
     path = _HERE / "local-config.json"
     if not path.is_file():
@@ -85,7 +74,7 @@ def _envelope(*, agent: str, started: float, codex: dict[str, Any], codex_exit_c
     return result
 
 
-def _invalid_envelope(*, agent: str, started: float, error: Exception, status: str) -> dict[str, Any]:
+def _invalid_envelope(*, agent: Optional[str], started: float, error: Exception, status: str) -> dict[str, Any]:
     return {
         "status": status,
         "agent": agent,
@@ -141,10 +130,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     started = time.monotonic()
+    # Retain only values argparse successfully bound before a parsing failure.
+    args = argparse.Namespace(agent=None)
     try:
-        args = build_parser().parse_args(raw_argv)
+        build_parser().parse_args(raw_argv, namespace=args)
     except argparse.ArgumentError as exc:
-        print(json.dumps(_invalid_envelope(agent=_argv_agent(raw_argv), started=started,
+        print(json.dumps(_invalid_envelope(agent=args.agent, started=started,
                                             error=exc, status="invalid"),
                          separators=(",", ":")))
         return 0

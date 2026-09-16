@@ -180,6 +180,42 @@ class RunnerDelegateContractTest(unittest.TestCase):
         self.assertEqual(envelope["agent"], "astra")
         self.assertEqual(envelope["codex_error"], "ArgumentError")
 
+    def test_missing_duplicate_agent_value_retains_the_last_bound_agent(self):
+        """Treating the next option as an agent would corrupt the invalid envelope."""
+        result = subprocess.run(
+            [sys.executable, str(BRIDGE), "--agent=terra", "--agent",
+             "--workspace", str(self.workspace), "--task-file", str(self.task_file),
+             "--timeout", "10"],
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        envelope = json.loads(result.stdout)
+        self.assertEqual(envelope["status"], "invalid")
+        self.assertIsInstance(envelope["duration_seconds"], (int, float))
+        self.assertIsNone(envelope["child_session_id"])
+        self.assertIsNone(envelope["child_home"])
+        self.assertEqual(envelope["codex_error"], "ArgumentError")
+        self.assertEqual(envelope["agent"], "terra")
+
+    def test_agent_after_option_terminator_does_not_replace_the_bound_agent(self):
+        """Scanning beyond -- would identify an agent argparse never bound."""
+        result = subprocess.run(
+            [sys.executable, str(BRIDGE), "--agent=terra", "--workspace",
+             str(self.workspace), "--task-file", str(self.task_file),
+             "--timeout", "10", "--", "--agent", "astra"],
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        envelope = json.loads(result.stdout)
+        self.assertEqual(envelope["status"], "invalid")
+        self.assertIsInstance(envelope["duration_seconds"], (int, float))
+        self.assertIsNone(envelope["child_session_id"])
+        self.assertIsNone(envelope["child_home"])
+        self.assertEqual(envelope["codex_error"], "ArgumentError")
+        self.assertEqual(envelope["agent"], "terra")
+
 
 class RunnerCompatibilityIntegrationTest(unittest.TestCase):
     def setUp(self):
