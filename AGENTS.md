@@ -18,6 +18,9 @@ never through the harness root.
 - `harnesses/codex/delegate/` — explicit Codex catalog dispatch (`delegate.py`, `catalog.py`), tracked local-config
   example, tests, and operator documentation. It is a separate adapter with its own explicit-destination installer;
   it does not inherit Kimi routing or acceptance authority.
+- `harnesses/codex/skill/model-proctor/` — standalone Codex desktop trigger (`SKILL.md` plus dispatcher and tests).
+  It explicitly selects Luna, Terra, or Astra through the Codex adapter; it is not an MCP server, daemon, plugin,
+  automatic router, or acceptance authority.
 - `harnesses/kimi-code/cascade/` — the deterministic static-cascade controller (`cascade.py`), **frozen research
   artifact**, with plan schema (`cascade-schema.json`), tests (`tests/test_cascade.py` + fixture delegate fake), docs
   (`README.md`). Owns cascade-state.json transitions, caps, legal escalation transitions,
@@ -116,12 +119,14 @@ never through the harness root.
   0.67-1.16s warm, against Node's 0.25-0.38s).
 - No git mutations without explicit user confirmation. Repository creation on this workstation must
   use `New-CentralGitRepo.ps1` (centralized Git policy); never raw `git init`.
-- Durable installs follow workstation policy: tools to `C:\Tools\model-proctor\`, skills to
-  `%USERPROFILE%\.kimi-code\skills\`, each with explicit user confirmation.
+- Durable installs follow workstation policy: tools to `C:\Tools\model-proctor\`, Kimi skills to
+  `%USERPROFILE%\.kimi-code\skills\`, and Codex skills to `%USERPROFILE%\.codex\skills\`, each with explicit
+  user confirmation.
 - Eval fixture runs live outside cloud-synced folders (default: `C:\Dev\bootstrap-state\model-proctor\evals\runs\`;
   historical metered rows keep their original `kimi-router` paths — the evidence record is immutable).
-- Live orchestration authority is `harnesses/kimi-code/runner/` plus
-  `harnesses/kimi-code/skill/model-proctor/SKILL.md`. Do not use
+- Live Kimi orchestration authority is `harnesses/kimi-code/runner/` plus
+  `harnesses/kimi-code/skill/model-proctor/SKILL.md`. The separate Codex skill
+  only delegates an explicitly chosen transport. Do not use
   `policy/delegation-policy.md` as live routing policy; it is a superseded research artifact.
 - All work on this tool is managed via the GitHub Issues backlog at
   `dachent/model_proctor` (owner directive 2026-08-14; repo renamed from

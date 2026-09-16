@@ -26,6 +26,11 @@ EXIT_OK = 0
 EXIT_INVALID = 64
 EXIT_OPERATIONAL = 70
 
+_NESTED_ACTIVITY_TYPES = frozenset((
+    "collabAgentToolCall", "collabToolCall", "collab_agent_tool_call",
+    "collab_tool_call", "subAgentActivity", "sub_agent_activity",
+))
+
 
 class TransportTimeout(TimeoutError):
     """The single adapter deadline expired."""
@@ -112,9 +117,10 @@ def _result(status: str, *, model: Optional[str] = None, effort: Optional[str] =
             transport: Optional[str] = None, sandbox: Optional[str] = None,
             error: Optional[str] = None, **extra: Any) -> dict[str, Any]:
     result = {"schema_version": 1, "status": status, "model": model, "effort": effort,
-              "transport": transport, "sandbox": sandbox, "session_id": None,
-              "thread_id": None, "turn_id": None, "terminal_evidence": [],
-              "nested_dispatch_detected": False, "usage": "unknown", "error": error}
+               "transport": transport, "sandbox": sandbox, "session_id": None,
+               "thread_id": None, "turn_id": None, "terminal_evidence": [],
+               "nested_dispatch_detected": False, "usage": "unknown", "agent_message": None,
+               "error": error}
     result.update(extra)
     return result
 
@@ -169,10 +175,76 @@ def _nested(event: Mapping[str, Any]) -> bool:
     for node in nodes:
         if "type" in node and not isinstance(node["type"], str):
             raise ValueError("Codex event type must be a string")
-        if (node.get("type") in ("collabAgentToolCall", "subAgentActivity")
-                or any(name in node for name in ("collabAgentToolCall", "subAgentActivity"))):
+        if (node.get("type") in _NESTED_ACTIVITY_TYPES
+                or any(name in node for name in _NESTED_ACTIVITY_TYPES)):
             return True
     return False
+
+
+def _final_agent_message(item: Any) -> Optional[str]:
+    """Return only a completed assistant final answer, never an arbitrary item payload."""
+    if not isinstance(item, dict) or item.get("type") not in ("agent_message", "agentMessage"):
+        return None
+    phase = item.get("phase")
+    if phase is not None and phase != "final_answer":
+        return None
+    text = item.get("text")
+    return text if isinstance(text, str) and text else None
+
+
+def _record_agent_message(result: dict[str, Any], *, thread_id: Optional[str],
+                          turn_id: Optional[str], item: Any) -> None:
+    """Keep one candidate per completed item until direct app-server IDs are bound."""
+    message = _final_agent_message(item)
+    if message is None:
+        return
+    item_id = _direct_id(item, "id")
+    candidates = result.setdefault("_agent_message_candidates", [])
+    if item_id is not None and any(candidate["item_id"] == item_id
+                                   and candidate["thread_id"] == thread_id
+                                   and candidate["turn_id"] == turn_id
+                                   for candidate in candidates):
+        return
+    candidates.append({"thread_id": thread_id, "turn_id": turn_id,
+                       "item_id": item_id, "text": message})
+
+
+def _observe_agent_message(event: Mapping[str, Any], result: dict[str, Any]) -> None:
+    """Buffer completed assistant answers without trusting notification-derived binding."""
+    if result["transport"] == "cli":
+        if event.get("type") == "item.completed":
+            _record_agent_message(result, thread_id=None, turn_id=None, item=event.get("item"))
+        return
+    params = event.get("params")
+    if not isinstance(params, dict):
+        return
+    thread_id = _direct_id(params, "threadId")
+    turn = params.get("turn")
+    turn_id = _direct_id(params, "turnId") or _direct_id(turn, "id")
+    if thread_id is None or turn_id is None:
+        return
+    if event.get("method") == "item/completed":
+        _record_agent_message(result, thread_id=thread_id, turn_id=turn_id, item=params.get("item"))
+    elif (_terminal_event(event) and _terminal_status(event) == "completed"
+          and isinstance(turn, dict) and isinstance(turn.get("items"), list)):
+        for item in turn["items"]:
+            _record_agent_message(result, thread_id=thread_id, turn_id=turn_id, item=item)
+
+
+def _finalize_agent_message(result: dict[str, Any]) -> None:
+    """Expose only the final message associated with the direct app-server turn response."""
+    candidates = result.pop("_agent_message_candidates", [])
+    bound_thread_id = result.pop("_bound_thread_id", None)
+    bound_turn_id = result.pop("_bound_turn_id", None)
+    if result["nested_dispatch_detected"]:
+        result["agent_message"] = None
+        return
+    if result["transport"] == "app-server":
+        candidates = [candidate for candidate in candidates
+                      if candidate["thread_id"] == bound_thread_id
+                      and candidate["turn_id"] == bound_turn_id]
+    for candidate in candidates:
+        result["agent_message"] = candidate["text"]
 
 
 def _terminal_event(event: Mapping[str, Any]) -> bool:
@@ -256,17 +328,19 @@ def _observe(event: dict[str, Any], result: dict[str, Any]) -> None:
         result["turn_id"] = _id_from(event, "turn_id") or result["turn_id"]
     else:
         params = event.get("params")
-        if (result["thread_id"] is not None and isinstance(params, dict)
-                and params.get("threadId") == result["thread_id"]):
-            # Until turn/start responds, a matching-thread notification is still evidence.
+        if result["thread_id"] is not None and isinstance(params, dict) and params.get("threadId") == result["thread_id"]:
+            # Preserve an early direct turn ID as stream evidence. It is never an
+            # authoritative binding for a final answer; _bound_turn_id is set only
+            # from the turn/start response below.
             turn = params.get("turn")
             result["turn_id"] = (result["turn_id"] or _direct_id(turn, "id")
-                                 or _direct_id(params, "turn_id") or _direct_id(params, "turnId"))
+                                 or _direct_id(params, "turnId"))
     if "method" in event and not isinstance(event["method"], str):
         raise ValueError("Codex RPC method must be a string")
     if _terminal_event(event):
         result["terminal_evidence"].append(event)
     result["nested_dispatch_detected"] |= _nested(event)
+    _observe_agent_message(event, result)
     observed = _usage([event])
     if observed != "unknown":
         result["usage"] = observed
@@ -461,10 +535,11 @@ def _app_server(executable: str, selection: Any, task: str, workspace: Path, san
         thread_response = session.request(thread_method, thread_params)
         payload = thread_response.get("result")
         thread = payload.get("thread") if isinstance(payload, dict) else None
-        thread_id = _id_from(thread, "id") if isinstance(thread, dict) else None
+        thread_id = _direct_id(thread, "id")
         if thread_id is None:
             raise ValueError("app-server thread response lacked a thread id")
         result["thread_id"] = result["session_id"] = thread_id
+        result["_bound_thread_id"] = thread_id
         turn_response = session.request("turn/start", {
             "threadId": thread_id, "model": live.model, "effort": live.effort,
             "input": [{"type": "text", "text": task}], "sandboxPolicy": policy})
@@ -474,10 +549,17 @@ def _app_server(executable: str, selection: Any, task: str, workspace: Path, san
         if turn_id is None:
             raise ValueError("app-server turn response lacked a turn id")
         result["turn_id"] = turn_id
+        result["_bound_turn_id"] = turn_id
         terminal = session.read_terminal(thread_id, turn_id)
         result["status"] = _terminal_status(terminal)
     finally:
         session.close()
+
+
+def _finish(result: dict[str, Any], code: int) -> tuple[dict[str, Any], int]:
+    """Finalize private stream observations before a normalized envelope leaves the adapter."""
+    _finalize_agent_message(result)
+    return result, code
 
 
 def run_delegate(args: argparse.Namespace, *, catalog_payload: Optional[Mapping[str, Any]] = None,
@@ -487,7 +569,8 @@ def run_delegate(args: argparse.Namespace, *, catalog_payload: Optional[Mapping[
     env = dict(os.environ if environ is None else environ)
     sandbox = "workspace-write" if args.write else "read-only"
     if "PROCTOR_CHILD" in env:
-        return _result("refused", transport=args.transport, sandbox=sandbox, error="PROCTOR_CHILD parent refusal"), EXIT_INVALID
+        return _finish(_result("refused", transport=args.transport, sandbox=sandbox,
+                               error="PROCTOR_CHILD parent refusal"), EXIT_INVALID)
     child_env = dict(env); child_env["PROCTOR_CHILD"] = "1"
     result = _result("invalid", transport=args.transport, sandbox=sandbox)
     failure_status = "invalid"
@@ -519,11 +602,11 @@ def run_delegate(args: argparse.Namespace, *, catalog_payload: Optional[Mapping[
             raise ValueError("transport must be cli or app-server")
     except Exception as exc:
         result.update(status=failure_status, error=type(exc).__name__)
-        return result, EXIT_INVALID if failure_status == "invalid" else EXIT_OPERATIONAL
+        return _finish(result, EXIT_INVALID if failure_status == "invalid" else EXIT_OPERATIONAL)
     if result["nested_dispatch_detected"]:
         result["status"] = "refused"; result["error"] = "nested Codex activity observed; result refused"
-        return result, EXIT_OPERATIONAL
-    return result, EXIT_OK if result["status"] == "completed" else EXIT_OPERATIONAL
+        return _finish(result, EXIT_OPERATIONAL)
+    return _finish(result, EXIT_OK if result["status"] == "completed" else EXIT_OPERATIONAL)
 
 
 def build_parser() -> argparse.ArgumentParser:

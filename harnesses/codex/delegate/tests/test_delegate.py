@@ -372,6 +372,16 @@ class DelegateTransportContract(unittest.TestCase):
             popen_factory=self.fake([events]), environ={})
         self.assert_bound_failure(result, code, "app-server")
 
+    def test_thread_start_rejects_a_surrogate_nested_thread_id(self):
+        """Only result.thread.id can bind an app-server worker thread."""
+        events = self.app_events()
+        events[2] = {"id": 3, "result": {"thread": {"result": {"id": "th1"}}}}
+        result, code = delegate.run_delegate(self.args(transport="app-server"),
+            catalog_payload=CATALOG, popen_factory=self.fake([events]), environ={})
+        self.assert_bound_failure(result, code, "app-server")
+        self.assertIsNone(result["thread_id"])
+        self.assertIsNone(result["agent_message"])
+
     def test_turn_start_rejects_surrogate_turn_ids(self):
         """Only direct result.turn.id may authorize terminal matching."""
         for container in ("result", "params", "arguments"):
@@ -509,6 +519,116 @@ class DelegateTransportContract(unittest.TestCase):
         self.assertEqual(sent[4]["params"]["sandboxPolicy"], {"type": "workspaceWrite", "networkAccess": False})
         self.assertEqual(sent[4]["params"]["input"], [{"type": "text", "text": "inspect only"}])
 
+    def test_final_agent_message_is_preserved_for_each_transport(self):
+        """The normalized envelope must return the selected worker's final answer."""
+        app_events = self.app_events()
+        app_events.insert(-1, {"method": "item/completed", "params": {
+            "threadId": "th1", "turnId": "tu1",
+            "item": {"type": "agentMessage", "id": "msg-app", "text": "app final",
+                     "phase": "final_answer"},
+        }})
+        cases = (
+            ("cli", [
+                {"type": "item.completed", "item": {"type": "agent_message", "id": "msg-cli",
+                                                         "text": "cli final"}},
+                {"type": "turn.completed", "turn_id": "turn-cli"},
+            ], "cli final"),
+            ("app-server", app_events, "app final"),
+        )
+        for transport, events, expected in cases:
+            with self.subTest(transport=transport):
+                result, code = delegate.run_delegate(
+                    self.args(transport=transport), catalog_payload=CATALOG,
+                    popen_factory=self.fake([events]), environ={},
+                )
+                self.assertEqual((code, result["status"]), (delegate.EXIT_OK, "completed"))
+                self.assertEqual(result["agent_message"], expected)
+                self.assertNotIn("_agent_message_candidates", result)
+
+    def test_app_server_ignores_final_agent_message_from_an_unrelated_turn(self):
+        """A selected thread cannot inherit output from another worker turn."""
+        events = self.app_events()
+        events.insert(-1, {"method": "item/completed", "params": {
+            "threadId": "other-thread", "turnId": "other-turn",
+            "item": {"type": "agentMessage", "id": "msg-other", "text": "unrelated",
+                     "phase": "final_answer"},
+        }})
+        result, code = delegate.run_delegate(
+            self.args(transport="app-server"), catalog_payload=CATALOG,
+            popen_factory=self.fake([events]), environ={},
+        )
+        self.assertEqual((code, result["status"]), (delegate.EXIT_OK, "completed"))
+        self.assertIsNone(result["agent_message"])
+
+    def test_app_server_does_not_emit_an_unbound_notification_message(self):
+        """Observed stream evidence cannot substitute for a direct turn/start response."""
+        events = self.app_events()
+        events[3] = {"id": 4, "result": {}}
+        events.insert(3, {"method": "item/completed", "params": {
+            "threadId": "th1", "turnId": "tu1",
+            "item": {"type": "agentMessage", "id": "msg-unbound", "text": "must not escape",
+                     "phase": "final_answer"},
+        }})
+        result, code = delegate.run_delegate(
+            self.args(transport="app-server"), catalog_payload=CATALOG,
+            popen_factory=self.fake([events]), environ={},
+        )
+        self.assertEqual((code, result["status"], result["turn_id"]),
+                         (delegate.EXIT_OPERATIONAL, "operational_failure", "tu1"))
+        self.assertIsNone(result["agent_message"])
+        self.assertNotIn("_bound_turn_id", result)
+
+    def test_app_server_binds_buffered_final_answer_to_the_direct_turn_response(self):
+        """Pre-response notifications are buffered, then selected only by the returned turn ID."""
+        events = self.app_events()
+        events.insert(3, {"method": "item/completed", "params": {
+            "threadId": "th1", "turnId": "wrong-turn",
+            "item": {"type": "agentMessage", "id": "msg-spoof", "text": "wrong final",
+                     "phase": "final_answer"},
+        }})
+        events.insert(4, {"method": "item/completed", "params": {
+            "threadId": "th1", "turnId": "tu1",
+            "item": {"type": "agentMessage", "id": "msg-race", "text": "early final",
+                     "phase": "final_answer"},
+        }})
+        result, code = delegate.run_delegate(
+            self.args(transport="app-server"), catalog_payload=CATALOG,
+            popen_factory=self.fake([events]), environ={},
+        )
+        self.assertEqual((code, result["status"], result["turn_id"]),
+                         (delegate.EXIT_OK, "completed", "tu1"))
+        self.assertEqual(result["agent_message"], "early final")
+
+    def test_app_server_deduplicates_a_final_agent_message_item_id(self):
+        """Repeated protocol delivery cannot overwrite an already completed answer item."""
+        events = self.app_events()
+        for text in ("first final", "replayed final"):
+            events.insert(-1, {"method": "item/completed", "params": {
+                "threadId": "th1", "turnId": "tu1",
+                "item": {"type": "agentMessage", "id": "msg-duplicate", "text": text,
+                         "phase": "final_answer"},
+            }})
+        result, code = delegate.run_delegate(
+            self.args(transport="app-server"), catalog_payload=CATALOG,
+            popen_factory=self.fake([events]), environ={},
+        )
+        self.assertEqual((code, result["status"]), (delegate.EXIT_OK, "completed"))
+        self.assertEqual(result["agent_message"], "first final")
+
+    def test_app_server_preserves_final_message_from_completed_turn_items(self):
+        """A terminal completion can carry its final answer without a separate item event."""
+        events = self.app_events()
+        events[-1]["params"]["turn"]["items"] = [{
+            "type": "agentMessage", "id": "msg-terminal", "text": "terminal final",
+            "phase": "final_answer",
+        }]
+        result, code = delegate.run_delegate(
+            self.args(transport="app-server"), catalog_payload=CATALOG,
+            popen_factory=self.fake([events]), environ={},
+        )
+        self.assertEqual((code, result["status"], result["agent_message"]),
+                         (delegate.EXIT_OK, "completed", "terminal final"))
+
     def test_invalid_catalog_selection_refuses_without_launch(self):
         for args in (self.args(model="unknown"), self.args(effort="ultra"), self.args(model=None, preset="missing")):
             with self.subTest(args=args):
@@ -619,7 +739,9 @@ class DelegateTransportContract(unittest.TestCase):
         result, code = delegate.run_delegate(self.args(), catalog_payload=CATALOG,
                                              popen_factory=self.fake([]), environ={"PROCTOR_CHILD": "1"})
         self.assertEqual(code, delegate.EXIT_INVALID); self.assertEqual(self.calls, [])
-        for event_type in ("collabAgentToolCall", "subAgentActivity"):
+        for event_type in (
+                "collabAgentToolCall", "collabToolCall", "collab_agent_tool_call",
+                "collab_tool_call", "subAgentActivity", "sub_agent_activity"):
             with self.subTest(event_type=event_type):
                 streams = [[{"type": event_type}, {"type": "turn.completed"}]]
                 result, code = delegate.run_delegate(self.args(), catalog_payload=CATALOG,

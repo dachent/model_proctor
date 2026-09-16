@@ -50,7 +50,11 @@ arguments. A timeout returns `operational_failure` with error class
 
 Each result is one normalized JSON envelope with the selected
 model/effort/transport/sandbox, terminal IDs/evidence, nested-dispatch state,
-and provider usage when it was observed. Usage is otherwise `"unknown"`.
+provider usage when it was observed, and the selected worker's final
+`agent_message` when the protocol exposes one. `agent_message` is bound to the
+thread and turn IDs returned directly by app-server; replayed item IDs are
+deduplicated. It is `null` if no final message was observed. Usage is otherwise
+`"unknown"`.
 The adapter never invents a dollar cost, and it makes no Kimi runner receipt or
 production-acceptance claim.
 
@@ -61,8 +65,11 @@ reaped session; an RPC error stops the lifecycle.
 
 It refuses a dispatch whenever the `PROCTOR_CHILD` environment key is present,
 including an empty value. It also refuses a result
-when it observes nested Codex activity (`collabAgentToolCall` or
-`subAgentActivity`), even if a turn otherwise completed.
+when it observes nested Codex activity (`collabAgentToolCall`,
+`collabToolCall`, `subAgentActivity`, or their protocol aliases), even if a
+turn otherwise completed. Notifications are evidence only: direct
+`thread/start` and `turn/start` responses establish the selected app-server
+identity.
 
 Resume is deliberately constrained: `--resume-identity` is available only for
 `app-server`, where the adapter reapplies cwd and sandbox binding. CLI resume
@@ -94,3 +101,19 @@ python .\delegate.py `
   --transport cli --codex-executable C:\path\to\codex.exe `
   --workspace C:\work\checkout --task-file C:\safe-local\task.txt
 ```
+
+## Standalone desktop skill
+
+The canonical source for the visible Codex trigger is
+[`../skill/model-proctor/`](../skill/model-proctor/). It is intentionally only
+a standalone `SKILL.md` plus a small dispatcher: no MCP server, daemon, plugin,
+or second desktop UI is required. After a user-authorized installation into the
+local Codex skills root, invoke it in the desktop composer as
+`$model-proctor terra: <task>` (or `luna` / `astra`).
+
+The dispatcher stages its UTF-8 task in a newly-created sibling directory of
+the selected workspace, outside that workspace, then removes it after the
+adapter exits. It resolves a desktop-bundled `codex.exe` below LocalAppData and
+never falls back to an unrelated `PATH` CLI. It preserves the installed,
+untracked `local-config.json`; the source installer remains collision-safe and
+therefore is not an in-place upgrade mechanism.

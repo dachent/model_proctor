@@ -25,6 +25,7 @@ jobs:
           $suites = @(
             "harnesses/kimi-code/delegate/tests",
             "harnesses/codex/delegate/tests",
+            "harnesses/codex/skill/model-proctor/tests",
             "harnesses/kimi-code/runner/tests",
             "core/tests",
             "scripts/tests",
