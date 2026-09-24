@@ -41,8 +41,11 @@ def _load_pricing_fn():
 
 
 def _pricing_path():
-    for cand in (_HERE / "pricing.yaml",
-                 _HERE.parents[2] / "evals" / "pricing.yaml"):
+    cand = _HERE / "pricing.yaml"
+    if cand.is_file():
+        return cand
+    if len(_HERE.parents) > 2:
+        cand = _HERE.parents[2] / "evals" / "pricing.yaml"
         if cand.is_file():
             return cand
     return None
