@@ -3,8 +3,7 @@
 Deterministic control plane for coding agents on Kimi Code CLI: task-owning workers
 dispatched through a lean Windows-native `delegate` wrapper, leader-executed verification
 with tree-bound acceptance receipts, wire-metered cost accounting, and a pre-registered
-evaluation harness. (Formerly kimi_router; the static-cascade routing design is preserved
-as a frozen research artifact — see Status.)
+evaluation harness. (Formerly kimi_router.)
 
 ## Layout
 
@@ -21,13 +20,6 @@ never through the harness root.
 - `harnesses/codex/skill/model-proctor/` — standalone Codex desktop trigger (`SKILL.md` plus dispatcher and tests).
   It explicitly selects Luna, Terra, or Astra through the Codex adapter; it is not an MCP server, daemon, plugin,
   automatic router, or acceptance authority.
-- `harnesses/kimi-code/cascade/` — the deterministic static-cascade controller (`cascade.py`), **frozen research
-  artifact**, with plan schema (`cascade-schema.json`), tests (`tests/test_cascade.py` + fixture delegate fake), docs
-  (`README.md`). Owns cascade-state.json transitions, caps, legal escalation transitions,
-  verifier-immutability checks, dispatch evidence hardening (files_changed + run_dir log
-  archival), `commit-green`/`rollback` git gates, `handoff`/`record-decision` session
-  continuity, and the vision capability filter (spec §9.1 v3.1). It is retained for
-  provenance and regression research, not as production authority.
 - `scripts/` — `extract_log.py` (deterministic wire.jsonl fact extractor + coverage
   manifest; verifier-class, hash-frozen per goal), tests in `scripts/tests/`,
   `install.py`.
@@ -68,14 +60,11 @@ never through the harness root.
 
 - Wrapper tests: `python -m unittest discover -s harnesses/kimi-code/delegate/tests -v`
 - Codex catalog delegate tests: `python -m unittest discover -s harnesses/codex/delegate/tests -v`
-- Cascade tests: `python -m unittest discover -s harnesses/kimi-code/cascade/tests -v`
 - Extractor tests: `python -m unittest discover -s scripts/tests -v`
 - Runner smoke suite (MVP-001): `python -m unittest discover -s harnesses/kimi-code/runner/tests -v`
 - Contract parity (core vs Kimi, exhaustive lane table): `python -m unittest discover -s core/tests -v`
 - ZCode harness: `python -m unittest discover -s harnesses/zcode/tests -v`
 - Delegate a task: `python harnesses/kimi-code/delegate/delegate.py --agent <name> --workspace <path> --task "<text>"`
-- Cascade extras: `python harnesses/kimi-code/cascade/cascade.py commit-green|rollback --workspace <w> --task <id>`,
-  `handoff --workspace <w>`, `record-decision --workspace <w> --decision ... --rationale ... --source user|leader`
 - Extract a session log: `python scripts/extract_log.py <wire.jsonl...> --out <dir>`
 - Rebuild watch: `python evals/meter.py --rebuild-watch <hours>`
 - Eval self-test: `python evals/run_eval.py --self-test`
@@ -137,4 +126,4 @@ never through the harness root.
 
 ## Status
 
-Research artifact frozen at commit 6095695 (2026-08-13). Governance decision: dachent/model_proctor #16. Installed skill: `model-proctor` (live policy). `static-cascade` remains in-repo only as a frozen research artifact.
+Research artifact frozen at commit 6095695 (2026-08-13). Governance decision: dachent/model_proctor #16. Installed skill: `model-proctor` (live policy). `static-cascade` was removed from the repo and from the user skill namespace on 2026-09-25 per owner directive (supersedes the #16 retention); its history remains in the git history and in the README's research-lineage sections.
