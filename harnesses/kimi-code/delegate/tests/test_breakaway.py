@@ -43,8 +43,12 @@ class TestBreakawayValidation(DelegateTestBase):
                 out, err, rc = self._run("test-agent", task="hello", config=cfg)
                 self._assert_result(out, err, rc, "invalid", 64)
 
+    @unittest.skipUnless(_IS_WINDOWS, "breakaway dispatch requires WMI (Windows-only)")
     def test_true_accepted(self):
-        cfg = self._agent_with(True)
+        a = make_agent(self.echo_script)
+        a["prompt_delivery"] = "argument"
+        a["allow_breakaway"] = True
+        cfg = self._config({"test-agent": a})
         out, err, rc = self._run("test-agent", task="hello", config=cfg)
         self._assert_result(out, err, rc, "completed", 0)
 
@@ -58,6 +62,16 @@ class TestBreakawayValidation(DelegateTestBase):
         cfg = self._config({"test-agent": make_agent(self.echo_script)})
         out, err, rc = self._run("test-agent", task="hello", config=cfg)
         self._assert_result(out, err, rc, "completed", 0)
+
+    def test_stdin_delivery_rejected_with_breakaway(self):
+        """WMI launch cannot pipe stdin; a breakaway+stdin config must be
+        refused at load, not discovered as a hung child at dispatch."""
+        a = make_agent(self.echo_script)  # prompt_delivery="stdin"
+        a["allow_breakaway"] = True
+        cfg = self._config({"test-agent": a})
+        out, err, rc = self._run("test-agent", task="hello", config=cfg)
+        result = self._assert_result(out, err, rc, "invalid", 64)
+        self.assertIn("prompt_delivery", result["error"])
 
 
 @unittest.skipUnless(_IS_WINDOWS, "Job Objects are Windows-only")

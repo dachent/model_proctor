@@ -570,6 +570,11 @@ def _validate_agent(name, agent, global_max_timeout, check_executable=False):
     ab = agent.get("allow_breakaway", False)
     if not isinstance(ab, bool):
         raise ConfigError(f"Agent '{name}': allow_breakaway must be a boolean")
+    if ab and pd == "stdin":
+        raise ConfigError(
+            f"Agent '{name}': allow_breakaway requires prompt_delivery "
+            f"'argument' or 'file' — detached WMI launch (TOOL-032) cannot "
+            f"pipe stdin to a process parented outside the job")
     # resume_args — optional argv template for session resume (e.g. kimi's
     # ["-r", "{session_id}"]).  Exactly one element must contain the
     # placeholder.  Missing field = the agent does not support resume.
