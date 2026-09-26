@@ -68,6 +68,11 @@ never through the harness root.
   `test_state_boundary.py`.
   The boundary is **tamper-evident against a non-adversarial worker**, not sealed
   against a hostile one — residuals tracked in #40.
+- `harnesses/kimi-code/replay/` — regression replay corpus for the monitoring redesign
+  (TOOL-039, #110): recorded incident signatures (`corpus/`, regenerate with `gen_corpus.py`)
+  replayed on a simulated clock against the kill predicate — the reference oracle
+  (`reference_predicate.py`) today, the #106 production predicate via `production_bridge.py`
+  once it exists. Tests in `harnesses/kimi-code/replay/tests/`.
 - `policy/delegation-policy.md` — superseded Phase-2 dynamic-routing research policy.
   It is retained for provenance only; it is not production authority and no installed
   skill is derived from it.
@@ -86,6 +91,7 @@ never through the harness root.
 - Cascade tests: `python -m unittest discover -s harnesses/kimi-code/cascade/tests -v`
 - Extractor tests: `python -m unittest discover -s scripts/tests -v`
 - Runner smoke suite (MVP-001): `python -m unittest discover -s harnesses/kimi-code/runner/tests -v`
+- Replay corpus (TOOL-039): `python -m unittest discover -s harnesses/kimi-code/replay/tests -v`
 - Contract parity (core vs Kimi, exhaustive lane table): `python -m unittest discover -s core/tests -v`
 - ZCode harness: `python -m unittest discover -s harnesses/zcode/tests -v`
 - Delegate a task: `python harnesses/kimi-code/delegate/delegate.py --agent <name> --workspace <path> --task "<text>"`
