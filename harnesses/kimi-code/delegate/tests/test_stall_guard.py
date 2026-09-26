@@ -208,5 +208,197 @@ class ReaderTest(unittest.TestCase):
         self.assertIsNone(stall_guard.read_stack_capture(self.run_dir, 1))
 
 
+class FakeWorld:
+    """Scripted clock + scripted payload for run_escalation tests."""
+
+    def __init__(self, run_dir):
+        self.t = 1000.0
+        self.run_dir = run_dir
+        self.hb_path = os.path.join(run_dir, stall_guard.HEARTBEAT_FILE)
+        self.alive = True
+        self.interrupted = False
+        self.capture_frames = None   # set to a list to auto-answer captures
+
+    def monotonic(self):
+        return self.t
+
+    def wall(self):
+        return self.t
+
+    def sleep(self, d):
+        self.t += d
+        self._maybe_answer_capture()
+
+    def proc_alive(self):
+        return self.alive
+
+    def is_interrupted(self):
+        return self.interrupted
+
+    def _maybe_answer_capture(self):
+        frames = self.capture_frames
+        if frames is None:
+            return
+        req = os.path.join(self.run_dir, stall_guard.STACK_REQUEST_FILE)
+        if not os.path.exists(req):
+            return
+        try:
+            with open(req, encoding="utf-8") as f:
+                seq = json.load(f)["seq"]
+        except (OSError, json.JSONDecodeError):
+            return
+        if callable(frames):
+            frames = frames(seq)
+        with open(os.path.join(self.run_dir,
+                               stall_guard.STACK_CAPTURE_FMT.format(seq=seq)),
+                  "w", encoding="utf-8") as f:
+            json.dump({"seq": seq, "captured_at": self.t,
+                       "frames": frames}, f)
+
+    def write_heartbeat(self, progress, age_s):
+        with open(self.hb_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"beat": 1, "epoch": self.t - age_s,
+                                "counters": progress}) + "\n")
+        past = self.t - age_s
+        os.utime(self.hb_path, (past, past))  # mtime drives staleness
+
+
+def _policy(**kw):
+    base = {"enabled": True, "heartbeat_stale_after_s": 5.0,
+            "capture_interval_s": 2.0, "capture_timeout_s": 3.0,
+            "max_extensions": 1}
+    base.update(kw)
+    return stall_guard.StallPolicy.from_config(base)
+
+
+def _run(world, policy):
+    return stall_guard.run_escalation(
+        world.hb_path, policy, proc_alive=world.proc_alive,
+        interrupted=world.is_interrupted, sleep=world.sleep,
+        monotonic=world.monotonic, wall=world.wall)
+
+
+class LadderTest(unittest.TestCase):
+
+    def setUp(self):
+        self.run_dir = tempfile.mkdtemp(prefix="sg-ladder-")
+        self.addCleanup(shutil.rmtree, self.run_dir, ignore_errors=True)
+
+    def test_all_conjuncts_true_kills_with_evidence(self):
+        w = FakeWorld(self.run_dir)
+        w.capture_frames = ["compile.py:10:run", "cli.py:3:<module>"]
+        w.write_heartbeat({"done": 0}, age_s=100.0)  # stale, frozen
+        v = _run(w, _policy())
+        self.assertEqual(v.action, "kill")
+        self.assertEqual(v.kill_reason, "condition_met_stall")
+        self.assertEqual(v.evidence["predicate"],
+                         {"heartbeat_stale": True, "progress_flat": True,
+                          "stacks_identical": True, "abstain": None})
+        caps = v.evidence["stack_captures"]
+        self.assertEqual(len(caps), 2)
+        self.assertTrue(all(c["ok"] for c in caps))
+        self.assertEqual(caps[0]["signature"], caps[1]["signature"])
+        self.assertEqual(v.evidence["extensions_used"], 0)
+        self.assertEqual(v.evidence["kill_reason"], "condition_met_stall")
+        self.assertTrue(v.evidence["evaluated_at"])
+
+    def test_fresh_advancing_payload_extends_then_backstops(self):
+        w = FakeWorld(self.run_dir)
+        w.capture_frames = ["a.py:1:f"]
+        w.write_heartbeat({"done": 1}, age_s=0.0)
+        real_sleep = w.sleep
+        def advancing(d):
+            real_sleep(d)
+            # progress advances on every wait; heartbeat re-stamped fresh
+            w.write_heartbeat({"done": w.t}, age_s=0.0)
+        w.sleep = advancing
+        v = _run(w, _policy())
+        self.assertEqual(v.action, "kill")
+        self.assertEqual(v.kill_reason, "wall_clock_backstop")
+        self.assertFalse(v.evidence["predicate"]["heartbeat_stale"])
+        self.assertFalse(v.evidence["predicate"]["progress_flat"])
+        self.assertIsNone(v.evidence["predicate"]["abstain"])
+        self.assertEqual(v.evidence["extensions_used"], 1)
+
+    def test_unobservable_payload_backstops_with_abstain(self):
+        w = FakeWorld(self.run_dir)  # no heartbeat file, no capture answers
+        v = _run(w, _policy())
+        self.assertEqual(v.action, "kill")
+        self.assertEqual(v.kill_reason, "wall_clock_backstop")
+        self.assertEqual(v.evidence["predicate"],
+                         {"heartbeat_stale": None, "progress_flat": None,
+                          "stacks_identical": None,
+                          "abstain": "unobservable_payload"})
+        self.assertEqual(v.evidence["extensions_used"], 1)
+
+    def test_max_extensions_zero_backstops_immediately(self):
+        w = FakeWorld(self.run_dir)
+        v = _run(w, _policy(max_extensions=0))
+        self.assertEqual((v.action, v.kill_reason),
+                         ("kill", "wall_clock_backstop"))
+        self.assertEqual(v.evidence["extensions_used"], 0)
+
+    def test_measurement_incomplete_abstains_then_backstops(self):
+        # Stale + flat heartbeats, but the capture channel is dead: the two
+        # measured conjuncts say "stalled", the missing third abstains.
+        w = FakeWorld(self.run_dir)
+        w.write_heartbeat({"done": 0}, age_s=100.0)
+        v = _run(w, _policy())
+        self.assertEqual((v.action, v.kill_reason),
+                         ("kill", "wall_clock_backstop"))
+        self.assertEqual(v.evidence["predicate"]["heartbeat_stale"], True)
+        self.assertEqual(v.evidence["predicate"]["progress_flat"], True)
+        self.assertIsNone(v.evidence["predicate"]["stacks_identical"])
+        self.assertEqual(v.evidence["predicate"]["abstain"],
+                         "measurement_incomplete")
+
+    def test_differing_stacks_read_live(self):
+        w = FakeWorld(self.run_dir)
+        w.write_heartbeat({"done": 0}, age_s=100.0)  # stale + flat...
+        # ...but every capture shows a different frame: the stack is moving.
+        w.capture_frames = lambda seq: ["worker.py:%d:loop" % seq]
+        v = _run(w, _policy())
+        self.assertEqual(v.kill_reason, "wall_clock_backstop")
+        self.assertFalse(v.evidence["predicate"]["stacks_identical"])
+        self.assertIsNone(v.evidence["predicate"]["abstain"])
+
+    def test_completion_race_never_kills(self):
+        w = FakeWorld(self.run_dir)
+        w.write_heartbeat({"done": 0}, age_s=100.0)
+        real_sleep = w.sleep
+        def die_during_interval(d):
+            real_sleep(d)
+            w.alive = False  # child exits while the ladder waits
+        w.sleep = die_during_interval
+        v = _run(w, _policy())
+        self.assertEqual(v.action, "completed_race")
+        self.assertIsNone(v.kill_reason)
+        self.assertIsNone(v.evidence["kill_reason"])
+
+    def test_interrupted_aborts_ladder(self):
+        w = FakeWorld(self.run_dir)
+        w.interrupted = True
+        v = _run(w, _policy())
+        self.assertEqual(v.action, "interrupted")
+        self.assertIsNone(v.kill_reason)
+
+    def test_evidence_is_complete_for_audit(self):
+        w = FakeWorld(self.run_dir)
+        w.capture_frames = ["f.py:1:g"]
+        w.write_heartbeat({"done": 0}, age_s=50.0)
+        v = _run(w, _policy())
+        ev = v.evidence
+        for key in ("schema_version", "kill_reason", "predicate",
+                    "heartbeat_age_s", "progress_signatures",
+                    "stack_captures", "extensions_used", "policy",
+                    "evaluated_at"):
+            self.assertIn(key, ev)
+        self.assertEqual(ev["policy"]["capture_timeout_s"], 3.0)
+        self.assertTrue(ev["progress_signatures"])
+        for cap in ev["stack_captures"]:
+            self.assertTrue(cap["path"].endswith(
+                f"stack_capture_{cap['seq']}.json"))
+
+
 if __name__ == "__main__":
     unittest.main()

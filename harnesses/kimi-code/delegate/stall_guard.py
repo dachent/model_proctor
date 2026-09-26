@@ -247,3 +247,141 @@ def request_stack_capture(obs_dir, seq, timeout_s, sleep=time.sleep,
                 False, seq, None,
                 os.path.join(obs_dir, STACK_CAPTURE_FMT.format(seq=seq)), 0)
         sleep(min(0.1, remaining))
+
+
+@dataclass(frozen=True)
+class KillVerdict:
+    action: str               # "kill" | "completed_race" | "interrupted"
+    kill_reason: str | None   # "condition_met_stall" | "wall_clock_backstop"
+    evidence: dict
+
+
+def _new_evidence(policy):
+    return {
+        "schema_version": 1,
+        "kill_reason": None,
+        "predicate": {"heartbeat_stale": None, "progress_flat": None,
+                      "stacks_identical": None, "abstain": None},
+        "heartbeat_age_s": None,
+        "progress_signatures": [],
+        "stack_captures": [],
+        "extensions_used": 0,
+        "policy": {"heartbeat_stale_after_s": policy.heartbeat_stale_after_s,
+                   "capture_interval_s": policy.capture_interval_s,
+                   "capture_timeout_s": policy.capture_timeout_s,
+                   "max_extensions": policy.max_extensions},
+        "evaluated_at": None,
+    }
+
+
+def _stamp(evidence, wall):
+    evidence["evaluated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S",
+                                             time.localtime(wall()))
+    return evidence
+
+
+def _abstain_reason(conjuncts):
+    if any(c is False for c in conjuncts):
+        return None
+    if all(c is None for c in conjuncts):
+        return "unobservable_payload"
+    return "measurement_incomplete"
+
+
+def run_escalation(heartbeat_path, policy, proc_alive, interrupted=None,
+                   sleep=time.sleep, monotonic=time.monotonic,
+                   wall=time.time):
+    """Escalation ladder, entered when the wall-clock deadline expires.
+
+    `heartbeat_path` is the TOOL-034 heartbeat file (DELEGATE_HEARTBEAT_PATH);
+    stack-capture request/response files live beside it. One pass =
+    heartbeat read -> capture stack -> wait capture_interval_s -> capture
+    again -> heartbeat read. Kill only when heartbeat stale AND progress
+    flat AND both captures show the identical frame list
+    (REQUIRED_CAPTURES = 2, ticket-pinned). Every non-convicting pass
+    consumes one extension: a measured-False conjunct (live payload) waits
+    extension_s; an unmeasured one (abstain doctrine, #109) waits only
+    capture_interval_s — a measurement retry, not a grace period. Budget
+    exhausted -> documented wall_clock_backstop kill with the measured
+    conjuncts on record. proc_alive/interrupted are re-polled between every
+    step: a child that exits mid-ladder is completed_race, never a kill.
+    """
+    interrupted = interrupted or (lambda: False)
+    obs_dir = os.path.dirname(heartbeat_path) or "."
+    evidence = _new_evidence(policy)
+    seq = [0]
+    extensions = [0]
+
+    def _wait(seconds):
+        end = monotonic() + seconds
+        while True:
+            if not proc_alive():
+                return "completed_race"
+            if interrupted():
+                return "interrupted"
+            remaining = end - monotonic()
+            if remaining <= 0:
+                return None
+            sleep(min(0.1, remaining))
+
+    def _capture():
+        seq[0] += 1
+        cap = request_stack_capture(obs_dir, seq[0], policy.capture_timeout_s,
+                                    sleep=sleep, monotonic=monotonic,
+                                    now=wall())
+        evidence["stack_captures"].append({
+            "seq": cap.seq, "ok": cap.ok, "signature": cap.signature,
+            "path": cap.path, "frames_count": cap.frames_count})
+        return cap
+
+    def _pass():
+        hb1 = read_heartbeat(heartbeat_path, now=wall())
+        cap1 = _capture()
+        abort = _wait(policy.capture_interval_s)
+        if abort:
+            return abort
+        cap2 = _capture()
+        hb2 = read_heartbeat(heartbeat_path, now=wall())
+        if not proc_alive():
+            return "completed_race"
+        if interrupted():
+            return "interrupted"
+        heartbeat_stale = (hb2.mtime_age_s > policy.heartbeat_stale_after_s
+                           if hb2.seen else None)
+        if hb2.seen:
+            evidence["heartbeat_age_s"] = hb2.mtime_age_s
+        sig1 = progress_signature(hb1.progress) if hb1.seen else None
+        sig2 = progress_signature(hb2.progress) if hb2.seen else None
+        evidence["progress_signatures"] = [s for s in (sig1, sig2)
+                                           if s is not None]
+        progress_flat = (sig1 == sig2) if (sig1 and sig2) else None
+        stacks_identical = (cap1.signature == cap2.signature
+                            if (cap1.ok and cap2.ok) else None)
+        return (heartbeat_stale, progress_flat, stacks_identical)
+
+    while True:
+        result = _pass()
+        if result in ("completed_race", "interrupted"):
+            return KillVerdict(result, None, _stamp(evidence, wall))
+        conjuncts = result
+        pred = evidence["predicate"]
+        (pred["heartbeat_stale"], pred["progress_flat"],
+         pred["stacks_identical"]) = conjuncts
+        if all(c is True for c in conjuncts):
+            evidence["kill_reason"] = "condition_met_stall"
+            return KillVerdict("kill", "condition_met_stall",
+                               _stamp(evidence, wall))
+        if extensions[0] >= policy.max_extensions:
+            pred["abstain"] = _abstain_reason(conjuncts)
+            evidence["kill_reason"] = "wall_clock_backstop"
+            return KillVerdict("kill", "wall_clock_backstop",
+                               _stamp(evidence, wall))
+        extensions[0] += 1
+        evidence["extensions_used"] = extensions[0]
+        live = any(c is False for c in conjuncts)
+        if not live:
+            pred["abstain"] = _abstain_reason(conjuncts)
+        abort = _wait(policy.extension_s if live
+                      else policy.capture_interval_s)
+        if abort:
+            return KillVerdict(abort, None, _stamp(evidence, wall))
