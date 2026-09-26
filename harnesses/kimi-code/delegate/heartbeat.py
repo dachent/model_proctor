@@ -14,8 +14,10 @@ Single stdlib-only module carrying BOTH sides of the contract:
 
 Cadence contract: emitters SHOULD emit at least once per NOMINAL_CADENCE_S
 while actively working and ALWAYS on stage transitions. Readers treat
-silence beyond STALE_AFTER_S as "stale" (reported) — never as death; kill
-predicates remain wall-clock-only until #106.
+silence beyond STALE_AFTER_S as "stale" (reported) — never as death; the
+kill decision belongs to the stall guard's conjunctive predicate
+(TOOL-035, stall_guard.py), which consumes this protocol and re-judges
+staleness by file mtime against its own policy.
 
 Rotation: append-only until one append would exceed MAX_HEARTBEAT_BYTES,
 then the file is rewritten keeping the newest ~half from a line boundary

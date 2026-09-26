@@ -200,6 +200,71 @@ with open(pid_file, "w") as f:
 time.sleep(300)
 '''
 
+# TOOL-035: wedged worker — heartbeats flow briefly then stop (stale),
+# progress frozen, but a capture handler keeps answering with the identical
+# frozen frame list. The conjunctive predicate must convict this child.
+# The heartbeat path arrives via DELEGATE_HEARTBEAT_PATH (TOOL-034); the
+# observation directory (stack request/capture files) is its dirname.
+_STALL_GUARD_WEDGED = r'''
+import json
+import os
+import time
+
+hb = os.environ["DELEGATE_HEARTBEAT_PATH"]
+hb_dir = os.path.dirname(hb)
+for beat in range(3):
+    with open(hb, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"beat": beat, "epoch": time.time(),
+                            "counters": {"phase": "compile",
+                                         "items_done": 0}}) + "\n")
+    time.sleep(0.2)
+req_path = os.path.join(hb_dir, "stack_request.json")
+while True:
+    if os.path.exists(req_path):
+        try:
+            with open(req_path, encoding="utf-8") as f:
+                seq = json.load(f)["seq"]
+            with open(os.path.join(hb_dir, "stack_capture_%d.json" % seq),
+                      "w", encoding="utf-8") as f:
+                json.dump({"seq": seq, "captured_at": time.time(),
+                           "frames": ["compile.py:10:run",
+                                      "cli.py:3:<module>"]}, f)
+        except Exception:
+            pass
+    time.sleep(0.2)
+'''
+
+# TOOL-035: healthy worker — heartbeats keep flowing with advancing
+# progress and changing frames. The predicate must never convict it; only
+# the documented capacity backstop may fire, with live conjuncts on record.
+_STALL_GUARD_PROGRESSING = r'''
+import json
+import os
+import time
+
+hb = os.environ["DELEGATE_HEARTBEAT_PATH"]
+hb_dir = os.path.dirname(hb)
+req_path = os.path.join(hb_dir, "stack_request.json")
+beat = 0
+while True:
+    beat += 1
+    with open(hb, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"beat": beat, "epoch": time.time(),
+                            "counters": {"phase": "compile",
+                                         "items_done": beat}}) + "\n")
+    if os.path.exists(req_path):
+        try:
+            with open(req_path, encoding="utf-8") as f:
+                seq = json.load(f)["seq"]
+            with open(os.path.join(hb_dir, "stack_capture_%d.json" % seq),
+                      "w", encoding="utf-8") as f:
+                json.dump({"seq": seq, "captured_at": time.time(),
+                           "frames": ["worker.py:%d:loop" % beat]}, f)
+        except Exception:
+            pass
+    time.sleep(0.2)
+'''
+
 _NO_READ_STDIN_SLEEP = r'''
 import sys
 import time
@@ -332,6 +397,7 @@ _ENVELOPE_KEYS = {
     "job_warning": bool,
     "child_home": (str, type(None)),
     "error": (str, type(None)),
+    "kill_evidence": (dict, type(None)),
 }
 
 
@@ -1431,6 +1497,109 @@ class TestHomeIsolation(DelegateTestBase):
         # No injection, and KIMI_CODE_HOME is not in the agent's allowlist,
         # so the child sees nothing (environment isolation governs inheritance).
         self.assertEqual(result["stdout"].strip(), "")
+
+
+class TestStallGuardLifecycle(DelegateTestBase):
+    """TOOL-035 (#106): condition-based kill predicate, end to end."""
+
+    _SG = {"enabled": True, "heartbeat_stale_after_s": 1,
+           "capture_interval_s": 1, "capture_timeout_s": 2,
+           "max_extensions": 1}
+
+    def _sg_config(self, script, **policy_overrides):
+        sg = dict(self._SG)
+        sg.update(policy_overrides)
+        return self._config({
+            "test-agent": make_agent(script, prompt_delivery="argument",
+                                     default_timeout=3, minimum_timeout=1,
+                                     maximum_timeout=300),
+        }, extra={"default_kill_grace_seconds": 1, "stall_guard": sg})
+
+    def test_condition_met_stall_kills_with_evidence(self):
+        wedged = self._script("sg_wedged", _STALL_GUARD_WEDGED)
+        cfg = self._sg_config(wedged)
+        t0 = time.monotonic()
+        out, err, rc = self._run("test-agent", task="ignored", config=cfg,
+                                 timeout_wrap=90)
+        wall = time.monotonic() - t0
+        result = self._assert_result(out, err, rc, "timeout", 124)
+        self.assertEqual(result["error"], "condition_met_stall")
+        ev = result["kill_evidence"]
+        self.assertEqual(ev["kill_reason"], "condition_met_stall")
+        self.assertEqual(ev["predicate"],
+                         {"heartbeat_stale": True, "progress_flat": True,
+                          "stacks_identical": True, "abstain": None})
+        sigs = [c["signature"] for c in ev["stack_captures"]]
+        self.assertEqual(len(sigs), 2)
+        self.assertEqual(sigs[0], sigs[1])
+        self.assertLess(wall, 45)
+
+    def test_progressing_child_dies_only_by_documented_backstop(self):
+        progressing = self._script("sg_progressing", _STALL_GUARD_PROGRESSING)
+        cfg = self._sg_config(progressing)
+        t0 = time.monotonic()
+        out, err, rc = self._run("test-agent", task="ignored", config=cfg,
+                                 timeout_wrap=90)
+        wall = time.monotonic() - t0
+        result = self._assert_result(out, err, rc, "timeout", 124)
+        self.assertEqual(result["error"], "wall_clock_backstop")
+        ev = result["kill_evidence"]
+        self.assertEqual(ev["kill_reason"], "wall_clock_backstop")
+        self.assertFalse(ev["predicate"]["heartbeat_stale"])
+        self.assertFalse(ev["predicate"]["progress_flat"])
+        self.assertIsNone(ev["predicate"]["abstain"])
+        self.assertEqual(ev["extensions_used"], 1)
+        self.assertLess(wall, 45)
+
+    def test_unobservable_legacy_child_backstops_with_abstain(self):
+        sleeper = self._script("sg_legacy", _PID_SLEEPER)
+        pid_file = os.path.join(self.workspace, "legacy_pid.txt")
+        cfg = self._config({
+            "test-agent": make_agent(sleeper, prompt_delivery="argument",
+                                     extra_args=[pid_file],
+                                     default_timeout=3, minimum_timeout=1,
+                                     maximum_timeout=300),
+        }, extra={"default_kill_grace_seconds": 1,
+                  "stall_guard": dict(self._SG)})
+        t0 = time.monotonic()
+        out, err, rc = self._run("test-agent", task="ignored", config=cfg,
+                                 timeout_wrap=90)
+        wall = time.monotonic() - t0
+        result = self._assert_result(out, err, rc, "timeout", 124)
+        self.assertEqual(result["error"], "wall_clock_backstop")
+        self.assertEqual(result["kill_evidence"]["predicate"]["abstain"],
+                         "unobservable_payload")
+        self.assertLess(wall, 45)
+
+    def test_stall_guard_disabled_preserves_legacy_timeout(self):
+        sleeper = self._script("sg_off", _PID_SLEEPER)
+        pid_file = os.path.join(self.workspace, "off_pid.txt")
+        cfg = self._config({
+            "test-agent": make_agent(sleeper, prompt_delivery="argument",
+                                     extra_args=[pid_file],
+                                     default_timeout=3, minimum_timeout=1,
+                                     maximum_timeout=300),
+        }, extra={"default_kill_grace_seconds": 1})
+        t0 = time.monotonic()
+        out, err, rc = self._run("test-agent", task="ignored", config=cfg,
+                                 timeout_wrap=60)
+        wall = time.monotonic() - t0
+        result = self._assert_result(out, err, rc, "timeout", 124)
+        self.assertIsNone(result["error"])
+        self.assertIsNone(result["kill_evidence"])
+        # No ladder: bounded by timeout + grace + overhead, as before.
+        self.assertLess(wall, 20)
+
+    def test_child_exiting_mid_ladder_reports_completed(self):
+        # Heartbeats go stale (predicate would arm), but the child exits
+        # during the ladder's first interval wait -> completed, never a kill.
+        script = self._script("sg_race", _STALL_GUARD_WEDGED.replace(
+            "while True:", "time.sleep(4)\nimport sys; sys.exit(0)\nwhile False:", 1))
+        cfg = self._sg_config(script)
+        out, err, rc = self._run("test-agent", task="ignored", config=cfg,
+                                 timeout_wrap=90)
+        result = self._assert_result(out, err, rc, "completed", 0)
+        self.assertIsNone(result["kill_evidence"])
 
 
 if __name__ == "__main__":

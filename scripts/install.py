@@ -32,7 +32,7 @@ ICACLS = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
                       "System32", "icacls.exe")
 
 DELEGATE_FILES = ["delegate.py", "catalog.py", "agents.example.json", "README.md",
-                  "heartbeat.py"]
+                  "heartbeat.py", "stall_guard.py"]
 # (base, subdir, filename) copied flat into TOOL_DIR. The base is explicit
 # because runner/ lives under the harness while core/ and evals/ stay at the
 # repo root. task_schema.py is the shared M0 schema (#83): the installed
@@ -44,7 +44,7 @@ RUNNER_FILES = [(KIMI, "runner", "runner.py"), (KIMI, "runner", "pilot.py"),
 SKILLS = ("model-proctor",)
 # Everything the installed SKILL.md tells a leader to invoke or pass.
 REQUIRED_AFTER_INSTALL = ["runner.py", "delegate.py", "catalog.py", "task_schema.py", "pricing.yaml",
-                          "heartbeat.py"]
+                          "heartbeat.py", "stall_guard.py"]
 
 
 def _sha256(path):

@@ -16,6 +16,10 @@ Windows has no POSIX SIGTERM.
 
 Actual wall-clock ceiling ≈ timeout + default_kill_grace_seconds + overhead
 (taskkill invocations, proc.wait, reader joins) ≈ timeout + grace + ~30 s.
+With stall_guard enabled (TOOL-035) the deadline is a documented backstop
+that triggers the evidence ladder instead of an immediate kill; add up to
+stall_guard.MAX_ADDED_SECONDS (60 s) for the ladder. Config validation keeps
+the total inside the runner's timeout_s + 120 wrapper deadline.
 """
 
 import argparse
@@ -31,6 +35,8 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+
+import stall_guard  # TOOL-035 (#106): condition-based kill predicate
 
 # ---------------------------------------------------------------------------
 # Platform guard
@@ -453,6 +459,12 @@ def _validate_config(cfg, cfg_path):
             raise ConfigError("max_log_bytes must be an integer")
         if cfg["max_log_bytes"] <= 0:
             raise ConfigError("max_log_bytes must be positive")
+    # TOOL-035 (#106): optional condition-based kill predicate block.
+    if "stall_guard" in cfg:
+        try:
+            stall_guard.StallPolicy.from_config(cfg["stall_guard"])
+        except stall_guard.PolicyError as e:
+            raise ConfigError(str(e))
     if cfg["max_task_bytes"] <= 0:
         raise ConfigError("max_task_bytes must be positive")
     _validate_finite_number(cfg["max_timeout_seconds"], "max_timeout_seconds")
@@ -1351,6 +1363,10 @@ def _run_delegate_inner(args, start_time, agent_name):
     except InputError as e:
         return _make_result("invalid", error=str(e), agent=agent_name), EXIT_INVALID
 
+    # TOOL-035: re-parse (cheap, pure) so the wait loop gets a typed policy;
+    # from_config(None) yields the disabled legacy policy.
+    stall_policy = stall_guard.StallPolicy.from_config(cfg.get("stall_guard"))
+
     # Validate workspace
     try:
         workspace = validate_workspace(args.workspace, cfg["allowed_workspace_roots"])
@@ -1387,6 +1403,19 @@ def _run_delegate_inner(args, start_time, agent_name):
 
     # Create run directory
     run_dir, acl_warning = create_run_dir()
+
+    # TOOL-035 (#106): observation channel for the stall-guard ladder. The
+    # heartbeat path is TOOL-034's DELEGATE_HEARTBEAT_PATH (injected above
+    # when the runner forwards --heartbeat-file). For a standalone run with
+    # the guard enabled and no --heartbeat-file, default the path into the
+    # run_dir and inject it so the payload can emit. Stack-capture
+    # request/response files live beside the heartbeat file; the payload
+    # derives that directory from the path it already receives — no second
+    # env var. Inert for legacy payloads that never look at it.
+    heartbeat_path = getattr(args, "heartbeat_file", None)
+    if stall_policy.enabled and not heartbeat_path:
+        heartbeat_path = os.path.join(run_dir, stall_guard.HEARTBEAT_FILE)
+        child_env["DELEGATE_HEARTBEAT_PATH"] = heartbeat_path
 
     # Build argv — resume args (if any) go immediately after the executable,
     # before the agent's fixed args.
@@ -1489,6 +1518,8 @@ def _run_delegate_inner(args, start_time, agent_name):
     # Wait with timeout — poll child BEFORE deadline check so a child that
     # exits at the deadline is reported as completed, not timeout.
     timed_out = False
+    kill_reason = None      # TOOL-035: "condition_met_stall" | "wall_clock_backstop"
+    kill_evidence = None    # TOOL-035: predicate evidence for the envelope
     try:
         while True:
             if _interrupted.is_set():
@@ -1502,6 +1533,23 @@ def _run_delegate_inner(args, start_time, agent_name):
                 rc = proc.poll()
                 if rc is not None:
                     break
+                if stall_policy.enabled:
+                    # TOOL-035 (#106): the deadline is a documented backstop,
+                    # not a verdict. The ladder owns the clock from here
+                    # (bounded by policy.worst_case_added_s(), which config
+                    # validation keeps inside the runner's +120 wrapper).
+                    verdict = stall_guard.run_escalation(
+                        heartbeat_path, stall_policy,
+                        proc_alive=lambda: proc.poll() is None,
+                        interrupted=_interrupted.is_set)
+                    if verdict.action == "kill":
+                        timed_out = True
+                        kill_reason = verdict.kill_reason
+                        kill_evidence = verdict.evidence
+                        break
+                    if verdict.action == "interrupted":
+                        break  # _interrupted is set; the interruption path runs
+                    continue  # completed_race: re-poll; the child is exiting
                 timed_out = True
                 break
             time.sleep(min(0.1, remaining))
@@ -1574,6 +1622,8 @@ def _run_delegate_inner(args, start_time, agent_name):
             job_warning=job_warning,
             child_session_id=extract_child_session_id(stdout_text, stderr_text),
             child_home=child_home,
+            error=kill_reason,
+            kill_evidence=kill_evidence,
         )
         _cleanup_handles(proc_handle, job)
         return result, EXIT_TIMEOUT
@@ -1646,7 +1696,8 @@ def _make_result(status, agent=None, child_exit_code=None, duration=None,
                  stdout_text="", stderr_text="", stdout_trunc=False, stderr_trunc=False,
                  stdout_log_trunc=False, stderr_log_trunc=False,
                  run_dir=None, acl_warning=False, job_warning=False,
-                 child_session_id=None, child_home=None, error=None):
+                 child_session_id=None, child_home=None, error=None,
+                 kill_evidence=None):
     """Build the JSON result envelope."""
     return {
         "schema_version": 1,
@@ -1666,6 +1717,7 @@ def _make_result(status, agent=None, child_exit_code=None, duration=None,
         "acl_warning": acl_warning,
         "job_warning": job_warning,
         "error": error,
+        "kill_evidence": kill_evidence,
     }
 
 

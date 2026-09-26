@@ -91,7 +91,8 @@ No other state is required.
   "run_dir": "C:/...",
   "acl_warning": false,
   "job_warning": false,
-  "error": null
+  "error": null,
+  "kill_evidence": null
 }
 ```
 
@@ -262,3 +263,21 @@ python -m unittest discover -s delegate/tests -v
 ```
 
 Tests use temporary directories and tiny Python fixture scripts invoked with `sys.executable` — no third-party CLIs are needed.
+
+## Stall guard (TOOL-035)
+
+With a top-level `"stall_guard"` block in agents.json (`"enabled": true`),
+the wall-clock timeout becomes a documented backstop that triggers an
+evidence ladder instead of an immediate kill: capture the payload's stack,
+wait one `capture_interval_s`, capture again, and kill only when the
+heartbeat is stale AND progress counters are flat AND both captures show
+the identical frame list. A payload that measures live on any conjunct is
+extended (up to `max_extensions`); an unobservable payload abstains to the
+backstop. Kills on this path attach `kill_evidence` to the result envelope
+(`error` = `condition_met_stall` or `wall_clock_backstop`). The heartbeat
+half of the observation channel is TOOL-034's emitter contract
+(`DELEGATE_HEARTBEAT_PATH`; when the guard is enabled and no
+`--heartbeat-file` was forwarded, the delegate defaults it to
+`<run_dir>/heartbeat.jsonl` and injects it); stack-capture
+request/response files live beside the heartbeat file. See
+`stall_guard.py`'s module docstring.
