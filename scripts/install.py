@@ -38,14 +38,17 @@ DELEGATE_FILES = ["delegate.py", "killauthority.py", "catalog.py",
 # because runner/ lives under the harness while core/ and evals/ stay at the
 # repo root. task_schema.py is the shared M0 schema (#83): the installed
 # runner resolves it as a sibling (see runner._task_schema). catalog.py is
-# the live-harness-catalog lister (#96).
+# the live-harness-catalog lister (#96). timeout_stack.py is the shared
+# sizing authority (#108): the installed runner resolves it as a sibling
+# (see runner._timeout_stack).
 RUNNER_FILES = [(KIMI, "runner", "runner.py"), (KIMI, "runner", "pilot.py"),
                 (ROOT, "core", "task_schema.py"),
+                (ROOT, "core", "timeout_stack.py"),
                 (ROOT, "evals", "pricing.yaml")]
 SKILLS = ("model-proctor",)
 # Everything the installed SKILL.md tells a leader to invoke or pass.
 REQUIRED_AFTER_INSTALL = ["runner.py", "delegate.py", "killauthority.py", "catalog.py",
-                          "task_schema.py", "pricing.yaml",
+                          "task_schema.py", "timeout_stack.py", "pricing.yaml",
                           "heartbeat.py", "stall_guard.py"]
 
 

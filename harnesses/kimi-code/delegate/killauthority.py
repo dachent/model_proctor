@@ -65,8 +65,9 @@ KILL_SITES = [
         "classification": "external_readonly",
         "expected": {},
         "must_not_contain": ["proc.kill"],
-        "note": "Read-only since TOOL-036 task 5: past timeout + "
-                "WRAPPER_GRACE_S the runner writes a terminate-request file, "
+        "note": "Read-only since TOOL-036 task 5: past the derived runner "
+                "breaker (timeout_stack.runner_breaker_s, #108) the runner "
+                "writes a terminate-request file, "
                 "waits TERMINATION_REQUEST_WAIT_S, and reports the outcome "
                 "(dispatch_termination_requested + kill_authority). It never "
                 "kills the delegate.",

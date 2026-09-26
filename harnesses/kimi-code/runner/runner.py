@@ -111,10 +111,11 @@ DEFAULT_BUDGET = {"max_dispatches": 4, "max_stagnant": 3, "timeout_s": 1800,
                   "verify_timeout_s": 600}
 
 # TOOL-036: the runner is read-only with respect to the worker tree. Past
-# timeout + WRAPPER_GRACE_S it REQUESTS termination from the delegate (the
-# sole kill authority) and reports the outcome; it never kills the delegate.
+# the derived wrapper breaker (timeout_stack.runner_breaker_s, #108 — the
+# historical "+ 120" margin, now owned by the one sizing authority) it
+# REQUESTS termination from the delegate (the sole kill authority) and
+# reports the outcome; it never kills the delegate.
 # Env overrides exist for hermetic tests.
-WRAPPER_GRACE_S = 120
 TERMINATION_REQUEST_WAIT_S = 60
 
 
@@ -257,6 +258,36 @@ def _task_schema():
     return _TASK_SCHEMA
 
 
+_TIMEOUT_STACK = None
+
+
+def _timeout_stack():
+    """core/timeout_stack.py — the one timeout sizing authority (#108).
+
+    Same dual-layout resolution as _task_schema: repo checkout
+    (harnesses/kimi-code/runner/ -> <repo>/core/) and flat install (sibling
+    file shipped by scripts/install.py). A missing module is a broken
+    install and refuses loudly rather than silently skipping the invariant.
+    """
+    global _TIMEOUT_STACK
+    if _TIMEOUT_STACK is None:
+        import importlib.util
+        here = Path(__file__).resolve().parent
+        candidates = [here / "timeout_stack.py"]
+        if len(here.parents) > 2:
+            candidates.append(here.parents[2] / "core" / "timeout_stack.py")
+        for cand in candidates:
+            if cand.is_file():
+                spec = importlib.util.spec_from_file_location("timeout_stack", str(cand))
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                _TIMEOUT_STACK = mod
+                break
+        else:
+            raise SystemExit(_emit({"error": "timeout_stack_module_missing"}, 4))
+    return _TIMEOUT_STACK
+
+
 _HEARTBEAT_MOD = "unset"
 
 
@@ -324,6 +355,16 @@ def load_task(path):
     task.setdefault("budget", dict(DEFAULT_BUDGET))
     for k, v in DEFAULT_BUDGET.items():
         task["budget"].setdefault(k, v)
+    # #108 tripwire: margins are constants only this repo can edit, so an
+    # inverted stack means a code change broke the derivation — refuse at
+    # every command boundary, not in production.
+    _stack = _timeout_stack()
+    _violations = _stack.validate_stack(
+        _stack.stack_layers(task["budget"]["timeout_s"],
+                            _stack.KILL_GRACE_MAX_S))
+    if _violations:
+        raise SystemExit(_emit({"error": "timeout_stack_inverted",
+                                "violations": _violations}, 3))
     return task
 
 
@@ -883,7 +924,9 @@ def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None,
     `dispatch_heartbeat` journal record lands at least once per interval —
     `status` can then tell alive-but-slow from dead within one heartbeat
     instead of one full timeout. Kill semantics (TOOL-035):
-    timeout_s + WRAPPER_GRACE_S is a documented last-resort BACKSTOP, never
+    timeout_s + the derived runner breaker margin (timeout_stack
+    .runner_breaker_s, #108: worst-case delegate ceiling + report margin)
+    is a documented last-resort BACKSTOP, never
     the primary stall detector — the delegate's condition-based predicate
     (stall_guard, when enabled) owns the kill decision and attaches
     kill_evidence to the envelope. TOOL-036 (#107): past the backstop the
@@ -895,7 +938,10 @@ def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None,
     #105: dispatch_id/heartbeat_file wire the payload progress side channel;
     both are forwarded verbatim and the heartbeat file is drained by the
     caller's on_heartbeat."""
-    wrapper_grace = float(os.environ.get("MP_WRAPPER_GRACE_S", WRAPPER_GRACE_S))
+    # #108: the margin defaults to the sizing authority's derived breaker
+    # margin; MP_WRAPPER_GRACE_S shrinks it only for hermetic tests.
+    wrapper_grace = float(os.environ.get(
+        "MP_WRAPPER_GRACE_S", _timeout_stack().RUNNER_BREAKER_MARGIN_S))
     request_wait = float(os.environ.get("MP_TERMINATION_REQUEST_WAIT_S",
                                         TERMINATION_REQUEST_WAIT_S))
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False,
@@ -1130,11 +1176,13 @@ def cmd_dispatch(args):
             }, 1))
     # A6 (#73): orphan surfacing is ADVISORY — fields in the JSON output only.
     # Neither dispatch nor status refuses on orphans: blocking would wedge
-    # every legal dispatch after any crash. Age beyond the delegate ceiling
-    # (timeout + 120s) means the open entry cannot belong to a live dispatch
+    # every legal dispatch after any crash. Age beyond the derived runner
+    # breaker (timeout_stack.runner_breaker_s, #108) means the open entry
+    # cannot belong to a live dispatch
     # of THIS run's budget, so it is marked orphaned in the journal
     # (append-only, never rewritten) and stops re-reporting once acked.
-    journal_ceiling = state["budget"]["timeout_s"] + WRAPPER_GRACE_S
+    journal_ceiling = _timeout_stack().runner_breaker_s(
+        state["budget"]["timeout_s"])
     orphans = []
     for did, e in sorted(_journal_open(sroot).items()):
         started = _ts_to_epoch(e.get("at"))
@@ -1555,16 +1603,17 @@ def cmd_accept(args):
     check_state_identity(state, task, ws, sroot)
     # A02-lite (#83 M1): acceptance refuses while a dispatch is in flight.
     # The journal's dispatch_open entries (fsync'd before spawn, #73/A1) are
-    # the live-writer signal: an open entry younger than the delegate
-    # ceiling (timeout + 120s) means a worker may be mutating the tree RIGHT
+    # the live-writer signal: an open entry younger than the derived runner
+    # breaker (timeout_stack.runner_breaker_s, #108) means a worker may be
+    # mutating the tree RIGHT
     # NOW — accepting mid-write certifies a tree that is still changing.
     # Older open entries are orphans (advisory per #73), not live writers.
     # The residual race (dispatch finishing between this check and the
     # state write below) is M1-proper's transactional-store territory; this
     # closes the reproduction: accept during a live writer.
     _open = _journal_open(sroot)
-    _ceiling = (state.get("budget", {}).get("timeout_s",
-                                            DEFAULT_BUDGET["timeout_s"]) + WRAPPER_GRACE_S)
+    _ceiling = _timeout_stack().runner_breaker_s(
+        state.get("budget", {}).get("timeout_s", DEFAULT_BUDGET["timeout_s"]))
     _live = sorted(
         did for did, e in _open.items()
         if (_t := _ts_to_epoch(e.get("at"))) is not None
@@ -1886,7 +1935,9 @@ def cmd_status(args):
     seconds_since = (round(now - last_epoch) if last_epoch is not None else None)
 
     open_dispatches = _journal_open(sroot)
-    ceiling = timeout_s + WRAPPER_GRACE_S
+    # #108: the orphan ceiling is the derived runner breaker — the same
+    # derivation the dispatch path enforces, never a re-derived literal.
+    ceiling = _timeout_stack().runner_breaker_s(timeout_s)
     orphans = sorted(
         did for did, e in open_dispatches.items()
         if (started := _ts_to_epoch(e.get("at"))) is not None
@@ -1949,6 +2000,54 @@ def cmd_status(args):
         **state,
     }
     return _emit(out)
+
+
+def cmd_timeouts(args):
+    """#108: the one place every timeout knob is discoverable, and the
+    preflight that refuses an inverted stack (exit 1 with named
+    violations). After the derivation rule, no task-file input can invert
+    the stack; the remaining vectors are constants drift (tripwired in
+    load_task) and delegate config (probed here)."""
+    task = load_task(args.task)
+    stack = _timeout_stack()
+    timeout_s = task["budget"]["timeout_s"]
+    delegate_py = resolve_delegate(args.delegate)
+    try:
+        r = subprocess.run([sys.executable, delegate_py,
+                            "--print-timeout-knobs"],
+                           capture_output=True, text=True, timeout=15)
+        knobs = json.loads(r.stdout) if r.stdout.strip() else {}
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as e:
+        knobs = {"knobs_valid": False, "error": f"knobs probe failed: {e}"}
+    grace = knobs.get("default_kill_grace_seconds")
+    if isinstance(grace, bool) or not isinstance(grace, (int, float)):
+        grace = stack.KILL_GRACE_MAX_S
+    violations = stack.validate_stack(stack.stack_layers(timeout_s, grace))
+    # A legal config edit must not invert the stack either: also check the
+    # worst grace the delegate's own validation permits.
+    violations += stack.validate_stack(
+        stack.stack_layers(timeout_s, stack.KILL_GRACE_MAX_S))
+    if not knobs.get("knobs_valid", False):
+        violations.append("delegate_config_invalid: "
+                          + str(knobs.get("error", "unknown")))
+    return _emit({
+        "task_id": task["task_id"],
+        "budget": task["budget"],
+        "layers": [{"layer": n, "kind": k, "seconds": s}
+                   for n, k, s in stack.stack_layers(timeout_s, grace)],
+        "constants": {
+            "DELEGATE_OVERHEAD_S": stack.DELEGATE_OVERHEAD_S,
+            "KILL_GRACE_MAX_S": stack.KILL_GRACE_MAX_S,
+            "MIN_REPORT_MARGIN_S": stack.MIN_REPORT_MARGIN_S,
+            "RUNNER_BREAKER_MARGIN_S": stack.RUNNER_BREAKER_MARGIN_S,
+            "PILOT_BREAKER_MARGIN_S": stack.PILOT_BREAKER_MARGIN_S,
+            "DEFAULT_VERIFY_TIMEOUT_S": stack.DEFAULT_VERIFY_TIMEOUT_S,
+        },
+        "delegate": delegate_py,
+        "delegate_knobs": knobs,
+        "coherent": not violations,
+        "violations": violations,
+    }, 0 if not violations else 1)
 
 
 def cmd_journal(args):
@@ -2017,13 +2116,17 @@ def main(argv=None):
     p.add_argument("--ack", action="append", default=None,
                    help="acknowledge a resolved dispatch_id so it stops "
                         "re-reporting as orphaned")
+    # #108: timeout-stack discovery + inversion preflight.
+    p = sub.add_parser("timeouts")
+    p.add_argument("--task", required=True)
+    p.add_argument("--delegate", default=None)
     args = parser.parse_args(argv)
     if args.cmd == "journal":
         return cmd_journal(args)
     return {
         "lane": cmd_lane, "init": cmd_init, "dispatch": cmd_dispatch,
         "verify": cmd_verify, "accept": cmd_accept, "record": cmd_record,
-        "status": cmd_status,
+        "status": cmd_status, "timeouts": cmd_timeouts,
     }[args.cmd](args)
 
 

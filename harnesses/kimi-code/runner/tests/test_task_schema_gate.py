@@ -102,12 +102,16 @@ class TaskSchemaGate(unittest.TestCase):
         # parents[2] unconditionally, which crashed EVERY command in the flat
         # install (C:/Tools/model-proctor) where the runner dir has no
         # grandparent. Run the runner from a copied flat layout and expect a
-        # normal lane decision, not a traceback.
+        # normal lane decision, not a traceback. The flat layout ships
+        # timeout_stack.py beside runner.py (#108, scripts/install.py
+        # RUNNER_FILES) — the fixture mirrors the installer.
         flat = Path(self.tmp) / "flat"
         flat.mkdir()
         shutil.copy2(RUNNER, flat / "runner.py")
         shutil.copy2(ROOT.parents[1] / "core" / "task_schema.py",
                      flat / "task_schema.py")
+        shutil.copy2(ROOT.parents[1] / "core" / "timeout_stack.py",
+                     flat / "timeout_stack.py")
         ws = make_workspace(self.tmp)
         task = make_task(self.tmp, features={
             "bounded": True, "known_location": True, "objective_acceptance": True})
