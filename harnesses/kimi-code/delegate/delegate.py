@@ -16,10 +16,14 @@ Windows has no POSIX SIGTERM.
 
 Actual wall-clock ceiling ≈ timeout + default_kill_grace_seconds + overhead
 (taskkill invocations, proc.wait, reader joins) ≈ timeout + grace + ~30 s.
+The margin constants behind this estimate live in core/timeout_stack.py
+(#108) — that module is the sizing authority; update it, not this prose.
 With stall_guard enabled (TOOL-035) the deadline is a documented backstop
 that triggers the evidence ladder instead of an immediate kill; add up to
-stall_guard.MAX_ADDED_SECONDS (60 s) for the ladder. Config validation keeps
-the total inside the runner's timeout_s + 120 wrapper deadline.
+stall_guard.MAX_ADDED_SECONDS (60 s) for the ladder, whose headroom lives
+in the runner's post-breaker termination-request window (TOOL-036). Config
+validation keeps the total inside the runner's derived wrapper deadline
+(timeout_stack.runner_breaker_s).
 """
 
 import argparse
@@ -439,6 +443,42 @@ def load_config():
         raise ConfigError(f"Configuration is not valid JSON: {e}")
     _validate_config(cfg, path)
     return cfg
+
+
+def _print_timeout_knobs():
+    """#108: emit this delegate's resolved timeout knobs as JSON on stdout.
+
+    Discovery companion for `runner.py timeouts`: the runner owns the stack
+    report, but the delegate owns its config, so it reports its own knobs.
+    A config that fails validation is still reported (knobs_valid: false)
+    so the caller can name the violation instead of crashing on it.
+    """
+    path = None
+    try:
+        path = _resolve_config_path()
+        cfg = load_config()
+        valid, error = True, None
+    except ConfigError as e:
+        valid, error = False, str(e)
+        try:
+            cfg = json.loads(path.read_text(encoding="utf-8")) if path else {}
+        except Exception:
+            cfg = {}
+    out = {
+        "knobs_valid": valid,
+        "config_path": str(path) if path is not None else None,
+        "max_timeout_seconds": cfg.get("max_timeout_seconds"),
+        "default_kill_grace_seconds": cfg.get("default_kill_grace_seconds"),
+        "agents": {name: {k: a.get(k) for k in
+                          ("default_timeout", "minimum_timeout",
+                           "maximum_timeout")}
+                   for name, a in (cfg.get("agents") or {}).items()
+                   if isinstance(a, dict)},
+    }
+    if error:
+        out["error"] = error
+    sys.stdout.write(json.dumps(out, indent=2, sort_keys=True) + "\n")
+    return 0 if valid else EXIT_INVALID
 
 
 def _validate_config(cfg, cfg_path):
@@ -1778,6 +1818,10 @@ class _NoJsonArgumentParser(argparse.ArgumentParser):
 
 
 def main():
+    if "--print-timeout-knobs" in sys.argv[1:]:
+        # #108 discovery report: no dispatch, so none of the dispatch
+        # arguments apply; short-circuit before they are required.
+        sys.exit(_print_timeout_knobs())
     install_signal_handlers()
     parser = _NoJsonArgumentParser(
         prog="delegate",
