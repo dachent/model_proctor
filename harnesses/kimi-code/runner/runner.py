@@ -66,6 +66,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -147,6 +148,61 @@ def _sha256_bytes(b):
 
 def _sha256_file(path):
     return _sha256_bytes(Path(path).read_bytes())
+
+
+# ── measurement doctrine (#109 / TOOL-038) ──────────────────────────────
+# Two path classes, two failure semantics:
+#   MONITOR paths (cmd_status, the dispatch-loop progress drain, the accept
+#     in-flight gate, the orphan sweep) read ONLY runner-state files and
+#     payload-emitted heartbeat files on local disk. A failed or degraded
+#     measurement = ABSTAIN: report measurement_degraded naming the
+#     component, exit 0, and NEVER kill or refuse on a measurement that
+#     could not be taken.
+#   ACCEPTANCE paths (cmd_init baselining, cmd_verify receipts, cmd_accept
+#     staleness checks) FAIL CLOSED: a measurement that cannot finish within
+#     MEASUREMENT_BUDGET_S refuses the acceptance action. The refusal IS the
+#     abstention — no certificate is issued over an unmeasured tree.
+# _git_toplevel's None-abstain (:320-329) is not a violation of this: it
+# selects the files: manifest branch of tree_signature, which is itself a
+# full measurement. _porcelain_entries fails closed (:357-363) and serves
+# acceptance paths only, which this doctrine makes explicit.
+
+MEASUREMENT_BUDGET_S = 120.0
+
+
+class MeasurementTimeout(Exception):
+    """A workspace measurement exceeded its wall-clock budget (#109)."""
+
+    def __init__(self, what):
+        super().__init__(f"measurement timeout: {what}")
+        self.what = what
+
+
+def _measure_with_deadline(fn, budget_s, what):
+    """Run fn() in a daemon thread under a wall-clock budget.
+
+    Why a thread and not a pre-check: a wedged tree (OneDrive/SMB) blocks
+    INSIDE a read syscall, which no deadline check between files can
+    preempt. On expiry the caller gets MeasurementTimeout and the daemon
+    thread is abandoned — runner commands are one-shot processes, so the
+    abandoned thread dies with process exit (a documented residual, same
+    honesty class as the Popen->assign window in delegate.py)."""
+    box = {}
+
+    def _run():
+        try:
+            box["result"] = fn()
+        except BaseException as e:  # propagate, including SystemExit
+            box["error"] = e
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(budget_s)
+    if t.is_alive():
+        raise MeasurementTimeout(what)
+    if "error" in box:
+        raise box["error"]
+    return box.get("result")
 
 
 def _norm(p):
@@ -915,6 +971,18 @@ def cmd_init(args):
         raise SystemExit(_emit({"error": f"unknown lane: {lane}"}, 3))
     guard = check_production_guard(task, lane)
     sealed = seal_files(task, ws, sroot)
+    try:
+        init_surface = _measure_with_deadline(
+            lambda: config_surface(ws), MEASUREMENT_BUDGET_S, "config_surface")
+        init_sig = _measure_with_deadline(
+            lambda: tree_signature(ws), MEASUREMENT_BUDGET_S, "tree_signature")
+    except MeasurementTimeout as e:
+        raise SystemExit(_emit({
+            "error": "measurement_timeout",
+            "detail": f"{e.what} exceeded the measurement budget "
+                      f"({MEASUREMENT_BUDGET_S}s); refusing to baseline an "
+                      f"unmeasured tree (#109: acceptance paths fail closed)",
+        }, 1))
     state = {
         "schema_version": SCHEMA_VERSION,
         "task_id": task["task_id"],
@@ -931,8 +999,8 @@ def cmd_init(args):
         "task_seal": sorted(task.get("seal", [])),
         "scope": task["scope"],
         "budget": task["budget"],
-        "init_config_surface": config_surface(ws),
-        "init_tree_sig": tree_signature(ws),
+        "init_config_surface": init_surface,
+        "init_tree_sig": init_sig,
         "sealed": sealed,
         "dispatches": [],
         "failures": [],
@@ -1175,6 +1243,30 @@ def cmd_dispatch(args):
 
 
 def cmd_verify(args):
+    """#109: any workspace measurement inside verify is budgeted; on expiry
+    the refusal is a red receipt, exactly like verifier_timeout — accept
+    then refuses on 'receipt not green' until a verify completes."""
+    try:
+        return _cmd_verify_impl(args)
+    except MeasurementTimeout as e:
+        ws = str(Path(args.workspace).resolve())
+        task = load_task(args.task)
+        sroot = _state_root(ws, args.state_dir)
+        receipt = {
+            "task_id": task["task_id"], "passed": False,
+            "rejected": "measurement_timeout",
+            "detail": f"{e.what} exceeded the measurement budget "
+                      f"({MEASUREMENT_BUDGET_S}s); refusing to issue a "
+                      f"receipt over an unmeasured tree (#109)",
+            "dispatch_seq": len(_load_state(sroot).get("dispatches", [])),
+            "verifier_argv": task["verifier"]["argv"],
+            "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        _write_json_atomic(_receipt_path(sroot, task["task_id"]), receipt)
+        return _emit(receipt, 1)
+
+
+def _cmd_verify_impl(args):
     ws = str(Path(args.workspace).resolve())
     task = load_task(args.task)
     sroot = _state_root(ws, args.state_dir)
@@ -1194,12 +1286,12 @@ def cmd_verify(args):
     # baseline when it happens naturally: if the tree has not moved since init,
     # THIS verify already is the baseline run. Costs nothing, and gives
     # init_tree_sig -- written at init and previously read nowhere -- a reader.
-    pre_tree_sig = tree_signature(ws)
+    pre_tree_sig = _measure_with_deadline(lambda: tree_signature(ws), MEASUREMENT_BUDGET_S, "tree_signature")
     baseline_tree = (state.get("init_tree_sig") is not None
                      and pre_tree_sig == state["init_tree_sig"])
 
     # #18: no NEW or REMOVED verification-affecting files since init.
-    now_surface = config_surface(ws)
+    now_surface = _measure_with_deadline(lambda: config_surface(ws), MEASUREMENT_BUDGET_S, "config_surface")
     added = sorted(set(now_surface) - set(state["init_config_surface"]))
     removed = sorted(set(state["init_config_surface"]) - set(now_surface))
     if added or removed:
@@ -1275,7 +1367,7 @@ def cmd_verify(args):
             "timeout_s": state["budget"]["timeout_s"],
             "dispatch_seq": len(state["dispatches"]),
             "verifier_argv": task["verifier"]["argv"],
-            "tree_sig": tree_signature(ws),
+            "tree_sig": _measure_with_deadline(lambda: tree_signature(ws), MEASUREMENT_BUDGET_S, "tree_signature"),
             "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         }
         _write_json_atomic(_receipt_path(sroot, task["task_id"]), receipt)
@@ -1297,7 +1389,7 @@ def cmd_verify(args):
             "launch_error": type(exc).__name__,
             "dispatch_seq": len(state["dispatches"]),
             "verifier_argv": task["verifier"]["argv"],
-            "tree_sig": tree_signature(ws),
+            "tree_sig": _measure_with_deadline(lambda: tree_signature(ws), MEASUREMENT_BUDGET_S, "tree_signature"),
             "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         }
         _write_json_atomic(_receipt_path(sroot, task["task_id"]), receipt)
@@ -1324,7 +1416,7 @@ def cmd_verify(args):
         # ("add a test that ..."), so this is evidence for the leader, not a
         # gate. Recorded per task, it becomes its own frequency measurement.
         "verifier_nondiscriminating": bool(baseline_tree and passed),
-        "tree_sig": tree_signature(ws),
+        "tree_sig": _measure_with_deadline(lambda: tree_signature(ws), MEASUREMENT_BUDGET_S, "tree_signature"),
         "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
     _write_json_atomic(_receipt_path(sroot, task["task_id"]), receipt)
@@ -1417,7 +1509,17 @@ def cmd_accept(args):
             "receipt_dispatch_seq": seq,
             "current_dispatches": len(state["dispatches"]),
         }, 1))
-    current = tree_signature(ws)
+    try:
+        current = _measure_with_deadline(
+            lambda: tree_signature(ws), MEASUREMENT_BUDGET_S, "tree_signature")
+    except MeasurementTimeout as e:
+        raise SystemExit(_emit({
+            "accepted": False,
+            "reason": f"measurement_timeout: {e.what} exceeded the "
+                      f"measurement budget ({MEASUREMENT_BUDGET_S}s); "
+                      f"refusing rather than certifying an unmeasured tree "
+                      f"(#109: acceptance paths fail closed)",
+        }, 1))
     if current != receipt["tree_sig"]:
         # #17: the green receipt no longer describes this tree.
         raise SystemExit(_emit({
