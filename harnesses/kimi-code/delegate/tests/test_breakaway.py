@@ -54,7 +54,10 @@ class TestBreakawayValidation(DelegateTestBase):
         a["prompt_delivery"] = "argument"
         a["allow_breakaway"] = True
         cfg = self._config({"test-agent": a})
-        out, err, rc = self._run("test-agent", task="hello", config=cfg)
+        # timeout_wrap 240: a cold-runner WMI spawn can retry up to
+        # _WMI_SPAWN_ATTEMPTS times before failing loud (worst case ~170s).
+        out, err, rc = self._run("test-agent", task="hello", config=cfg,
+                                 timeout_wrap=240)
         self._assert_result(out, err, rc, "completed", 0)
 
     def test_false_accepted(self):
@@ -106,7 +109,8 @@ class TestOnTimeoutValidation(DelegateTestBase):
     @unittest.skipUnless(_IS_WINDOWS, "breakaway dispatch requires WMI (Windows-only)")
     def test_report_detached_with_breakaway_accepted(self):
         cfg = self._agent_with("report_detached", True)
-        out, err, rc = self._run("test-agent", task="hello", config=cfg)
+        out, err, rc = self._run("test-agent", task="hello", config=cfg,
+                                 timeout_wrap=240)
         self._assert_result(out, err, rc, "completed", 0)
 
     def test_absent_defaults_to_kill_tree(self):
@@ -333,7 +337,8 @@ class TestDetachedDispatch(DelegateTestBase):
     def test_completed_echo_roundtrip(self):
         script = self._script("echo_arg", _ECHO_ARG)
         cfg = self._detached_config(script)
-        out, err, rc = self._run("test-agent", task="hello", config=cfg)
+        out, err, rc = self._run("test-agent", task="hello", config=cfg,
+                                 timeout_wrap=240)
         result = self._assert_result(out, err, rc, "completed", 0)
         self.assertEqual(result["stdout"], "hello")
         self.assertEqual(result["child_exit_code"], 0)
@@ -341,7 +346,8 @@ class TestDetachedDispatch(DelegateTestBase):
     def test_exit_code_propagates_through_bootstrap(self):
         script = self._script("exit3", _EXIT_CODE)
         cfg = self._detached_config(script, extra_args=["3"])
-        out, err, rc = self._run("test-agent", task="hello", config=cfg)
+        out, err, rc = self._run("test-agent", task="hello", config=cfg,
+                                 timeout_wrap=240)
         result = self._assert_result(out, err, rc, "failed", 0)
         self.assertEqual(result["child_exit_code"], 3)
 

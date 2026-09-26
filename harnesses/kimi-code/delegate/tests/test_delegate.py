@@ -463,7 +463,12 @@ class DelegateTestBase(unittest.TestCase):
         """Parse one JSON line, assert schema, status, and clean stderr."""
         result = assert_one_json_line(self, out)
         assert_envelope_schema(self, result)
-        self.assertEqual(result["status"], expected_status)
+        # Surface the envelope's error field on mismatch: a bare
+        # "'internal_error' != 'completed'" in CI hides the CustodyError
+        # text that distinguishes a cold WMI start from a real defect
+        # (PR #112, run 36264707350 vs 36266718079).
+        self.assertEqual(result["status"], expected_status,
+                         f"error={result.get('error')!r}")
         if expected_rc is not None:
             self.assertEqual(rc, expected_rc)
         return result

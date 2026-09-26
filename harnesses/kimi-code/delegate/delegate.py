@@ -1022,11 +1022,15 @@ _WMI_CREATE_PS = (
 # The first Win32_Process.Create on a freshly booted host races Winmgmt and
 # PowerShell cold start (CI run 36264707350: the delegate suite's first real
 # WMI spawn failed internal_error on a cold windows-latest runner while every
-# later spawn in the same job passed). Launcher-level failures are transient,
-# so retry them a bounded number of times before going fail-loud; a nonzero
-# ReturnValue is WMI's definitive answer and is never retried.
-_WMI_SPAWN_ATTEMPTS = 3
-_WMI_SPAWN_RETRY_BACKOFF_S = 2.0
+# later spawn in the same job passed). Measured on that runner (run
+# 36266718079): each cold attempt errors in ~13s and WMI stayed cold until
+# ~75s into the job, outlasting a 3-attempt/2s-backoff retry — so allow 5
+# attempts with 5s backoff, covering roughly the first two minutes when
+# failures are fast. Launcher-level failures are transient, so retry them
+# before going fail-loud; a nonzero ReturnValue is WMI's definitive answer
+# and is never retried.
+_WMI_SPAWN_ATTEMPTS = 5
+_WMI_SPAWN_RETRY_BACKOFF_S = 5.0
 
 
 def wmi_spawn_detached(command_line, working_dir, timeout_s=30):
