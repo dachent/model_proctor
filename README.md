@@ -8,8 +8,9 @@ acceptance receipts, wire-metered cost accounting, and a pre-registered evaluati
 never marks its own work. That is the architectural invariant this repo converged on: deterministic
 evidence outranks every model, and acceptance is bound to the exact tree that was verified.
 (Historical names: `robot_lockstep_ballast` — *lockstep* for fixed rungs, *ballast* for the cheap
-fleet — then briefly `kimi_router`; renamed 2026-08-25. *Static cascade* remains the name of the
-frozen research **pattern** documented here; `harnesses/kimi-code/runner/` is the live implementation path.)
+fleet — then briefly `kimi_router`; renamed 2026-08-25. *Static cascade* was the frozen research
+**pattern** that preceded the runner; its artifacts were removed 2026-09-25 per owner directive —
+the pattern's history remains documented in the research-lineage sections below.)
 
 ---
 
@@ -180,14 +181,6 @@ what the ledger accumulates for free.
   workers with a stable envelope contract: exit codes, truncation flags, captured child session
   ids, and per-dispatch isolated+seeded `KIMI_CODE_HOME` homes (`child_home` in the envelope;
   callers meter from it, then delete it). 90 tests.
-- `harnesses/kimi-code/cascade/` — the deterministic static-cascade controller (`cascade.py`), **frozen research
-  artifact** (governance: issue #16). Owns `cascade-state.json` transitions, plan validation,
-  caps and legal escalation transitions, evidence archival, `commit-green`/`rollback` git gates,
-  `handoff`/`record-decision` continuity, threat-model field, vision capability filter. Carries
-  known trust-boundary defects (issues #17–#22) — do not use its green gate as acceptance
-  authority; `harnesses/kimi-code/runner/` designs them out instead of patching them. 76 tests (2 pre-existing failures in the not-a-git-repo paths, `AssertionError: 4 != 3`;
-  they reproduce on a clean clone whose temp workspace is verifiably not inside a repo,
-  so the historical "environment-sensitive / #20" label looks wrong — see #65).
 - `scripts/extract_log.py` — deterministic session-log fact extractor with a **coverage manifest**
   (bytes in, records parsed, records dropped). LLMs interpret extractions; they never scan raw
   volume. Verifier-class: hash-frozen per goal. 5 tests.
@@ -197,7 +190,8 @@ what the ledger accumulates for free.
   metering stack (`meter.py`, `pricing.yaml`), pre-registrations (`PREREG-v2.md`, `PREREG-v3.md`),
   and every result row (`results*.jsonl`, `pilot-*.jsonl`, `phase2-*.jsonl`, `phase3-*.jsonl`).
 - `harnesses/kimi-code/skill/` — Kimi Code skill sources: `model-proctor/` is the live/installable policy;
-  `static-cascade/` and `multi-model-routing/` are preserved frozen/superseded research artifacts and are not installed.
+  `multi-model-routing/` is a preserved superseded research artifact and is not installed.
+  (`static-cascade/` was removed 2026-09-25 per owner directive, superseding the #16 retention.)
 
 Python 3.10+, standard library only, everywhere.
 
@@ -205,7 +199,6 @@ Python 3.10+, standard library only, everywhere.
 python -m unittest discover -s harnesses/kimi-code/runner/tests -v    # live path smoke suite (S1–S7)
 python -m unittest discover -s harnesses/kimi-code/delegate/tests -v
 python -m unittest discover -s harnesses/codex/delegate/tests -v
-python -m unittest discover -s harnesses/kimi-code/cascade/tests -v
 python -m unittest discover -s scripts/tests -v
 ```
 
