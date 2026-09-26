@@ -10,6 +10,7 @@ Windows-only mechanics are skipped elsewhere; the validator test is portable.
 Run: python -m unittest discover -s delegate/tests -v
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -220,6 +221,76 @@ class TestWmiSpawn(unittest.TestCase):
                 delegate, "_POWERSHELL_EXE", r"C:\no\such\powershell-zzz.exe"):
             with self.assertRaises(delegate.CustodyError):
                 delegate.wmi_spawn_detached("cmd.exe /c exit 0", tempfile.gettempdir())
+
+
+class TestWmiSpawnRetry(unittest.TestCase):
+    """Cold-start resilience for wmi_spawn_detached.
+
+    CI run 36264707350 (PR #112): test_true_accepted — the delegate suite's
+    FIRST real Win32_Process.Create — returned internal_error on a freshly
+    booted windows-latest runner while every later WMI spawn in the same job
+    passed. A cold host races Winmgmt/PowerShell startup, so a launcher-level
+    failure (invocation error, launch timeout, unparseable output) is
+    transient and must be retried a bounded number of times before the
+    fail-loud CustodyError. A nonzero ReturnValue is WMI's definitive answer
+    (bad command line) — retrying cannot change it and would only delay the
+    fail-loud contract.
+    """
+
+    def _completed(self, pid=1234, rv=0):
+        return subprocess.CompletedProcess(
+            args=[], returncode=0,
+            stdout=json.dumps({"ProcessId": pid, "ReturnValue": rv}),
+            stderr="")
+
+    def _spawn(self, fake_run):
+        with unittest.mock.patch.object(delegate, "_IS_WINDOWS", True), \
+                unittest.mock.patch.object(delegate.subprocess, "run", fake_run), \
+                unittest.mock.patch.object(delegate.time, "sleep"):
+            return delegate.wmi_spawn_detached(
+                "cmd.exe /c exit 0", tempfile.gettempdir())
+
+    def test_transient_invocation_failure_is_retried(self):
+        calls = []
+
+        def fake_run(*a, **kw):
+            calls.append(1)
+            if len(calls) == 1:
+                raise subprocess.TimeoutExpired(cmd="powershell", timeout=30)
+            return self._completed()
+
+        self.assertEqual(self._spawn(fake_run), 1234)
+        self.assertEqual(len(calls), 2,
+                         "a cold-start launcher failure must be retried")
+
+    def test_unparseable_output_retried_then_raises(self):
+        garbage = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="boom", stderr="")
+        with unittest.mock.patch.object(
+                delegate, "_IS_WINDOWS", True), \
+                unittest.mock.patch.object(
+                    delegate.subprocess, "run", return_value=garbage) as m, \
+                unittest.mock.patch.object(delegate.time, "sleep"):
+            with self.assertRaises(delegate.CustodyError):
+                delegate.wmi_spawn_detached(
+                    "cmd.exe /c exit 0", tempfile.gettempdir())
+        self.assertEqual(m.call_count, delegate._WMI_SPAWN_ATTEMPTS,
+                         "persistent launcher failure stays fail-loud after "
+                         "the bounded retries")
+
+    def test_definitive_return_value_not_retried(self):
+        with unittest.mock.patch.object(
+                delegate, "_IS_WINDOWS", True), \
+                unittest.mock.patch.object(
+                    delegate.subprocess, "run",
+                    return_value=self._completed(rv=8)) as m, \
+                unittest.mock.patch.object(delegate.time, "sleep"):
+            with self.assertRaises(delegate.CustodyError):
+                delegate.wmi_spawn_detached(
+                    r"C:\no\such\exe-zzz.exe", tempfile.gettempdir())
+        self.assertEqual(m.call_count, 1,
+                         "a nonzero ReturnValue is WMI's definitive answer; "
+                         "retrying only delays the fail-loud contract")
 
 
 class TestDetachedFailLoud(DelegateTestBase):

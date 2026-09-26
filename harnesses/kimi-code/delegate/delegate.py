@@ -1019,6 +1019,16 @@ _WMI_CREATE_PS = (
 )
 
 
+# The first Win32_Process.Create on a freshly booted host races Winmgmt and
+# PowerShell cold start (CI run 36264707350: the delegate suite's first real
+# WMI spawn failed internal_error on a cold windows-latest runner while every
+# later spawn in the same job passed). Launcher-level failures are transient,
+# so retry them a bounded number of times before going fail-loud; a nonzero
+# ReturnValue is WMI's definitive answer and is never retried.
+_WMI_SPAWN_ATTEMPTS = 3
+_WMI_SPAWN_RETRY_BACKOFF_S = 2.0
+
+
 def wmi_spawn_detached(command_line, working_dir, timeout_s=30):
     """Spawn a process via WMI Win32_Process.Create. Returns the new PID.
 
@@ -1029,32 +1039,43 @@ def wmi_spawn_detached(command_line, working_dir, timeout_s=30):
     the MP_DETACH_CL / MP_DETACH_CWD environment variables to avoid nested
     PowerShell quoting; the launcher runs under _MINIMAL_TOOL_ENV like
     taskkill/icacls. Raises CustodyError on any failure: there is no
-    contained fallback for a caller that asked for detachment.
+    contained fallback for a caller that asked for detachment. Launcher-level
+    failures (invocation error, timeout, unparseable output) are retried up
+    to _WMI_SPAWN_ATTEMPTS times for cold-start tolerance; a definitive
+    nonzero ReturnValue raises immediately.
     """
     if not _IS_WINDOWS:
         raise CustodyError("WMI detached launch is Windows-only")
     env = dict(_MINIMAL_TOOL_ENV)
     env["MP_DETACH_CL"] = command_line
     env["MP_DETACH_CWD"] = working_dir
-    try:
-        out = subprocess.run(
-            [_POWERSHELL_EXE, "-NoProfile", "-NonInteractive", "-Command", _WMI_CREATE_PS],
-            capture_output=True, timeout=timeout_s, env=env, text=True,
-        )
-    except (OSError, subprocess.TimeoutExpired) as e:
-        raise CustodyError(f"WMI launcher invocation failed: {type(e).__name__}: {e}")
-    lines = (out.stdout or "").strip().splitlines()
-    try:
-        payload = json.loads(lines[-1])
-        pid = int(payload["ProcessId"])
-        rv = int(payload["ReturnValue"])
-    except (ValueError, KeyError, TypeError, IndexError):
-        raise CustodyError(
-            "WMI launcher returned unparseable output: "
-            f"stdout={(out.stdout or '')[-200:]!r} stderr={(out.stderr or '')[-200:]!r}")
-    if rv != 0 or pid <= 0:
-        raise CustodyError(f"Win32_Process.Create failed: ReturnValue={rv}")
-    return pid
+    last_err = None
+    for attempt in range(_WMI_SPAWN_ATTEMPTS):
+        if attempt:
+            time.sleep(_WMI_SPAWN_RETRY_BACKOFF_S)
+        try:
+            out = subprocess.run(
+                [_POWERSHELL_EXE, "-NoProfile", "-NonInteractive", "-Command", _WMI_CREATE_PS],
+                capture_output=True, timeout=timeout_s, env=env, text=True,
+            )
+        except (OSError, subprocess.TimeoutExpired) as e:
+            last_err = CustodyError(
+                f"WMI launcher invocation failed: {type(e).__name__}: {e}")
+            continue
+        lines = (out.stdout or "").strip().splitlines()
+        try:
+            payload = json.loads(lines[-1])
+            pid = int(payload["ProcessId"])
+            rv = int(payload["ReturnValue"])
+        except (ValueError, KeyError, TypeError, IndexError):
+            last_err = CustodyError(
+                "WMI launcher returned unparseable output: "
+                f"stdout={(out.stdout or '')[-200:]!r} stderr={(out.stderr or '')[-200:]!r}")
+            continue
+        if rv != 0 or pid <= 0:
+            raise CustodyError(f"Win32_Process.Create failed: ReturnValue={rv}")
+        return pid
+    raise last_err
 
 
 _DETACH_BOOTSTRAP = (
