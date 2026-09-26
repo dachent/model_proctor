@@ -2,7 +2,7 @@
 """Kill-path registry and single kill authority (TOOL-036, issue #107).
 
 One component terminates a delegate-owned worker tree: the delegate that owns
-its Job Object and process handles. External actors (runner, cascade, evals,
+its Job Object and process handles. External actors (runner, evals,
 codex adapter) are read-only with respect to payloads they do not own: their
 terminal action is a termination REQUEST plus a report, never a kill. Every
 payload death is attributed to exactly one authority via the envelope/journal
@@ -116,15 +116,6 @@ KILL_SITES = [
         "expected": {},
         "note": "subprocess.run timeouts at zproctor.py:41-53,56-59; implicit "
                 "stdlib kills of verifier/git children only.",
-    },
-    {
-        "site": "cascade backstop kill (frozen)",
-        "file": "harnesses/kimi-code/cascade/cascade.py",
-        "classification": "frozen_artifact",
-        "expected": {},
-        "note": "Frozen research artifact (AGENTS.md:24-30): the kill on "
-                "backstop expiry (cascade.py:476-483) is inside stdlib "
-                "subprocess.run. Registered for completeness; never modified.",
     },
     {
         "site": "core decision modules",

@@ -32,7 +32,6 @@ comment in delegate.py).
 | Kernel on delegate death | (OS) | authority (custody) | KILL_ON_JOB_CLOSE fires when the delegate's job handle closes for any reason | implicit; documented here |
 | Codex cleanup | harnesses/codex/delegate/delegate.py:96 | own_child_cleanup | proc.kill() on own direct child after 1s grace | envelope kill_authority |
 | Evals timeout | evals/run_eval.py:95-98 | own_child_cleanup | taskkill /T /F on own kimi.exe | result row kill_authority |
-| Cascade backstop | harnesses/kimi-code/cascade/cascade.py:476-483 | frozen_artifact | stdlib subprocess.run timeout kill of direct child | frozen; envelope passthrough |
 | plain_arm / pilot / zproctor spawns | evals/plain_arm.py:63-67, runner/pilot.py:69-73, zcode/zproctor.py:41-53 | stdlib_implicit | stdlib timeout kills of own direct children | not attributed (no envelope surface) |
 | core/* | core/decisions.py, core/task_schema.py | policy_pure | none — pure functions | n/a |
 
