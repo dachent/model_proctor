@@ -117,6 +117,10 @@ never through the harness root.
   known feature keys only, no string booleans (A12). Every harness validates
   task files through it at the command boundary; the kimi runner resolves it
   in both repo and flat-install layouts (`runner._task_schema`).
+- `core/timeout_stack.py` — the one timeout sizing authority (#108 TOOL-037):
+  margin constants and derived ceilings (delegate ceiling, runner breaker,
+  pilot breaker) plus `validate_stack`. Harnesses import it; nothing
+  re-derives a timeout margin.
 - `harnesses/zcode/` — the ZCode harness. ZCode owns subagent dispatch, so the proctor
   gates it in front of the `Agent` tool rather than owning it. Native shims contain no
   policy: every constant arrives in `lane.json` from the core.
