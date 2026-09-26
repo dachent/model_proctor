@@ -722,6 +722,12 @@ def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None):
     try:
         cmd = [sys.executable, delegate_py, "--agent", agent, "--workspace", str(ws),
                "--task-file", task_file, "--timeout", str(timeout_s)]
+        # No job object on the delegate, deliberately (#103): for contained
+        # workers the delegate's own KILL_ON_JOB_CLOSE job must collapse when
+        # this delegate dies — including via our proc.kill() below — and a
+        # runner-side job would nest, not protect. For allow_breakaway
+        # workers the payload is WMI-detached inside the delegate
+        # (TOOL-032) and never enters any job this process could close.
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 text=True)
     except OSError:

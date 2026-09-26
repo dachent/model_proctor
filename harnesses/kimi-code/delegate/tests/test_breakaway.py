@@ -12,6 +12,7 @@ Run: python -m unittest discover -s delegate/tests -v
 
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -227,6 +228,86 @@ class TestDetachedDispatch(DelegateTestBase):
             time.sleep(0.5)
         self.assertFalse(delegate.is_pid_alive(payload_pid),
                          "timeout kill must still reach a detached payload's tree")
+
+
+@unittest.skipUnless(_IS_WINDOWS, "detached custody is Windows-only")
+class TestDetachedCustodyRegression(DelegateTestBase):
+    """#103 regression signature: the runner kills the delegate
+    (runner.py:738,754 proc.kill), the delegate's job handle closes, and
+    KILL_ON_JOB_CLOSE wipes the worker tree. A detached payload must not be
+    in that job at all. The paired control proves the cascade still fires
+    for contained workers, so the survival assertion is load-bearing."""
+
+    def _popen_delegate(self, agent, config, task):
+        argv = [sys.executable, str(_DELEGATE_DIR / "delegate.py"),
+                "--agent", agent, "--workspace", self.workspace,
+                "--task", task, "--timeout", "60"]
+        env = dict(os.environ)
+        env["DELEGATE_CONFIG"] = config
+        return subprocess.Popen(argv, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, env=env)
+
+    def _launch_then_kill_launcher(self, allow_breakaway):
+        tag = "detached" if allow_breakaway else "contained"
+        pid_file = os.path.join(self.tmpdir, f"pid-{tag}.txt")
+        script = self._script(f"sleeper-{tag}", _PID_SLEEPER)
+        a = make_agent(script, prompt_delivery="argument")
+        a["allow_breakaway"] = allow_breakaway
+        a["default_timeout"] = 300
+        a["minimum_timeout"] = 5
+        a["maximum_timeout"] = 300
+        cfg = self._config({"test-agent": a})
+        proc = self._popen_delegate("test-agent", cfg, pid_file)
+        try:
+            deadline = time.time() + 90  # WMI + PowerShell cold start can be slow
+            while not os.path.exists(pid_file):
+                if proc.poll() is not None:
+                    out, err = proc.communicate()
+                    self.fail(f"delegate exited early rc={proc.returncode}: "
+                              f"{out.decode('utf-8', 'replace')!r} "
+                              f"{err.decode('utf-8', 'replace')!r}")
+                self.assertLess(time.time(), deadline,
+                                f"{tag} payload never wrote its pid file")
+                time.sleep(0.5)
+            with open(pid_file) as f:
+                payload_pid = int(f.read().strip())
+            proc.kill()  # exactly what runner.run_delegate does on wrapper timeout
+            proc.wait(timeout=30)
+            return payload_pid
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=30)
+
+    def _kill_payload(self, pid):
+        subprocess.run([delegate._TASKKILL_EXE, "/PID", str(pid), "/T", "/F"],
+                       capture_output=True, timeout=15,
+                       env=delegate._MINIMAL_TOOL_ENV)
+
+    def test_detached_payload_survives_launcher_death(self):
+        payload_pid = self._launch_then_kill_launcher(allow_breakaway=True)
+        try:
+            time.sleep(2)  # let any job-close cascade land before asserting
+            self.assertTrue(
+                delegate.is_pid_alive(payload_pid),
+                "detached payload died with its launcher — #103 regression")
+        finally:
+            self._kill_payload(payload_pid)
+
+    def test_contained_payload_dies_with_launcher(self):
+        """Control: without allow_breakaway the job-close cascade must still
+        kill the worker — otherwise the survival test above proves nothing."""
+        payload_pid = self._launch_then_kill_launcher(allow_breakaway=False)
+        try:
+            deadline = time.time() + 15
+            while delegate.is_pid_alive(payload_pid) and time.time() < deadline:
+                time.sleep(0.5)
+            self.assertFalse(
+                delegate.is_pid_alive(payload_pid),
+                "contained payload survived launcher death — the "
+                "kill-on-close guarantee is broken")
+        finally:
+            self._kill_payload(payload_pid)
 
 
 if __name__ == "__main__":
