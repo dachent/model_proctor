@@ -10,6 +10,7 @@ Run: python -m unittest discover -s delegate/tests -v
 """
 
 import re
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -65,6 +66,105 @@ class TestKillSiteRegistry(unittest.TestCase):
                         f"{entry['file']}:{name} expected "
                         f"{expected.get(name, 0)}, found {actual} — re-survey "
                         f"and justify in KILL_SITES")
+
+
+class _Recorder:
+    """DI fakes recording every authority action in order."""
+
+    def __init__(self):
+        self.calls = []
+
+    def runner(self, argv, **kwargs):
+        self.calls.append(("tool", tuple(argv)))
+        return subprocess.CompletedProcess(argv, 0)
+
+    def job_close(self, job):
+        self.calls.append(("job_close", job))
+
+    def proc_close(self, handle):
+        self.calls.append(("proc_close", handle))
+
+
+def _make_authority(rec, grace=0, job="JOB", proc_handle="PH"):
+    return killauthority.KillAuthority(
+        1234, grace, job=job, proc_handle=proc_handle,
+        job_close=rec.job_close, proc_close=rec.proc_close,
+        tool_argv0="taskkill", tool_env=None, runner=rec.runner)
+
+
+class TestKillAuthority(unittest.TestCase):
+    def test_terminate_order_and_attribution(self):
+        rec = _Recorder()
+        authority = _make_authority(rec)
+        self.assertEqual(authority.attribution, "none")
+        attribution = authority.terminate("timeout")
+        self.assertEqual(attribution, "delegate:timeout")
+        self.assertEqual(authority.attribution, "delegate:timeout")
+        self.assertEqual(rec.calls, [
+            ("tool", ("taskkill", "/PID", "1234", "/T")),
+            ("tool", ("taskkill", "/PID", "1234", "/T", "/F")),
+            ("job_close", "JOB"),
+            ("tool", ("taskkill", "/PID", "1234", "/T", "/F")),
+            ("proc_close", "PH"),
+        ])
+
+    def test_terminate_without_job_still_kills_and_attributes(self):
+        """job_warning=True path: no job handle, taskkill steps must still run."""
+        rec = _Recorder()
+        authority = _make_authority(rec, job=None)
+        self.assertEqual(authority.terminate("interrupted"),
+                         "delegate:interrupted")
+        self.assertEqual(rec.calls, [
+            ("tool", ("taskkill", "/PID", "1234", "/T")),
+            ("tool", ("taskkill", "/PID", "1234", "/T", "/F")),
+            ("tool", ("taskkill", "/PID", "1234", "/T", "/F")),
+            ("proc_close", "PH"),
+        ])
+
+    def test_terminate_rejects_unknown_reason(self):
+        rec = _Recorder()
+        authority = _make_authority(rec)
+        with self.assertRaises(ValueError):
+            authority.terminate("annoyed")
+        self.assertEqual(rec.calls, [])
+
+    def test_terminate_is_idempotent(self):
+        rec = _Recorder()
+        authority = _make_authority(rec)
+        authority.terminate("timeout")
+        calls_after_first = list(rec.calls)
+        self.assertEqual(authority.terminate("interrupted"),
+                         "delegate:timeout")
+        self.assertEqual(rec.calls, calls_after_first)
+
+    def test_release_is_custody_close_only(self):
+        rec = _Recorder()
+        authority = _make_authority(rec)
+        self.assertEqual(authority.release(), "none")
+        self.assertEqual(authority.attribution, "none")
+        self.assertEqual(rec.calls, [("proc_close", "PH"), ("job_close", "JOB")])
+        authority.release()  # idempotent
+        self.assertEqual(rec.calls, [("proc_close", "PH"), ("job_close", "JOB")])
+
+    def test_terminate_after_release_is_a_noop(self):
+        rec = _Recorder()
+        authority = _make_authority(rec)
+        authority.release()
+        self.assertEqual(authority.terminate("timeout"), "none")
+        self.assertEqual(len(rec.calls), 2)
+
+    def test_tool_failure_is_swallowed(self):
+        rec = _Recorder()
+
+        def exploding_runner(argv, **kwargs):
+            raise OSError("taskkill missing")
+
+        authority = killauthority.KillAuthority(
+            1234, 0, job="JOB", proc_handle="PH",
+            job_close=rec.job_close, proc_close=rec.proc_close,
+            tool_argv0="taskkill", tool_env=None, runner=exploding_runner)
+        self.assertEqual(authority.terminate("timeout"), "delegate:timeout")
+        self.assertIn(("job_close", "JOB"), rec.calls)
 
 
 if __name__ == "__main__":
