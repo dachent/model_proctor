@@ -84,10 +84,12 @@ KILL_SITES = [
         "site": "evals kimi.exe timeout kill",
         "file": "evals/run_eval.py",
         "classification": "own_child_cleanup",
-        "expected": {"taskkill": 1},
+        "expected": {"taskkill": 2},
         "note": "taskkill /T /F at run_eval.py:95-98 on a kimi.exe the eval "
-                "harness spawned itself (no Job Object). Task 7 attributes it "
-                "as eval:taskkill_tree_force in the result row.",
+                "harness spawned itself (no Job Object); attributed as "
+                "eval:taskkill_tree_force in the result row (TOOL-036 task 7). "
+                "The second taskkill match is the attribution comment in "
+                "_result_row.",
     },
     {
         "site": "evals plain-arm delegate spawn",

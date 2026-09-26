@@ -13,7 +13,9 @@ Harness-specific code lives under `harnesses/<harness>/`; everything cross-harne
 under `harnesses/` reaches repo-level assets only through an explicit `REPO_ROOT`,
 never through the harness root.
 
-- `harnesses/kimi-code/delegate/` — the wrapper (`delegate.py`), live config (`agents.json`), annotated example
+- `harnesses/kimi-code/delegate/` — the wrapper (`delegate.py`), the single kill authority
+  (`killauthority.py`, TOOL-036: sole terminator of delegate-owned worker trees, plus the
+  repo-wide `KILL_SITES` registry), live config (`agents.json`), annotated example
   (`agents.example.json`), tests (`tests/test_delegate.py`), docs (`README.md`).
 - `harnesses/codex/delegate/` — explicit Codex catalog dispatch (`delegate.py`, `catalog.py`), tracked local-config
   example, tests, and operator documentation. It is a separate adapter with its own explicit-destination installer;
