@@ -68,6 +68,8 @@ No other state is required.
 | `environment_passthrough` | No | Boolean — if true, child inherits full `os.environ` (for CLIs that require it; default false) |
 | `write_allowed` | No | Boolean, **metadata only** — NOT an enforcement mechanism (default false) |
 | `resume_args` | No | Array of args enabling session resume; exactly one element must contain the `{session_id}` placeholder (e.g. `["-r", "{session_id}"]`). Absent = the agent does not support resume |
+| `allow_breakaway` | No | Boolean (default false) — launch the payload WMI-detached, parented outside the delegate's job, so it survives launcher death (TOOL-032). Requires `prompt_delivery` `argument` or `file` |
+| `on_timeout` | No | `kill_tree` (default) or `report_detached`; the latter requires `allow_breakaway: true` and turns budget expiry into a report instead of a kill (TOOL-033) |
 
 > **`write_allowed` is metadata only.** The child runs with the caller's full token and filesystem permissions. This field exists for orchestration-layer policy decisions (e.g. "don't send write-flagged workers against read-only review tasks"). It does not constrain the child process.
 
@@ -76,11 +78,12 @@ No other state is required.
 ```json
 {
   "schema_version": 1,
-  "status": "completed|failed|timeout|invalid|internal_error|interrupted",
+  "status": "completed|failed|timeout|invalid|internal_error|interrupted|payload_running_detached",
   "agent": "name",
   "child_exit_code": 0,
   "child_session_id": "session_9f3ab2c1-… or null",
   "child_home": "C:/.../delegate-kimi-home-… or null",
+  "child_pid": 12345,
   "duration_seconds": 12.345,
   "stdout": "bounded tail",
   "stderr": "bounded tail",
@@ -102,6 +105,7 @@ No other state is required.
 | `stdout_log_truncated` / `stderr_log_truncated` | The disk log (`stdout.log` / `stderr.log` in `run_dir`) hit `max_log_bytes` and stopped growing. Any extraction or verdict drawn from a truncated log is void until the evidence is re-acquired — raise `max_log_bytes` for log-heavy agents |
 | `child_session_id` | Session id scraped from the child's output tails (kimi `To resume this session:` footer), or `null` when none was printed. Feed it back via `--resume-from` |
 | `child_home` | The per-dispatch isolated `KIMI_CODE_HOME` (see "KIMI_CODE_HOME isolation"), or `null` when isolation is disabled. Caller-owned: meter from `<child_home>/sessions/`, then delete |
+| `child_pid` | The delegate-known child pid (the bootstrap pid for WMI-detached payloads), or `null`. Informational only — Windows recycles pids; nothing may kill by this value later (TOOL-033) |
 | `acl_warning` | `icacls` hardening of the run directory failed (run continued; logs may inherit default ACLs) |
 | `job_warning` | Job Object creation/assignment failed; timeout falls back to `taskkill`-only tree kill (degraded — grandchildren created in the Popen→assign window may escape) |
 
@@ -110,6 +114,7 @@ No other state is required.
 | `completed` | Child exited 0 |
 | `failed` | Child started, exited nonzero (`child_exit_code` preserved, wrapper exits 0) |
 | `timeout` | Deadline expired and process tree terminated (`child_exit_code` null) |
+| `payload_running_detached` | Budget expired on an `on_timeout: report_detached` agent; the breakaway-escaped payload keeps running — reported, never killed. `child_pid` carries the delegate-known bootstrap pid (informational) |
 | `invalid` | Input/config invalid, no child launched |
 | `internal_error` | Wrapper failure independent of child (error field = exception class name only) |
 | `interrupted` | Wrapper received a termination signal |
@@ -122,13 +127,14 @@ No other state is required.
 | 64 | Invalid input or configuration |
 | 70 | Internal wrapper error |
 | 124 | Timeout |
+| 125 | Budget expired on a detached payload (reported, not killed) |
 | 130 | Interrupted by SIGINT |
 
 > Both `completed` and `failed` exit 0 by design. The JSON envelope is authoritative; `child_exit_code` carries the child's result. This prevents arbitrary child exit codes from colliding with wrapper-control codes.
 
 > **Note:** Exit code 143 (POSIX SIGTERM) is intentionally omitted. Windows has no POSIX SIGTERM signal.
 
-> **Wall-clock ceiling:** the actual wall-clock upper bound is approximately `timeout + default_kill_grace_seconds + overhead` (taskkill invocations, `proc.wait`, reader joins) ≈ `timeout + grace + ~30 s`, not `timeout`.
+> **Wall-clock ceiling:** the actual wall-clock upper bound is approximately `timeout + default_kill_grace_seconds + overhead` (taskkill invocations, `proc.wait`, reader joins) ≈ `timeout + grace + ~30 s`, not `timeout`. With `on_timeout: report_detached` no kill sequence runs, so the ceiling is ≈ `timeout + ~30 s` (reader joins, no grace).
 
 ## Session resume
 

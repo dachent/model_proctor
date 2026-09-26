@@ -47,7 +47,11 @@ never through the harness root.
   refuses on divergence; `-m` module shadowing is rejected (cmd_verify runs with
   `cwd=ws`, so the workspace is `sys.path[0]`); the git tree signature hashes content,
   not just `git status` letters. `init` refuses to re-baseline an initialized workspace
-  without `--reinit`. Payloads may emit progress heartbeats (#105/TOOL-034): the runner forwards
+  without `--reinit`. Budgets have phase semantics (TOOL-033): dispatch `timeout_s`,
+  a separate `verify_timeout_s`, and a clock-free monitor phase for detached
+  payloads (envelope status `payload_running_detached`); acceptance refuses while a
+  detached payload may be in flight, with `accept --allow-detached-payload` as the
+  counted override. Payloads may emit progress heartbeats (#105/TOOL-034): the runner forwards
   `--heartbeat-file <state>/heartbeats/<dispatch_id>.jsonl` and `--dispatch-id`
   to the delegate, which injects `DELEGATE_HEARTBEAT_PATH`/`DELEGATE_DISPATCH_ID`
   into the child environment; the drain lands `dispatch_progress` journal
