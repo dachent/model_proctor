@@ -78,6 +78,8 @@ def _resolve_system_tool(name):
 
 _TASKKILL_EXE = _resolve_system_tool("taskkill.exe") if _IS_WINDOWS else "taskkill"
 _ICACLS_EXE = _resolve_system_tool("icacls.exe") if _IS_WINDOWS else "icacls"
+_POWERSHELL_EXE = (_resolve_system_tool(os.path.join("WindowsPowerShell", "v1.0", "powershell.exe"))
+                   if _IS_WINDOWS else "powershell")
 
 _MINIMAL_TOOL_ENV = None
 if _IS_WINDOWS:
@@ -226,6 +228,33 @@ if _IS_WINDOWS:
         _k32.CloseHandle(handle)
         return True
 
+    _SYNCHRONIZE = 0x00100000
+
+    _k32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    _k32.WaitForSingleObject.restype = wintypes.DWORD
+
+    _k32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    _k32.GetExitCodeProcess.restype = wintypes.BOOL
+
+    def open_waitable_process(pid):
+        """Open a SYNCHRONIZE|query handle on pid. Raises CustodyError if it cannot."""
+        handle = _k32.OpenProcess(
+            _SYNCHRONIZE | _PROCESS_QUERY_LIMIT_INFORMATION, False, pid)
+        if not handle:
+            raise CustodyError(
+                f"OpenProcess({pid}) failed: {ctypes.WinError(ctypes.get_last_error())}")
+        return handle
+
+    def reap_handle(handle, timeout_ms):
+        """Wait up to timeout_ms for the process. Returns its exit code, or None if still running."""
+        if _k32.WaitForSingleObject(handle, timeout_ms) != 0:  # WAIT_OBJECT_0
+            return None
+        code = wintypes.DWORD(0)
+        if not _k32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            raise CustodyError(
+                f"GetExitCodeProcess failed: {ctypes.WinError(ctypes.get_last_error())}")
+        return code.value
+
 
 # ---------------------------------------------------------------------------
 # Configuration loading and validation
@@ -233,6 +262,15 @@ if _IS_WINDOWS:
 
 class ConfigError(Exception):
     """Raised when configuration is invalid."""
+
+
+class CustodyError(Exception):
+    """Raised when detached-payload custody cannot be established or verified.
+
+    Distinct from ConfigError/InputError: custody failures are runtime launch
+    failures and map to an internal_error envelope, never to a silent fallback
+    into the kill-on-close job (TOOL-032, #103).
+    """
 
 
 # Placeholder substituted with the session id inside an agent's resume_args.
@@ -924,6 +962,53 @@ def kill_process_tree(pid, grace_seconds, job=None):
         )
     except Exception:
         pass
+
+
+_WMI_CREATE_PS = (
+    "$ErrorActionPreference = 'Stop'; "
+    "$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create "
+    "-Arguments @{ CommandLine = $env:MP_DETACH_CL; CurrentDirectory = $env:MP_DETACH_CWD }; "
+    "Write-Output (ConvertTo-Json -Compress -InputObject "
+    "@{ ProcessId = $r.ProcessId; ReturnValue = $r.ReturnValue })"
+)
+
+
+def wmi_spawn_detached(command_line, working_dir, timeout_s=30):
+    """Spawn a process via WMI Win32_Process.Create. Returns the new PID.
+
+    The new process is parented to the WMI provider service, so it never
+    enters this delegate's job object and survives the delegate's death —
+    the actual escape that JOB_OBJECT_LIMIT_BREAKAWAY_OK only *permits*
+    (and Python's subprocess never requests). The command line travels via
+    the MP_DETACH_CL / MP_DETACH_CWD environment variables to avoid nested
+    PowerShell quoting; the launcher runs under _MINIMAL_TOOL_ENV like
+    taskkill/icacls. Raises CustodyError on any failure: there is no
+    contained fallback for a caller that asked for detachment.
+    """
+    if not _IS_WINDOWS:
+        raise CustodyError("WMI detached launch is Windows-only")
+    env = dict(_MINIMAL_TOOL_ENV)
+    env["MP_DETACH_CL"] = command_line
+    env["MP_DETACH_CWD"] = working_dir
+    try:
+        out = subprocess.run(
+            [_POWERSHELL_EXE, "-NoProfile", "-NonInteractive", "-Command", _WMI_CREATE_PS],
+            capture_output=True, timeout=timeout_s, env=env, text=True,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise CustodyError(f"WMI launcher invocation failed: {type(e).__name__}: {e}")
+    lines = (out.stdout or "").strip().splitlines()
+    try:
+        payload = json.loads(lines[-1])
+        pid = int(payload["ProcessId"])
+        rv = int(payload["ReturnValue"])
+    except (ValueError, KeyError, TypeError, IndexError):
+        raise CustodyError(
+            "WMI launcher returned unparseable output: "
+            f"stdout={(out.stdout or '')[-200:]!r} stderr={(out.stderr or '')[-200:]!r}")
+    if rv != 0 or pid <= 0:
+        raise CustodyError(f"Win32_Process.Create failed: ReturnValue={rv}")
+    return pid
 
 
 # ---------------------------------------------------------------------------

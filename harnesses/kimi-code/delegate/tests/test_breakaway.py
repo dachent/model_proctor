@@ -10,8 +10,12 @@ Windows-only mechanics are skipped elsewhere; the validator test is portable.
 Run: python -m unittest discover -s delegate/tests -v
 """
 
+import shutil
 import sys
+import tempfile
+import time
 import unittest
+import unittest.mock
 from pathlib import Path
 
 _DELEGATE_DIR = Path(__file__).resolve().parent.parent
@@ -99,6 +103,39 @@ class TestBreakawayJobFlags(unittest.TestCase):
         """0x0400 is JOB_OBJECT_LIMIT_BREAKAWAY_OK per the Win32 headers."""
         self.assertEqual(delegate._JOB_OBJECT_LIMIT_BREAKAWAY_OK, 0x0400)
         self.assertEqual(delegate._JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, 0x2000)
+
+
+@unittest.skipUnless(_IS_WINDOWS, "WMI launch is Windows-only")
+class TestWmiSpawn(unittest.TestCase):
+    """wmi_spawn_detached: real Win32_Process.Create round-trips, read back
+    from the kernel (pid + exit code), not from the PowerShell stdout alone."""
+
+    def test_spawn_returns_live_pid_and_exit_code(self):
+        pid = delegate.wmi_spawn_detached("cmd.exe /c exit 0", tempfile.gettempdir())
+        self.assertIsInstance(pid, int)
+        self.assertGreater(pid, 0)
+        handle = delegate.open_waitable_process(pid)
+        try:
+            rc = None
+            deadline = time.time() + 30
+            while rc is None and time.time() < deadline:
+                rc = delegate.reap_handle(handle, 500)
+            self.assertEqual(rc, 0, "cmd /c exit 0 must reap with exit code 0")
+        finally:
+            delegate.close_process_handle(handle)
+
+    def test_bad_command_raises_custody_error(self):
+        # Win32_Process.Create returns nonzero ReturnValue for a missing exe;
+        # the helper must raise, never return a bogus pid or fall back.
+        with self.assertRaises(delegate.CustodyError):
+            delegate.wmi_spawn_detached(
+                r"C:\no\such\exe-mp103-zzz.exe /c exit 0", tempfile.gettempdir())
+
+    def test_bad_powershell_raises_custody_error(self):
+        with unittest.mock.patch.object(
+                delegate, "_POWERSHELL_EXE", r"C:\no\such\powershell-zzz.exe"):
+            with self.assertRaises(delegate.CustodyError):
+                delegate.wmi_spawn_detached("cmd.exe /c exit 0", tempfile.gettempdir())
 
 
 if __name__ == "__main__":
