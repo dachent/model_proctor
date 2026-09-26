@@ -10,6 +10,7 @@ Windows-only mechanics are skipped elsewhere; the validator test is portable.
 Run: python -m unittest discover -s delegate/tests -v
 """
 
+import os
 import shutil
 import sys
 import tempfile
@@ -23,7 +24,9 @@ sys.path.insert(0, str(_DELEGATE_DIR))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import delegate  # noqa: E402
-from test_delegate import DelegateTestBase, make_agent  # noqa: E402
+from test_delegate import (  # noqa: E402
+    DelegateTestBase, make_agent, _ECHO_ARG, _EXIT_CODE, _PID_SLEEPER,
+)
 
 _IS_WINDOWS = sys.platform == "win32"
 
@@ -150,6 +153,80 @@ class TestWmiSpawn(unittest.TestCase):
                 delegate, "_POWERSHELL_EXE", r"C:\no\such\powershell-zzz.exe"):
             with self.assertRaises(delegate.CustodyError):
                 delegate.wmi_spawn_detached("cmd.exe /c exit 0", tempfile.gettempdir())
+
+
+class TestDetachedFailLoud(DelegateTestBase):
+    """Fail-loud contract: when detached custody cannot be established the
+    dispatch is internal_error and NOTHING is launched — never a silent
+    fallback into the kill-on-close job (#103)."""
+
+    def test_wmi_failure_is_internal_error_and_launches_nothing(self):
+        agent = make_agent(self.echo_script, prompt_delivery="argument")
+        agent["allow_breakaway"] = True
+        run_dir, acl_warning = delegate.create_run_dir()
+        try:
+            with unittest.mock.patch.object(
+                    delegate, "wmi_spawn_detached",
+                    side_effect=delegate.CustodyError("simulated wmi outage")):
+                result, exit_code = delegate._run_detached_dispatch(
+                    "test-agent", agent,
+                    {"default_kill_grace_seconds": 2,
+                     "max_stdout_bytes": 65536,
+                     "max_stderr_bytes": 65536},
+                    [sys.executable, self.echo_script, "hello"],
+                    self.workspace, {"PATH": os.environ.get("PATH", "")},
+                    None, run_dir, acl_warning, 30, time.monotonic())
+            self.assertEqual(result["status"], "internal_error")
+            self.assertEqual(exit_code, delegate.EXIT_INTERNAL)
+            self.assertIn("simulated wmi outage", result["error"])
+        finally:
+            shutil.rmtree(run_dir, ignore_errors=True)
+
+
+@unittest.skipUnless(_IS_WINDOWS, "detached dispatch requires WMI (Windows-only)")
+class TestDetachedDispatch(DelegateTestBase):
+    """End-to-end detached dispatch through real delegate.py subprocesses."""
+
+    def _detached_config(self, script, **kw):
+        a = make_agent(script, prompt_delivery="argument", **kw)
+        a["allow_breakaway"] = True
+        return self._config({"test-agent": a})
+
+    def test_completed_echo_roundtrip(self):
+        script = self._script("echo_arg", _ECHO_ARG)
+        cfg = self._detached_config(script)
+        out, err, rc = self._run("test-agent", task="hello", config=cfg)
+        result = self._assert_result(out, err, rc, "completed", 0)
+        self.assertEqual(result["stdout"], "hello")
+        self.assertEqual(result["child_exit_code"], 0)
+
+    def test_exit_code_propagates_through_bootstrap(self):
+        script = self._script("exit3", _EXIT_CODE)
+        cfg = self._detached_config(script, extra_args=["3"])
+        out, err, rc = self._run("test-agent", task="hello", config=cfg)
+        result = self._assert_result(out, err, rc, "failed", 0)
+        self.assertEqual(result["child_exit_code"], 3)
+
+    def test_timeout_kills_detached_payload(self):
+        """Detachment changes WHO owns the payload when the LAUNCHER dies;
+        the delegate's own timeout kill must still work while it lives."""
+        pid_file = os.path.join(self.tmpdir, "timeout-pid.txt")
+        script = self._script("sleeper-to", _PID_SLEEPER)
+        a = make_agent(script, prompt_delivery="argument")
+        a["allow_breakaway"] = True
+        a["default_timeout"] = 5
+        a["minimum_timeout"] = 5
+        cfg = self._config({"test-agent": a})
+        out, err, rc = self._run("test-agent", task=pid_file, timeout=5,
+                                 config=cfg, timeout_wrap=180)
+        self._assert_result(out, err, rc, "timeout", 124)
+        with open(pid_file) as f:
+            payload_pid = int(f.read().strip())
+        deadline = time.time() + 30
+        while delegate.is_pid_alive(payload_pid) and time.time() < deadline:
+            time.sleep(0.5)
+        self.assertFalse(delegate.is_pid_alive(payload_pid),
+                         "timeout kill must still reach a detached payload's tree")
 
 
 if __name__ == "__main__":

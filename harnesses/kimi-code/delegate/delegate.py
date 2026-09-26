@@ -106,6 +106,10 @@ if _IS_WINDOWS:
     # walk, so a timeout kill will not reach it — surviving the run is the
     # feature, and outliving a timeout is its cost. Enable per agent only
     # where an orphaned pipeline is preferable to a killed one.
+    # TOOL-032 (#103): for allow_breakaway agents the delegate now launches
+    # the worker via WMI (wmi_spawn_detached) entirely outside the job; this
+    # flag remains only as the composition primitive tested by
+    # test_breakaway.py.
     _JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x0400
     _JobObjectExtendedLimitInformation = 9
     _PROCESS_SET_QUOTA = 0x0100
@@ -176,6 +180,8 @@ if _IS_WINDOWS:
     # fail, keeping all descendants inside the kill-on-close boundary (legacy
     # guarantee). With the flag set, detached grandchildren survive worker exit —
     # required for workers that launch supervised long-running pipelines.
+    # Detached-payload agents (allow_breakaway) no longer pass through here —
+    # see _run_detached_dispatch.
     def create_kill_on_close_job(allow_breakaway=False):
         """Create a Job Object that kills all assigned processes when the handle closes."""
         job = _k32.CreateJobObjectW(None, None)
@@ -565,8 +571,10 @@ def _validate_agent(name, agent, global_max_timeout, check_executable=False):
         raise ConfigError(f"Agent '{name}': write_allowed must be a boolean")
     # allow_breakaway — opt-in JOB_OBJECT_LIMIT_BREAKAWAY_OK for workers that
     # must launch deliberately-detached long-running processes (e.g. weekly
-    # pipeline orchestrators). Default False preserves the legacy
-    # everything-dies-with-the-worker guarantee.
+    # pipeline orchestrators).
+    # Default False preserves the legacy everything-dies-with-the-worker
+    # guarantee. True = WMI-detached launch (TOOL-032): the payload is
+    # parented to the WMI provider and survives launcher death.
     ab = agent.get("allow_breakaway", False)
     if not isinstance(ab, bool):
         raise ConfigError(f"Agent '{name}': allow_breakaway must be a boolean")
@@ -1016,6 +1024,133 @@ def wmi_spawn_detached(command_line, working_dir, timeout_s=30):
     return pid
 
 
+_DETACH_BOOTSTRAP = (
+    "import json, subprocess, sys\n"
+    "spec = json.load(open(sys.argv[1], 'r', encoding='utf-8'))\n"
+    "with open(spec['stdout_log'], 'wb') as out, open(spec['stderr_log'], 'wb') as err:\n"
+    "    rc = subprocess.call(spec['argv'], cwd=spec['cwd'], env=spec['env'],"
+    " stdin=subprocess.DEVNULL, stdout=out, stderr=err)\n"
+    "sys.exit(rc)\n"
+)
+
+
+def _read_log_capped(path, cap):
+    """Read up to `cap` bytes of a run_dir log. Returns (text, truncated)."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read(cap + 1)
+    except OSError:
+        return "", False
+    return data[:cap].decode("utf-8", errors="replace"), len(data) > cap
+
+
+def _run_detached_dispatch(agent_name, agent, cfg, argv, workspace, child_env,
+                           child_home, run_dir, acl_warning, timeout, start_time):
+    """Launch the worker OUTSIDE the delegate's job via WMI (TOOL-032, #103).
+
+    Custody contract: the payload is parented to the WMI provider service, so
+    the runner killing this delegate (runner.py proc.kill) cannot collapse it
+    through the KILL_ON_JOB_CLOSE cascade — surviving the launcher is the
+    feature; outliving the budget if the delegate dies first is the documented
+    cost (see the design comment at the BREAKAWAY_OK constant).
+
+    Fail-loud: any WMI failure returns internal_error and NOTHING is launched;
+    there is no fallback to a job-contained Popen, because silently containing
+    a payload the operator configured as detached inverts the guarantee.
+
+    The full child_env (isolated KIMI_CODE_HOME, _CHILD_MARKER, allowlisted
+    vars) round-trips through detach_spec.json inside the ACL-hardened
+    run_dir; the bootstrap re-creates it verbatim, so TOOL-013 home isolation
+    and the anti-nesting marker survive detachment.
+
+    RESIDUAL: log caps are enforced at read-back, not live — a detached
+    payload can grow stdout.log/stderr.log past max_log_bytes while it runs.
+    """
+    spec_path = os.path.join(run_dir, "detach_spec.json")
+    spec = {
+        "argv": argv,
+        "cwd": workspace,
+        "env": child_env,
+        "stdout_log": os.path.join(run_dir, "stdout.log"),
+        "stderr_log": os.path.join(run_dir, "stderr.log"),
+    }
+    with open(spec_path, "w", encoding="utf-8") as f:
+        json.dump(spec, f)
+    try:
+        pid = wmi_spawn_detached(
+            subprocess.list2cmdline([sys.executable, "-c", _DETACH_BOOTSTRAP, spec_path]),
+            workspace)
+        handle = open_waitable_process(pid)
+    except CustodyError as e:
+        return _make_result("internal_error", agent=agent_name, run_dir=run_dir,
+                            acl_warning=acl_warning, child_home=child_home,
+                            error=f"detached custody unavailable: {e}"), EXIT_INTERNAL
+
+    deadline = time.monotonic() + timeout
+    timed_out = False
+    rc = None
+    try:
+        try:
+            while True:
+                if _interrupted.is_set():
+                    break
+                rc = reap_handle(handle, 100)
+                if rc is not None:
+                    break
+                if time.monotonic() >= deadline:
+                    # Final reap: the payload may have exited at the deadline.
+                    rc = reap_handle(handle, 0)
+                    if rc is not None:
+                        break
+                    timed_out = True
+                    break
+        except KeyboardInterrupt:
+            global _interrupt_condition
+            _interrupted.set()
+            _interrupt_condition = "received KeyboardInterrupt"
+
+        if _interrupted.is_set() or timed_out:
+            # kill_process_tree with job=None: taskkill /T /F from the
+            # bootstrap pid still reaches the payload tree through
+            # parent-PID links while the bootstrap is alive.
+            kill_process_tree(pid, cfg["default_kill_grace_seconds"], job=None)
+            reap_handle(handle, 10000)
+            stdout_text, stdout_trunc = _read_log_capped(
+                spec["stdout_log"], cfg["max_stdout_bytes"])
+            stderr_text, stderr_trunc = _read_log_capped(
+                spec["stderr_log"], cfg["max_stderr_bytes"])
+            duration = time.monotonic() - start_time
+            status = "interrupted" if _interrupted.is_set() else "timeout"
+            result = _make_result(
+                status, agent=agent_name, duration=duration,
+                stdout_text=stdout_text, stderr_text=stderr_text,
+                stdout_trunc=stdout_trunc, stderr_trunc=stderr_trunc,
+                run_dir=run_dir, acl_warning=acl_warning,
+                child_session_id=extract_child_session_id(stdout_text, stderr_text),
+                child_home=child_home,
+                error=_interrupt_condition if _interrupted.is_set() else None,
+            )
+            return result, EXIT_INTERRUPTED if status == "interrupted" else EXIT_TIMEOUT
+
+        duration = time.monotonic() - start_time
+        stdout_text, stdout_trunc = _read_log_capped(
+            spec["stdout_log"], cfg["max_stdout_bytes"])
+        stderr_text, stderr_trunc = _read_log_capped(
+            spec["stderr_log"], cfg["max_stderr_bytes"])
+        status = "completed" if rc == 0 else "failed"
+        result = _make_result(
+            status, agent=agent_name, child_exit_code=rc, duration=duration,
+            stdout_text=stdout_text, stderr_text=stderr_text,
+            stdout_trunc=stdout_trunc, stderr_trunc=stderr_trunc,
+            run_dir=run_dir, acl_warning=acl_warning,
+            child_session_id=extract_child_session_id(stdout_text, stderr_text),
+            child_home=child_home,
+        )
+        return result, EXIT_OK
+    finally:
+        close_process_handle(handle)
+
+
 # ---------------------------------------------------------------------------
 # Interruption handling
 # ---------------------------------------------------------------------------
@@ -1256,6 +1391,14 @@ def _run_delegate_inner(args, start_time, agent_name):
         with open(task_file_in_run_dir, "w", encoding="utf-8") as f:
             f.write(task_text)
         argv.append(task_file_in_run_dir)
+
+    # TOOL-032 (#103): detached payloads launch via WMI outside the job.
+    # The validator guarantees prompt_delivery is "argument" or "file" here,
+    # so argv is complete and no stdin thread is needed.
+    if agent.get("allow_breakaway", False):
+        return _run_detached_dispatch(
+            agent_name, agent, cfg, argv, workspace, child_env, child_home,
+            run_dir, acl_warning, timeout, start_time)
 
     # Launch — catch ValueError (NUL in env, etc.) alongside OSError
     try:
