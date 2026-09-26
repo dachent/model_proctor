@@ -141,6 +141,20 @@ class A01VerifierTimeout(unittest.TestCase):
         self.assertEqual(out["verify_timeout_s"], 2)
         self.assertLess(wall, 30)
 
+    def test_dispatch_timeout_does_not_constrain_verifier(self):
+        # #108: the split is bidirectional — a 1s DISPATCH budget must not
+        # touch a verify that legitimately takes ~2s (verify owns its own
+        # clock now).
+        task = make_task(self.tmp, ["{python}", "check.py"],
+                         budget={"max_dispatches": 4, "max_stagnant": 3,
+                                 "timeout_s": 1, "verify_timeout_s": 60},
+                         task_id="t_split")
+        rc, out = run_runner("init", "--workspace", self.ws, "--task", task)
+        self.assertEqual(rc, 0, out)
+        rc, out = run_runner("verify", "--workspace", self.ws, "--task", task)
+        self.assertEqual(rc, 0, out)
+        self.assertTrue(out["passed"])
+
     def test_pre_split_state_falls_back_to_dispatch_timeout(self):
         # States initialized before TOOL-033 carry no verify_timeout_s; the
         # verifier must keep the legacy behavior exactly (timeout_s).
