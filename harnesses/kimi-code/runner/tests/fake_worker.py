@@ -5,7 +5,7 @@ Speaks the delegate CLI contract (--agent --workspace --task-file --timeout)
 and emits one JSON envelope on stdout. No real CLI is ever launched.
 
 Env knobs:
-  FAKE_WORKER_MODE      completed (default) | failed | timeout
+  FAKE_WORKER_MODE      completed (default) | failed | timeout | detached | garbage
   FAKE_WORKER_WRITE     workspace-relative file the "worker" writes
   FAKE_WORKER_CONTENT   content to write (default: "written by fake worker")
   FAKE_WORKER_HEARTBEAT 1 -> append schema-v1 heartbeat lines ("intake" before
@@ -80,13 +80,20 @@ def main():
         "completed": ("completed", 0, 0),
         "failed": ("failed", 1, 0),
         "timeout": ("timeout", None, 124),
+        "detached": ("payload_running_detached", None, 125),
+        "garbage": ("garbage", None, 0),
     }[mode]
+
+    if mode == "garbage":
+        sys.stdout.write("this is not json\n")
+        return exit_code
 
     envelope = {
         "schema_version": 1,
         "status": status,
         "agent": args.agent,
         "child_exit_code": child_rc,
+        "child_pid": os.getpid() if mode == "detached" else None,
         "duration_seconds": 0.01,
         "stdout": f"fake worker {args.agent} (mode={mode})",
         "stderr": "",

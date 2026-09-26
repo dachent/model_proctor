@@ -1280,8 +1280,14 @@ def cmd_dispatch(args):
                             request_file=req_path, on_termination=_termination)
     wall = time.monotonic() - t0
     envelope_status = envelope.get("status")
+    # TOOL-033: a detached report is a custody state, not a failure — it must
+    # not count against max_stagnant or trip the provider circuit breaker,
+    # and no budget clock follows the payload into its detached life.
+    detached = envelope_status == "payload_running_detached"
     state["dispatches"].append({
         "agent": agent, "status": envelope_status,
+        "dispatch_id": dispatch_id, "detached": detached,
+        "child_pid": envelope.get("child_pid"),
         "duration_seconds": envelope.get("duration_seconds", wall),
         "child_session_id": envelope.get("child_session_id"),
         "child_home": envelope.get("child_home"),
@@ -1294,7 +1300,7 @@ def cmd_dispatch(args):
         "preflight_ages_seconds": preflight_ages,
         "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     })
-    if envelope_status not in ("completed", "failed"):
+    if envelope_status not in ("completed", "failed", "payload_running_detached"):
         state["failures"].append({
             "kind": "provider_or_tool",
             "fingerprint": f"provider:{envelope_status}",
@@ -1309,6 +1315,7 @@ def cmd_dispatch(args):
         "event": "dispatch_finished", "dispatch_id": dispatch_id,
         "task_id": state["task_id"], "dispatch_seq": dispatch_seq,
         "agent": agent, "envelope_status": envelope_status,
+        "detached": detached,
         "duration_seconds": round(envelope.get("duration_seconds", wall), 3),
         "heartbeats": heartbeat_count[0],
         "kill_evidence": envelope.get("kill_evidence"),
@@ -1318,11 +1325,16 @@ def cmd_dispatch(args):
         "payload_heartbeat_status": progress["status"],
     })
     cls, rec = classify_and_recommend(state, state["lane"])
+    if detached:
+        rec = {"action": "monitor_detached",
+               "note": "payload outlives the dispatch budget by design; "
+                       "accept refuses until --allow-detached-payload"}
     return _emit({
         "dispatched": True, "agent": agent, "lane": state["lane"],
         "envelope_status": envelope_status,
         "child_session_id": envelope.get("child_session_id"),
         "child_home": envelope.get("child_home"),
+        "detached": detached, "child_pid": envelope.get("child_pid"),
         "failure_class": cls, "recommendation": rec,
         # A6 (#73): advisory only — see the sweep comment above.
         "journal_orphans": [o["orphaned_dispatch_id"] for o in orphans],
@@ -1567,6 +1579,24 @@ def cmd_accept(args):
             "hint": "wait for the dispatch to finish (status shows it), or "
                     "journal --ack <id> if it is a confirmed orphan",
         }, 1))
+    # TOOL-033: a detached payload outlived its dispatch budget — its journal
+    # pair is closed, but the payload may still be mutating the tree. Same
+    # refuse-unless-explicit-override pattern as --allow-zero-dispatch.
+    _detached = sorted(str(d.get("dispatch_id"))
+                       for d in state.get("dispatches", [])
+                       if d.get("detached"))
+    if _detached and not getattr(args, "allow_detached_payload", False):
+        raise SystemExit(_emit({
+            "accepted": False,
+            "reason": "detached_payload_in_flight: a dispatch's payload is "
+                      "running detached; the tree may be mutating under this "
+                      "acceptance",
+            "detached_dispatch_ids": _detached,
+            "hint": "confirm the detached payload has finished (status lists "
+                    "it under detached_dispatch_ids), then re-run accept "
+                    "with --allow-detached-payload as a reviewed decision "
+                    "(counted on state)",
+        }, 1))
     rp = _receipt_path(sroot, task["task_id"])
     if not rp.is_file():
         raise SystemExit(_emit({"accepted": False, "reason": "no receipt; run verify"}, 1))
@@ -1643,6 +1673,9 @@ def cmd_accept(args):
     if getattr(args, "allow_zero_dispatch", False):
         state["allow_zero_dispatch_count"] = int(
             state.get("allow_zero_dispatch_count", 0)) + 1
+    if getattr(args, "allow_detached_payload", False):
+        state["allow_detached_payload_count"] = int(
+            state.get("allow_detached_payload_count", 0)) + 1
     _write_json_atomic(_state_path(sroot), state)
     return _emit({"accepted": True, "task_id": task["task_id"],
                   "receipt": receipt})
@@ -1892,6 +1925,9 @@ def cmd_status(args):
         "stall_suspected": bool(last_epoch and now - last_epoch > stall_after),
         "open_journal_ids": sorted(open_dispatches),
         "orphaned_dispatch_ids": orphans,
+        "detached_dispatch_ids": sorted(
+            str(d.get("dispatch_id")) for d in state.get("dispatches", [])
+            if d.get("detached")),
         "journal_tail_corrupt": _journal_tail_corrupt(sroot),
         "journal_events": len(entries),
         # C3 (#73): a zero-dispatch or nondiscriminating green must be visible
@@ -1970,6 +2006,10 @@ def main(argv=None):
                            help="accept a zero-dispatch nondiscriminating "
                                 "green receipt as a reviewed decision "
                                 "(counted on state)")
+            p.add_argument("--allow-detached-payload", action="store_true",
+                           help="accept while a detached payload may still be "
+                                "running, as a reviewed decision (counted on "
+                                "state)")
     # A6 (#73): resolve orphaned opens without re-reporting them forever.
     p = sub.add_parser("journal")
     p.add_argument("--workspace", required=True)
