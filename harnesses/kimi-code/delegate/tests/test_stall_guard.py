@@ -95,5 +95,118 @@ class SignatureTest(unittest.TestCase):
                          stall_guard.stack_signature(list(frames)))
 
 
+class ReaderTest(unittest.TestCase):
+
+    def setUp(self):
+        self.run_dir = tempfile.mkdtemp(prefix="sg-run-")
+        self.addCleanup(shutil.rmtree, self.run_dir, ignore_errors=True)
+        self.hb_path = os.path.join(self.run_dir, stall_guard.HEARTBEAT_FILE)
+
+    def _write_heartbeat(self, records, mtime=None):
+        with open(self.hb_path, "a", encoding="utf-8") as f:
+            for rec in records:
+                f.write(json.dumps(rec) + "\n")
+        if mtime is not None:
+            os.utime(self.hb_path, (mtime, mtime))
+        return self.hb_path
+
+    def test_missing_heartbeat_file(self):
+        r = stall_guard.read_heartbeat(self.hb_path, now=1000.0)
+        self.assertFalse(r.seen)
+        self.assertIsNone(r.mtime_age_s)
+
+    def test_newest_record_wins_and_age_from_mtime(self):
+        self._write_heartbeat(
+            [{"beat": 1, "epoch": 999.0, "counters": {"done": 1}},
+             {"beat": 2, "epoch": 1.0, "counters": {"done": 2}}],
+            mtime=900.0)
+        r = stall_guard.read_heartbeat(self.hb_path, now=1000.0)
+        self.assertTrue(r.seen)
+        self.assertEqual(r.mtime_age_s, 100.0)
+        self.assertEqual(r.progress, {"done": 2})
+
+    def test_payload_epoch_field_is_ignored_for_staleness(self):
+        # epoch claims the far future; mtime is stale -> stale.
+        self._write_heartbeat(
+            [{"beat": 1, "epoch": 9e9, "counters": {}}], mtime=100.0)
+        r = stall_guard.read_heartbeat(self.hb_path, now=1000.0)
+        self.assertEqual(r.mtime_age_s, 900.0)
+
+    def test_future_mtime_clamps_to_fresh(self):
+        self._write_heartbeat([{"beat": 1, "epoch": 0, "counters": {}}],
+                              mtime=5000.0)
+        r = stall_guard.read_heartbeat(self.hb_path, now=1000.0)
+        self.assertEqual(r.mtime_age_s, 0.0)
+
+    def test_torn_tail_tolerated_and_flagged(self):
+        path = self._write_heartbeat(
+            [{"beat": 1, "epoch": 0, "counters": {"done": 7}}])
+        with open(path, "a", encoding="utf-8") as f:
+            f.write('{"beat": 2, "epo')  # writer died mid-append
+        r = stall_guard.read_heartbeat(self.hb_path)
+        self.assertTrue(r.seen)
+        self.assertTrue(r.torn_tail)
+        self.assertEqual(r.progress, {"done": 7})
+
+    def test_heartbeat_read_is_tail_bounded(self):
+        # 300k records (~9 MB): the reader must return the newest record
+        # without scanning the whole file.
+        with open(self.hb_path, "w", encoding="utf-8") as f:
+            for i in range(300000):
+                f.write(json.dumps({"beat": i, "epoch": 0,
+                                    "counters": {"done": i}}) + "\n")
+        r = stall_guard.read_heartbeat(self.hb_path)
+        self.assertTrue(r.seen)
+        self.assertEqual(r.progress, {"done": 299999})
+
+    def test_capture_roundtrip(self):
+        clock = [100.0]
+        def responder(d):
+            clock[0] += d
+            req = os.path.join(self.run_dir, stall_guard.STACK_REQUEST_FILE)
+            if os.path.exists(req):
+                with open(req, encoding="utf-8") as f:
+                    seq = json.load(f)["seq"]
+                with open(os.path.join(
+                        self.run_dir,
+                        stall_guard.STACK_CAPTURE_FMT.format(seq=seq)),
+                        "w", encoding="utf-8") as f:
+                    json.dump({"seq": seq, "captured_at": clock[0],
+                               "frames": ["a.py:1:f", "b.py:2:g"]}, f)
+        cap = stall_guard.request_stack_capture(
+            self.run_dir, 1, 5.0, sleep=responder,
+            monotonic=lambda: clock[0], now=clock[0])
+        self.assertTrue(cap.ok)
+        self.assertEqual(cap.seq, 1)
+        self.assertEqual(cap.frames_count, 2)
+        self.assertEqual(cap.signature,
+                         stall_guard.stack_signature(["a.py:1:f", "b.py:2:g"]))
+        # request file was written atomically: no tmp left behind
+        self.assertFalse(os.path.exists(
+            os.path.join(self.run_dir, ".stack_request_1.tmp")))
+
+    def test_capture_timeout_returns_not_ok(self):
+        clock = [0.0]
+        cap = stall_guard.request_stack_capture(
+            self.run_dir, 3, 1.0,
+            sleep=lambda d: clock.__setitem__(0, clock[0] + d),
+            monotonic=lambda: clock[0])
+        self.assertFalse(cap.ok)
+        self.assertIsNone(cap.signature)
+        self.assertGreaterEqual(clock[0], 1.0)
+
+    def test_capture_seq_mismatch_rejected(self):
+        with open(os.path.join(self.run_dir, "stack_capture_9.json"),
+                  "w", encoding="utf-8") as f:
+            json.dump({"seq": 8, "frames": ["x"]}, f)  # stale/wrong seq
+        self.assertIsNone(stall_guard.read_stack_capture(self.run_dir, 9))
+
+    def test_oversized_capture_rejected(self):
+        with open(os.path.join(self.run_dir, "stack_capture_1.json"),
+                  "w", encoding="utf-8") as f:
+            f.write(" " * (stall_guard._MAX_CAPTURE_BYTES + 1))
+        self.assertIsNone(stall_guard.read_stack_capture(self.run_dir, 1))
+
+
 if __name__ == "__main__":
     unittest.main()

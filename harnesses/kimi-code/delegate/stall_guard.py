@@ -132,3 +132,118 @@ def progress_signature(progress):
 def stack_signature(frames):
     canon = "\n".join(str(f) for f in frames)
     return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:16]
+
+
+@dataclass(frozen=True)
+class HeartbeatReading:
+    seen: bool
+    mtime_age_s: float | None
+    progress: object
+    torn_tail: bool
+
+
+def read_heartbeat(heartbeat_path, now=None):
+    """Newest heartbeat record; staleness from file mtime, never `epoch`.
+
+    `heartbeat_path` is the full TOOL-034 heartbeat file path
+    (DELEGATE_HEARTBEAT_PATH), not a directory. Tail-bounded
+    (_MAX_HEARTBEAT_READ_BYTES): a flooding emitter must not make
+    observation O(file). A torn trailing line (writer mid-append) is
+    flagged, not fatal — the journal's doctrine. A seek-split first line
+    or any mid-file corrupt line is skipped. The returned `progress` is the
+    newest record's `counters` payload (TOOL-034 record shape).
+    """
+    now = time.time() if now is None else now
+    try:
+        st = os.stat(heartbeat_path)
+    except OSError:
+        return HeartbeatReading(False, None, None, False)
+    age = max(0.0, now - st.st_mtime)  # future mtimes read as fresh
+    try:
+        with open(heartbeat_path, "rb") as f:
+            if st.st_size > _MAX_HEARTBEAT_READ_BYTES:
+                f.seek(-_MAX_HEARTBEAT_READ_BYTES, os.SEEK_END)
+            data = f.read()
+    except OSError:
+        return HeartbeatReading(False, None, None, False)
+    text = data.decode("utf-8", errors="replace")
+    nonempty = [ln for ln in (l.strip() for l in text.split("\n")) if ln]
+    records = []
+    torn = False
+    for i, ln in enumerate(nonempty):
+        try:
+            rec = json.loads(ln)
+        except json.JSONDecodeError:
+            if i == len(nonempty) - 1:
+                torn = True
+            continue
+        if isinstance(rec, dict):
+            records.append(rec)
+    if not records:
+        return HeartbeatReading(False, None, None, torn)
+    return HeartbeatReading(True, age, records[-1].get("counters"), torn)
+
+
+@dataclass(frozen=True)
+class CaptureReading:
+    ok: bool
+    seq: int
+    signature: str | None
+    path: str | None
+    frames_count: int
+
+
+def write_stack_request(obs_dir, seq, now=None):
+    """Atomically publish a capture request for the payload-side emitter."""
+    now = time.time() if now is None else now
+    tmp = os.path.join(obs_dir, f".stack_request_{seq}.tmp")
+    dst = os.path.join(obs_dir, STACK_REQUEST_FILE)
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"seq": seq, "requested_at": now}, f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, dst)
+
+
+def read_stack_capture(obs_dir, seq):
+    """Parse the emitter's answer; wrong-seq/oversized/corrupt -> None."""
+    path = os.path.join(obs_dir, STACK_CAPTURE_FMT.format(seq=seq))
+    try:
+        st = os.stat(path)
+        if st.st_size > _MAX_CAPTURE_BYTES:
+            return None
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            rec = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(rec, dict) or rec.get("seq") != seq:
+        return None
+    frames = rec.get("frames")
+    if not isinstance(frames, list):
+        return None
+    return CaptureReading(True, seq, stack_signature(frames), path,
+                          len(frames))
+
+
+def request_stack_capture(obs_dir, seq, timeout_s, sleep=time.sleep,
+                          monotonic=time.monotonic, now=None):
+    """Request a capture and poll for the answer up to timeout_s.
+
+    A timeout is an observation FAILURE (ok=False) — callers abstain, they
+    never convict on it (#109 doctrine).
+    """
+    try:
+        write_stack_request(obs_dir, seq, now=now)
+    except OSError:
+        return CaptureReading(False, seq, None, None, 0)
+    deadline = monotonic() + timeout_s
+    while True:
+        reading = read_stack_capture(obs_dir, seq)
+        if reading is not None:
+            return reading
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            return CaptureReading(
+                False, seq, None,
+                os.path.join(obs_dir, STACK_CAPTURE_FMT.format(seq=seq)), 0)
+        sleep(min(0.1, remaining))
