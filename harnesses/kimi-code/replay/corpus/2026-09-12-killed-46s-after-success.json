@@ -1,0 +1,67 @@
+{
+  "case_id": "2026-09-12-killed-46s-after-success",
+  "class": "killed_after_success",
+  "dispatch": {
+    "agent": "kimi-worker",
+    "timeout_s": 1800
+  },
+  "events": [
+    {
+      "t": 0,
+      "type": "dispatch_open"
+    },
+    {
+      "bytes_written": 4096,
+      "t": 300,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": 17.7,
+      "last_write_age_s": 300,
+      "probe_ok": true,
+      "stack_frames": null,
+      "t": 600,
+      "type": "probe"
+    },
+    {
+      "bytes_written": 45056,
+      "t": 900,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": 20.3,
+      "last_write_age_s": 300,
+      "probe_ok": true,
+      "stack_frames": null,
+      "t": 1200,
+      "type": "probe"
+    },
+    {
+      "bytes_written": 90112,
+      "t": 1500,
+      "type": "progress"
+    },
+    {
+      "channel": "envelope_completed",
+      "t": 1500,
+      "type": "completion_evidence"
+    },
+    {
+      "cpu_percent": 0.1,
+      "last_write_age_s": 46,
+      "probe_ok": true,
+      "stack_frames": [
+        "ntdll!NtWaitForSingleObject",
+        "python310!PyEval_EvalFrameDefault"
+      ],
+      "t": 1546,
+      "type": "probe"
+    }
+  ],
+  "expect": {
+    "kill": false
+  },
+  "incident_date": "2026-09-12",
+  "schema_version": 1,
+  "source_note": "Envelope completed at t=1500; the kill landed 46 s later. Any post-completion reaction window shorter than the kill path is fatal."
+}

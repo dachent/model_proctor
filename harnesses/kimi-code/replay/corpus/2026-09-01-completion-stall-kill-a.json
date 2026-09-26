@@ -1,0 +1,91 @@
+{
+  "case_id": "2026-09-01-completion-stall-kill-a",
+  "class": "completion_before_stall_kill",
+  "dispatch": {
+    "agent": "kimi-worker",
+    "timeout_s": 1800
+  },
+  "events": [
+    {
+      "t": 0,
+      "type": "dispatch_open"
+    },
+    {
+      "bytes_written": 4096,
+      "t": 120,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": 18.0,
+      "last_write_age_s": 60,
+      "probe_ok": true,
+      "stack_frames": null,
+      "t": 300,
+      "type": "probe"
+    },
+    {
+      "bytes_written": 32768,
+      "t": 600,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": 22.5,
+      "last_write_age_s": 300,
+      "probe_ok": true,
+      "stack_frames": null,
+      "t": 900,
+      "type": "probe"
+    },
+    {
+      "bytes_written": 131072,
+      "t": 1200,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": 15.1,
+      "last_write_age_s": 300,
+      "probe_ok": true,
+      "stack_frames": null,
+      "t": 1500,
+      "type": "probe"
+    },
+    {
+      "bytes_written": 262144,
+      "t": 1740,
+      "type": "progress"
+    },
+    {
+      "channel": "envelope_completed",
+      "t": 1740,
+      "type": "completion_evidence"
+    },
+    {
+      "cpu_percent": 0.4,
+      "last_write_age_s": 60,
+      "probe_ok": true,
+      "stack_frames": [
+        "ntdll!NtWaitForSingleObject",
+        "python310!PyEval_EvalFrameDefault"
+      ],
+      "t": 1800,
+      "type": "probe"
+    },
+    {
+      "cpu_percent": 0.2,
+      "last_write_age_s": 180,
+      "probe_ok": true,
+      "stack_frames": [
+        "ntdll!NtWaitForSingleObject",
+        "python310!PyEval_EvalFrameDefault"
+      ],
+      "t": 1920,
+      "type": "probe"
+    }
+  ],
+  "expect": {
+    "kill": false
+  },
+  "incident_date": "2026-09-01",
+  "schema_version": 1,
+  "source_note": "Job A succeeded at t=1740; the stall heuristic killed it at ~t=1920, 3 min after success. Post-completion the idle worker reads as a wedge (silent writes, idle stack) to any predicate that does not check completion evidence first."
+}

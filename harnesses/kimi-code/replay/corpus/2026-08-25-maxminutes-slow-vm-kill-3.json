@@ -1,0 +1,113 @@
+{
+  "case_id": "2026-08-25-maxminutes-slow-vm-kill-3",
+  "class": "maxminutes_healthy_slow_run",
+  "dispatch": {
+    "agent": "kimi-worker",
+    "max_minutes": 45,
+    "timeout_s": 1800
+  },
+  "events": [
+    {
+      "t": 0,
+      "type": "dispatch_open"
+    },
+    {
+      "bytes_written": 4096,
+      "t": 600,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": 4.9,
+      "last_write_age_s": 310,
+      "probe_ok": true,
+      "stack_frames": [
+        "ntdll!NtReadFile",
+        "python310!PyEval_EvalFrameDefault"
+      ],
+      "t": 600,
+      "type": "probe"
+    },
+    {
+      "bytes_written": 10240,
+      "t": 1200,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": 5.3,
+      "last_write_age_s": 420,
+      "probe_ok": true,
+      "stack_frames": [
+        "ntdll!NtReadFile",
+        "python310!PyEval_EvalFrameDefault"
+      ],
+      "t": 1200,
+      "type": "probe"
+    },
+    {
+      "bytes_written": 16384,
+      "t": 1800,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": 5.0,
+      "last_write_age_s": 480,
+      "probe_ok": true,
+      "stack_frames": [
+        "ntdll!NtReadFile",
+        "python310!PyEval_EvalFrameDefault"
+      ],
+      "t": 1800,
+      "type": "probe"
+    },
+    {
+      "bytes_written": 22528,
+      "t": 2400,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": 6.2,
+      "last_write_age_s": 540,
+      "probe_ok": true,
+      "stack_frames": [
+        "ntdll!NtReadFile",
+        "python310!PyEval_EvalFrameDefault"
+      ],
+      "t": 2400,
+      "type": "probe"
+    },
+    {
+      "bytes_written": 28672,
+      "t": 3000,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": 5.8,
+      "last_write_age_s": 590,
+      "probe_ok": true,
+      "stack_frames": [
+        "ntdll!NtReadFile",
+        "python310!PyEval_EvalFrameDefault"
+      ],
+      "t": 3000,
+      "type": "probe"
+    },
+    {
+      "cpu_percent": 4.2,
+      "last_write_age_s": 480,
+      "probe_ok": true,
+      "stack_frames": [
+        "ntdll!NtReadFile",
+        "python310!PyEval_EvalFrameDefault"
+      ],
+      "t": 3600,
+      "type": "probe"
+    }
+  ],
+  "expect": {
+    "backstop_crossed": true,
+    "kill": false
+  },
+  "incident_date": "2026-08-25",
+  "schema_version": 1,
+  "source_note": "Third kill; the worker sat in the same IO read stack across probes. Identical stacks with fresh writes are not a wedge."
+}
