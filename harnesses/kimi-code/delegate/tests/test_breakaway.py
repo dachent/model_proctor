@@ -297,6 +297,81 @@ class TestWmiSpawnRetry(unittest.TestCase):
                          "retrying only delays the fail-loud contract")
 
 
+class TestDetachCustodyRetry(DelegateTestBase):
+    """PR #112 CI run 36267769104: on a cold windows-latest runner the job's
+    FIRST WMI-spawned bootstrap died before OpenProcess could take a handle
+    (winerror 87, invalid parameter = no such process), while every later
+    detached dispatch in the same job succeeded. A spawn whose process no
+    longer exists at custody establishment launched nothing that still runs,
+    so respawning abandons no payload — retry it. A live-but-unopenable
+    process (access denied) is the opposite: a second spawn would strand the
+    first payload outside every custody, so it must fail loud immediately.
+    """
+
+    def _gone(self, winerror=87):
+        e = delegate.CustodyError(
+            f"OpenProcess(2480) failed: [WinError {winerror}]")
+        e.winerror = winerror
+        return e
+
+    def _dispatch(self, open_side_effect):
+        run_dir, acl_warning = delegate.create_run_dir()
+        try:
+            with unittest.mock.patch.object(
+                    delegate, "wmi_spawn_detached", return_value=4321) as spawn, \
+                    unittest.mock.patch.object(
+                        delegate, "open_waitable_process",
+                        side_effect=open_side_effect), \
+                    unittest.mock.patch.object(
+                        delegate, "reap_handle", return_value=0), \
+                    unittest.mock.patch.object(delegate, "close_process_handle"), \
+                    unittest.mock.patch.object(
+                        delegate.killauthority, "KillAuthority"), \
+                    unittest.mock.patch.object(delegate.time, "sleep"):
+                result, code = delegate._run_detached_dispatch(
+                    "test-agent",
+                    make_agent(self.echo_script, prompt_delivery="argument"),
+                    {"default_kill_grace_seconds": 2,
+                     "max_stdout_bytes": 65536, "max_stderr_bytes": 65536},
+                    [sys.executable, self.echo_script, "hello"],
+                    self.workspace, {"PATH": os.environ.get("PATH", "")},
+                    None, run_dir, acl_warning, 30, time.monotonic())
+            return result, code, spawn
+        finally:
+            shutil.rmtree(run_dir, ignore_errors=True)
+
+    def test_spawn_gone_at_open_is_retried(self):
+        result, code, spawn = self._dispatch([self._gone(), 999])
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(code, delegate.EXIT_OK)
+        self.assertEqual(spawn.call_count, 2,
+                         "a bootstrap gone at OpenProcess must be respawned")
+
+    def test_spawn_gone_retries_exhausted_fails_loud(self):
+        result, code, spawn = self._dispatch(
+            [self._gone()] * (delegate._DETACH_CUSTODY_ATTEMPTS + 1))
+        self.assertEqual(result["status"], "internal_error")
+        self.assertEqual(code, delegate.EXIT_INTERNAL)
+        self.assertEqual(spawn.call_count, delegate._DETACH_CUSTODY_ATTEMPTS)
+
+    def test_live_but_unopenable_process_is_never_retried(self):
+        result, code, spawn = self._dispatch([self._gone(5)])
+        self.assertEqual(result["status"], "internal_error")
+        self.assertEqual(spawn.call_count, 1,
+                         "access denied means the process is LIVE; a second "
+                         "spawn would abandon it outside every custody")
+
+    @unittest.skipUnless(_IS_WINDOWS, "OpenProcess is Windows-only")
+    def test_open_waitable_process_error_carries_winerror(self):
+        with unittest.mock.patch.object(
+                delegate._k32, "OpenProcess", return_value=None), \
+                unittest.mock.patch.object(
+                    delegate.ctypes, "get_last_error", return_value=87):
+            with self.assertRaises(delegate.CustodyError) as ctx:
+                delegate.open_waitable_process(999999)
+        self.assertEqual(ctx.exception.winerror, 87)
+
+
 class TestDetachedFailLoud(DelegateTestBase):
     """Fail-loud contract: when detached custody cannot be established the
     dispatch is internal_error and NOTHING is launched — never a silent

@@ -256,12 +256,23 @@ if _IS_WINDOWS:
     _k32.GetExitCodeProcess.restype = wintypes.BOOL
 
     def open_waitable_process(pid):
-        """Open a SYNCHRONIZE|query handle on pid. Raises CustodyError if it cannot."""
+        """Open a SYNCHRONIZE|query handle on pid. Raises CustodyError if it cannot.
+
+        The CustodyError carries .winerror. ERROR_INVALID_PARAMETER (87) means
+        the pid no longer exists — the spawned process died before custody was
+        established, so nothing is running and a respawn abandons no payload.
+        Any other error (e.g. ERROR_ACCESS_DENIED on a live process) must NOT
+        be retried: a second spawn would strand the first payload outside
+        every custody.
+        """
         handle = _k32.OpenProcess(
             _SYNCHRONIZE | _PROCESS_QUERY_LIMIT_INFORMATION, False, pid)
         if not handle:
-            raise CustodyError(
-                f"OpenProcess({pid}) failed: {ctypes.WinError(ctypes.get_last_error())}")
+            err = ctypes.get_last_error()
+            exc = CustodyError(
+                f"OpenProcess({pid}) failed: {ctypes.WinError(err)}")
+            exc.winerror = err
+            raise exc
         return handle
 
     def reap_handle(handle, timeout_ms):
@@ -1032,6 +1043,15 @@ _WMI_CREATE_PS = (
 _WMI_SPAWN_ATTEMPTS = 5
 _WMI_SPAWN_RETRY_BACKOFF_S = 5.0
 
+# A spawn whose process is already gone at OpenProcess (winerror 87) launched
+# nothing that still runs, so respawning it abandons no payload. Observed on
+# cold windows-latest CI runners, where the job's FIRST WMI-spawned bootstrap
+# died at birth while every later detached dispatch succeeded (PR #112, run
+# 36267769104). Only winerror 87 is retried; a live-but-unopenable process
+# (access denied) must not be spawned again. Each attempt pays a full spawn
+# (~13s cold), which paces the retries through the warm-up window by itself.
+_DETACH_CUSTODY_ATTEMPTS = 3
+
 
 def wmi_spawn_detached(command_line, working_dir, timeout_s=30):
     """Spawn a process via WMI Win32_Process.Create. Returns the new PID.
@@ -1137,15 +1157,22 @@ def _run_detached_dispatch(agent_name, agent, cfg, argv, workspace, child_env,
     }
     with open(spec_path, "w", encoding="utf-8") as f:
         json.dump(spec, f)
-    try:
-        pid = wmi_spawn_detached(
-            subprocess.list2cmdline([sys.executable, "-c", _DETACH_BOOTSTRAP, spec_path]),
-            workspace)
-        handle = open_waitable_process(pid)
-    except CustodyError as e:
-        return _make_result("internal_error", agent=agent_name, run_dir=run_dir,
-                            acl_warning=acl_warning, child_home=child_home,
-                            error=f"detached custody unavailable: {e}"), EXIT_INTERNAL
+    pid = handle = None
+    for attempt in range(_DETACH_CUSTODY_ATTEMPTS):
+        try:
+            pid = wmi_spawn_detached(
+                subprocess.list2cmdline([sys.executable, "-c", _DETACH_BOOTSTRAP, spec_path]),
+                workspace)
+            handle = open_waitable_process(pid)
+        except CustodyError as e:
+            if (getattr(e, "winerror", None) == 87
+                    and attempt + 1 < _DETACH_CUSTODY_ATTEMPTS):
+                time.sleep(1.0)
+                continue
+            return _make_result("internal_error", agent=agent_name, run_dir=run_dir,
+                                acl_warning=acl_warning, child_home=child_home,
+                                error=f"detached custody unavailable: {e}"), EXIT_INTERNAL
+        break
 
     # TOOL-036: the delegate is the sole kill authority for the detached tree
     # too. The authority owns the bootstrap pid only — the waitable handle
