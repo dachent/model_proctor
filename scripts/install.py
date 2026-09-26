@@ -31,7 +31,8 @@ TOOL_DIR = Path(r"C:\Tools\model-proctor")
 ICACLS = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
                       "System32", "icacls.exe")
 
-DELEGATE_FILES = ["delegate.py", "catalog.py", "agents.example.json", "README.md",
+DELEGATE_FILES = ["delegate.py", "killauthority.py", "catalog.py",
+                  "agents.example.json", "README.md",
                   "heartbeat.py", "stall_guard.py"]
 # (base, subdir, filename) copied flat into TOOL_DIR. The base is explicit
 # because runner/ lives under the harness while core/ and evals/ stay at the
@@ -43,7 +44,8 @@ RUNNER_FILES = [(KIMI, "runner", "runner.py"), (KIMI, "runner", "pilot.py"),
                 (ROOT, "evals", "pricing.yaml")]
 SKILLS = ("model-proctor",)
 # Everything the installed SKILL.md tells a leader to invoke or pass.
-REQUIRED_AFTER_INSTALL = ["runner.py", "delegate.py", "catalog.py", "task_schema.py", "pricing.yaml",
+REQUIRED_AFTER_INSTALL = ["runner.py", "delegate.py", "killauthority.py", "catalog.py",
+                          "task_schema.py", "pricing.yaml",
                           "heartbeat.py", "stall_guard.py"]
 
 

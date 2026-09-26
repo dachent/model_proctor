@@ -37,6 +37,7 @@ import time
 from pathlib import Path
 
 import stall_guard  # TOOL-035 (#106): condition-based kill predicate
+import killauthority  # TOOL-036 (#107): single kill authority + KILL_SITES registry
 
 # ---------------------------------------------------------------------------
 # Platform guard
@@ -105,8 +106,8 @@ if _IS_WINDOWS:
     # worker exit.
     #
     # Timeout kills remain effective for descendants still reachable through
-    # parent-PID links, because kill_process_tree force-taskkill /T /F's them
-    # before closing the job. RESIDUAL: that reachability is exactly what
+    # parent-PID links, because KillAuthority.terminate force-taskkills /T /F
+    # them before closing the job. RESIDUAL: that reachability is exactly what
     # breakaway is bought to remove. A process that escaped the job AND whose
     # intermediate parent has already exited is in neither the job nor the /T
     # walk, so a timeout kill will not reach it — surviving the run is the
@@ -924,69 +925,9 @@ class OutputReader(threading.Thread):
 # ---------------------------------------------------------------------------
 # Kill sequence
 # ---------------------------------------------------------------------------
-
-def kill_process_tree(pid, grace_seconds, job=None):
-    """Execute the full kill sequence.
-
-    Order: graceful taskkill /T → grace wait (early return if child exits)
-    → force taskkill /T /F (while parent-PID links are intact so /T can
-    enumerate descendants) → close job handle (kernel terminates anything
-    still in the job) → belt-and-braces force taskkill again.
-
-    Does NOT call proc.terminate() — killing the root before tree enumeration
-    orphans grandchildren.  The force taskkill /T /F runs BEFORE job close so
-    that out-of-job descendants (created in the Popen→assign window) are still
-    reachable via parent-PID links.
-    """
-    # Step 1: graceful taskkill (no /F) — sends WM_CLOSE; console processes
-    # without a message loop ignore it, but it is cheap and non-destructive.
-    try:
-        subprocess.run(
-            [_TASKKILL_EXE, "/PID", str(pid), "/T"],
-            capture_output=True, timeout=10, shell=False,
-            env=_MINIMAL_TOOL_ENV,
-        )
-    except Exception:
-        pass
-
-    # Step 2: grace period — poll for child exit so we don't sleep the full
-    # grace if the child died immediately after step 1.
-    if grace_seconds > 0:
-        deadline = time.monotonic() + grace_seconds
-        while time.monotonic() < deadline:
-            # We cannot call proc.poll() here (no proc ref), so just sleep
-            # in small increments. The caller will reap after we return.
-            time.sleep(min(0.2, deadline - time.monotonic()))
-
-    # Step 3: force taskkill /T /F while parent links are intact.
-    # This catches descendants created before job assignment (the
-    # Popen→assign window) that the job close cannot reach.
-    try:
-        subprocess.run(
-            [_TASKKILL_EXE, "/PID", str(pid), "/T", "/F"],
-            capture_output=True, timeout=10, shell=False,
-            env=_MINIMAL_TOOL_ENV,
-        )
-    except Exception:
-        pass
-
-    # Step 4: close job handle — kernel terminates anything still in the job.
-    if job is not None:
-        try:
-            close_job(job)
-        except Exception:
-            pass
-
-    # Step 5: belt-and-braces — force kill again after job close for any
-    # process that survived both prior steps.
-    try:
-        subprocess.run(
-            [_TASKKILL_EXE, "/PID", str(pid), "/T", "/F"],
-            capture_output=True, timeout=10, shell=False,
-            env=_MINIMAL_TOOL_ENV,
-        )
-    except Exception:
-        pass
+# TOOL-036 (#107): the kill sequence lives in killauthority.KillAuthority
+# (same five steps, moved verbatim in behavior). Every exit path routes
+# through one authority instance; the old inlined kill function is gone.
 
 
 _WMI_CREATE_PS = (
@@ -1061,7 +1002,7 @@ def _run_detached_dispatch(agent_name, agent, cfg, argv, workspace, child_env,
     """Launch the worker OUTSIDE the delegate's job via WMI (TOOL-032, #103).
 
     Custody contract: the payload is parented to the WMI provider service, so
-    the runner killing this delegate (runner.py proc.kill) cannot collapse it
+    an external actor killing this delegate cannot collapse it
     through the KILL_ON_JOB_CLOSE cascade — surviving the launcher is the
     feature; outliving the budget if the delegate dies first is the documented
     cost (see the design comment at the BREAKAWAY_OK constant).
@@ -1098,6 +1039,15 @@ def _run_detached_dispatch(agent_name, agent, cfg, argv, workspace, child_env,
                             acl_warning=acl_warning, child_home=child_home,
                             error=f"detached custody unavailable: {e}"), EXIT_INTERNAL
 
+    # TOOL-036: the delegate is the sole kill authority for the detached tree
+    # too. The authority owns the bootstrap pid only — the waitable handle
+    # stays with the finally below because the kill path reaps through it
+    # AFTER terminate() runs (terminate would otherwise close it first).
+    authority = killauthority.KillAuthority(
+        pid, cfg["default_kill_grace_seconds"],
+        tool_argv0=_TASKKILL_EXE, tool_env=_MINIMAL_TOOL_ENV,
+    )
+
     deadline = time.monotonic() + timeout
     timed_out = False
     rc = None
@@ -1122,10 +1072,15 @@ def _run_detached_dispatch(agent_name, agent, cfg, argv, workspace, child_env,
             _interrupt_condition = "received KeyboardInterrupt"
 
         if _interrupted.is_set() or timed_out:
-            # kill_process_tree with job=None: taskkill /T /F from the
+            # KillAuthority with job=None: taskkill /T /F from the
             # bootstrap pid still reaches the payload tree through
             # parent-PID links while the bootstrap is alive.
-            kill_process_tree(pid, cfg["default_kill_grace_seconds"], job=None)
+            if _interrupted.is_set():
+                reason = ("runner_requested" if _termination_requested
+                          else "interrupted")
+            else:
+                reason = "timeout"
+            attribution = authority.terminate(reason)
             reap_handle(handle, 10000)
             stdout_text, stdout_trunc = _read_log_capped(
                 spec["stdout_log"], cfg["max_stdout_bytes"])
@@ -1141,6 +1096,7 @@ def _run_detached_dispatch(agent_name, agent, cfg, argv, workspace, child_env,
                 child_session_id=extract_child_session_id(stdout_text, stderr_text),
                 child_home=child_home,
                 error=_interrupt_condition if _interrupted.is_set() else None,
+                kill_authority=attribution,
             )
             return result, EXIT_INTERRUPTED if status == "interrupted" else EXIT_TIMEOUT
 
@@ -1158,6 +1114,7 @@ def _run_detached_dispatch(agent_name, agent, cfg, argv, workspace, child_env,
             child_session_id=extract_child_session_id(stdout_text, stderr_text),
             child_home=child_home,
         )
+        authority.release()
         return result, EXIT_OK
     finally:
         close_process_handle(handle)
@@ -1169,6 +1126,10 @@ def _run_detached_dispatch(agent_name, agent, cfg, argv, workspace, child_env,
 
 _interrupted = threading.Event()
 _interrupt_condition = None
+# TOOL-036: set when the interruption came from the runner's
+# --terminate-request-file rather than a signal/KeyboardInterrupt; selects
+# the delegate:runner_requested attribution.
+_termination_requested = False
 
 
 def _signal_handler(signum, frame):
@@ -1222,6 +1183,10 @@ def run_delegate(args):
 
 def _run_delegate_inner(args, start_time, agent_name):
     """Actual run logic. Raises ConfigError/InputError for validation, returns (dict, code) otherwise."""
+    # TOOL-036: the wait loop / SIGINT path assign these module globals;
+    # without this declaration the assignments made every later read
+    # function-local (latent UnboundLocalError on the signal path).
+    global _interrupt_condition, _termination_requested
 
     # #96 (QC E4): no unmanaged nesting. Every delegate child is marked with
     # the INJECTED PROCTOR_CHILD env var; a delegate that finds the marker in
@@ -1474,19 +1439,20 @@ def _run_delegate_inner(args, start_time, agent_name):
             job = create_kill_on_close_job(bool(agent.get("allow_breakaway", False)))
             proc_handle = assign_process_to_job(job, proc.pid)
         except Exception:
-            if job is not None:
-                try:
-                    close_job(job)
-                except Exception:
-                    pass
-                job = None
-            if proc_handle is not None:
-                try:
-                    close_process_handle(proc_handle)
-                except Exception:
-                    pass
-                proc_handle = None
             job_warning = True
+    # TOOL-036 (#107): one authority owns pid + job + process handle from
+    # here on; every exit path below routes through it. On partial job-setup
+    # failure it still closes whatever handles exist (release() is a pure
+    # custody close).
+    authority = killauthority.KillAuthority(
+        proc.pid, cfg["default_kill_grace_seconds"],
+        job=job, proc_handle=proc_handle,
+        job_close=close_job if _IS_WINDOWS else None,
+        proc_close=close_process_handle if _IS_WINDOWS else None,
+        tool_argv0=_TASKKILL_EXE, tool_env=_MINIMAL_TOOL_ENV,
+    )
+    if job_warning:
+        authority.release()
 
     # Start reader threads
     max_log = cfg.get("max_log_bytes", _DEFAULT_MAX_LOG_BYTES)
@@ -1559,8 +1525,10 @@ def _run_delegate_inner(args, start_time, agent_name):
 
     # Handle interruption
     if _interrupted.is_set():
-        kill_process_tree(proc.pid, cfg["default_kill_grace_seconds"], job)
-        job = None  # kill_process_tree closed it
+        # TOOL-036: the request-file path (Task 4) attributes differently
+        # from a signal/KeyboardInterrupt; both are delegate-executed kills.
+        reason = "runner_requested" if _termination_requested else "interrupted"
+        attribution = authority.terminate(reason)
         try:
             proc.wait(timeout=10)
         except Exception:
@@ -1588,14 +1556,13 @@ def _run_delegate_inner(args, start_time, agent_name):
             child_session_id=extract_child_session_id(stdout_text, stderr_text),
             child_home=child_home,
             error=_interrupt_condition,
+            kill_authority=attribution,
         )
-        _cleanup_handles(proc_handle, job)
         return result, EXIT_INTERRUPTED
 
     # Handle timeout
     if timed_out:
-        kill_process_tree(proc.pid, cfg["default_kill_grace_seconds"], job)
-        job = None  # kill_process_tree closed it
+        attribution = authority.terminate("timeout")
         try:
             proc.wait(timeout=10)
         except Exception:
@@ -1624,8 +1591,8 @@ def _run_delegate_inner(args, start_time, agent_name):
             child_home=child_home,
             error=kill_reason,
             kill_evidence=kill_evidence,
+            kill_authority=attribution,
         )
-        _cleanup_handles(proc_handle, job)
         return result, EXIT_TIMEOUT
 
     # Normal completion
@@ -1649,7 +1616,7 @@ def _run_delegate_inner(args, start_time, agent_name):
             child_home=child_home,
             error=f"Reader thread error: {type(stdout_err or stderr_err).__name__}",
         )
-        _cleanup_handles(proc_handle, job)
+        authority.release()
         return result, EXIT_INTERNAL
 
     duration = time.monotonic() - start_time
@@ -1671,25 +1638,8 @@ def _run_delegate_inner(args, start_time, agent_name):
         child_session_id=extract_child_session_id(stdout_text, stderr_text),
         child_home=child_home,
     )
-    _cleanup_handles(proc_handle, job)
+    authority.release()
     return result, EXIT_OK
-
-
-def _cleanup_handles(proc_handle, job):
-    """Close process and job handles exactly once."""
-    if proc_handle is not None:
-        try:
-            close_process_handle(proc_handle)
-        except Exception:
-            pass
-    # job may already be closed by kill_process_tree; only close if still open.
-    # Caller sets job = None after kill_process_tree, so this only fires on
-    # normal-completion paths where the job was not closed.
-    if job is not None:
-        try:
-            close_job(job)
-        except Exception:
-            pass
 
 
 def _make_result(status, agent=None, child_exit_code=None, duration=None,
@@ -1697,7 +1647,7 @@ def _make_result(status, agent=None, child_exit_code=None, duration=None,
                  stdout_log_trunc=False, stderr_log_trunc=False,
                  run_dir=None, acl_warning=False, job_warning=False,
                  child_session_id=None, child_home=None, error=None,
-                 kill_evidence=None):
+                 kill_evidence=None, kill_authority="none"):
     """Build the JSON result envelope."""
     return {
         "schema_version": 1,
@@ -1718,6 +1668,7 @@ def _make_result(status, agent=None, child_exit_code=None, duration=None,
         "job_warning": job_warning,
         "error": error,
         "kill_evidence": kill_evidence,
+        "kill_authority": kill_authority,
     }
 
 

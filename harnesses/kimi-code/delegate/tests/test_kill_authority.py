@@ -9,9 +9,11 @@ guarded by literal markers instead.
 Run: python -m unittest discover -s delegate/tests -v
 """
 
+import os
 import re
 import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -165,6 +167,41 @@ class TestKillAuthority(unittest.TestCase):
             tool_argv0="taskkill", tool_env=None, runner=exploding_runner)
         self.assertEqual(authority.terminate("timeout"), "delegate:timeout")
         self.assertIn(("job_close", "JOB"), rec.calls)
+
+
+from test_delegate import DelegateTestBase, make_agent, _PID_SLEEPER  # noqa: E402
+
+
+class TestKillAttributionEnvelope(DelegateTestBase):
+    def test_completed_run_attributes_none(self):
+        out, err, rc = self._run("test-agent", task="hello")
+        result = self._assert_result(out, err, rc, "completed", 0)
+        self.assertEqual(result["kill_authority"], "none")
+
+    def test_failed_run_attributes_none(self):
+        failer = self._script("failer", "import sys; sys.exit(3)\n")
+        cfg = self._config({"test-agent": make_agent(failer)})
+        out, err, rc = self._run("test-agent", task="hello", config=cfg)
+        result = self._assert_result(out, err, rc, "failed", 0)
+        self.assertEqual(result["kill_authority"], "none")
+
+    def test_timeout_run_attributes_delegate_timeout(self):
+        sleeper = self._script("ka_sleeper", _PID_SLEEPER)
+        pid_file = os.path.join(self.workspace, "ka_pid.txt")
+        cfg = self._config({
+            "test-agent": make_agent(
+                sleeper, prompt_delivery="argument", extra_args=[pid_file],
+                default_timeout=3, minimum_timeout=1, maximum_timeout=300),
+        }, extra={"default_kill_grace_seconds": 1})
+        out, err, rc = self._run("test-agent", task="ignored", config=cfg)
+        result = self._assert_result(out, err, rc, "timeout", 124)
+        self.assertEqual(result["kill_authority"], "delegate:timeout")
+        with open(pid_file, "r") as f:
+            child_pid = int(f.read().strip())
+        time.sleep(2)
+        import delegate
+        self.assertFalse(delegate.is_pid_alive(child_pid),
+                         f"child {child_pid} alive after authority terminate")
 
 
 if __name__ == "__main__":

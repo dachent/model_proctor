@@ -53,10 +53,11 @@ KILL_SITES = [
         "file": "harnesses/kimi-code/delegate/delegate.py",
         "classification": "authority",
         "expected": None,
-        "must_contain": ["def kill_process_tree"],
-        "note": "Kill sequence still inlined as kill_process_tree "
-                "(delegate.py:928-989); Task 3 funnels it into KillAuthority "
-                "and flips these markers.",
+        "must_not_contain": ["kill_process_tree"],
+        "must_contain": ["import killauthority"],
+        "note": "Every exit path routes through killauthority.KillAuthority "
+                "(TOOL-036); the old inlined kill_process_tree was deleted "
+                "when the wiring landed.",
     },
     {
         "site": "runner wrapper-deadline kill",

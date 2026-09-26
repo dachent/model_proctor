@@ -398,6 +398,7 @@ _ENVELOPE_KEYS = {
     "child_home": (str, type(None)),
     "error": (str, type(None)),
     "kill_evidence": (dict, type(None)),
+    "kill_authority": str,
 }
 
 
