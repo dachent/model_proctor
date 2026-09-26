@@ -9,10 +9,12 @@ guarded by literal markers instead.
 Run: python -m unittest discover -s delegate/tests -v
 """
 
+import json
 import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -202,6 +204,52 @@ class TestKillAttributionEnvelope(DelegateTestBase):
         import delegate
         self.assertFalse(delegate.is_pid_alive(child_pid),
                          f"child {child_pid} alive after authority terminate")
+
+
+class TestTerminateRequestFile(DelegateTestBase):
+    def test_request_file_interrupts_with_runner_attribution(self):
+        sleeper = self._script("tr_sleeper", _PID_SLEEPER)
+        pid_file = os.path.join(self.workspace, "tr_pid.txt")
+        req_file = os.path.join(self.tmpdir, "terminate.request")
+        cfg = self._config({
+            "test-agent": make_agent(
+                sleeper, prompt_delivery="argument", extra_args=[pid_file],
+                default_timeout=60, minimum_timeout=1, maximum_timeout=300),
+        }, extra={"default_kill_grace_seconds": 1})
+
+        def requester():
+            time.sleep(2)
+            with open(req_file, "w", encoding="utf-8") as f:
+                json.dump({"reason": "delegate_wrapper_timeout"}, f)
+
+        t = threading.Thread(target=requester, daemon=True)
+        t.start()
+        t0 = time.monotonic()
+        out, err, rc = self._run("test-agent", task="ignored", config=cfg,
+                                 terminate_request_file=req_file)
+        wall = time.monotonic() - t0
+        result = self._assert_result(out, err, rc, "interrupted", 130)
+        self.assertEqual(result["kill_authority"], "delegate:runner_requested")
+        self.assertIn("terminate-request-file", result["error"])
+        self.assertLess(wall, 30)  # well under the 60s child timeout
+        with open(pid_file, "r") as f:
+            child_pid = int(f.read().strip())
+        time.sleep(2)
+        import delegate
+        self.assertFalse(delegate.is_pid_alive(child_pid),
+                         f"child {child_pid} alive after requested terminate")
+
+    def test_stale_request_file_kills_immediately(self):
+        """The delegate does NOT defend against a stale file: a file present at
+        launch is consumed on the first poll. Stale-file defense is the
+        runner's job (per-dispatch uuid path + unlink-before-spawn, Task 5)."""
+        req_file = os.path.join(self.tmpdir, "stale.request")
+        with open(req_file, "w", encoding="utf-8") as f:
+            f.write("{}")
+        out, err, rc = self._run("test-agent", task="hello",
+                                 terminate_request_file=req_file)
+        result = self._assert_result(out, err, rc, "interrupted", 130)
+        self.assertEqual(result["kill_authority"], "delegate:runner_requested")
 
 
 if __name__ == "__main__":

@@ -998,7 +998,8 @@ def _read_log_capped(path, cap):
 
 
 def _run_detached_dispatch(agent_name, agent, cfg, argv, workspace, child_env,
-                           child_home, run_dir, acl_warning, timeout, start_time):
+                           child_home, run_dir, acl_warning, timeout, start_time,
+                           term_file=None):
     """Launch the worker OUTSIDE the delegate's job via WMI (TOOL-032, #103).
 
     Custody contract: the payload is parented to the WMI provider service, so
@@ -1019,6 +1020,8 @@ def _run_detached_dispatch(agent_name, agent, cfg, argv, workspace, child_env,
     RESIDUAL: log caps are enforced at read-back, not live — a detached
     payload can grow stdout.log/stderr.log past max_log_bytes while it runs.
     """
+    # TOOL-036: the terminate-request poll below assigns these module globals.
+    global _interrupt_condition, _termination_requested
     spec_path = os.path.join(run_dir, "detach_spec.json")
     spec = {
         "argv": argv,
@@ -1056,6 +1059,14 @@ def _run_detached_dispatch(agent_name, agent, cfg, argv, workspace, child_env,
             while True:
                 if _interrupted.is_set():
                     break
+                if term_file and os.path.exists(term_file):
+                    # TOOL-036: same request channel as the contained path.
+                    _termination_requested = True
+                    _interrupted.set()
+                    _interrupt_condition = (
+                        "termination requested by external actor via "
+                        "--terminate-request-file")
+                    break
                 rc = reap_handle(handle, 100)
                 if rc is not None:
                     break
@@ -1067,7 +1078,6 @@ def _run_detached_dispatch(agent_name, agent, cfg, argv, workspace, child_env,
                     timed_out = True
                     break
         except KeyboardInterrupt:
-            global _interrupt_condition
             _interrupted.set()
             _interrupt_condition = "received KeyboardInterrupt"
 
@@ -1401,7 +1411,8 @@ def _run_delegate_inner(args, start_time, agent_name):
     if agent.get("allow_breakaway", False):
         return _run_detached_dispatch(
             agent_name, agent, cfg, argv, workspace, child_env, child_home,
-            run_dir, acl_warning, timeout, start_time)
+            run_dir, acl_warning, timeout, start_time,
+            term_file=getattr(args, "terminate_request_file", None))
 
     # Launch — catch ValueError (NUL in env, etc.) alongside OSError
     try:
@@ -1486,9 +1497,19 @@ def _run_delegate_inner(args, start_time, agent_name):
     timed_out = False
     kill_reason = None      # TOOL-035: "condition_met_stall" | "wall_clock_backstop"
     kill_evidence = None    # TOOL-035: predicate evidence for the envelope
+    # TOOL-036: external termination-request channel (the runner writes this
+    # file at its wrapper deadline; the delegate stays the sole kill
+    # authority and executes the kill itself).
+    term_file = getattr(args, "terminate_request_file", None)
     try:
         while True:
             if _interrupted.is_set():
+                break
+            if term_file and os.path.exists(term_file):
+                _termination_requested = True
+                _interrupted.set()
+                _interrupt_condition = ("termination requested by external "
+                                        "actor via --terminate-request-file")
                 break
             rc = proc.poll()
             if rc is not None:
@@ -1729,6 +1750,12 @@ def main():
     parser.add_argument("--heartbeat-file", dest="heartbeat_file", default=None,
                         help="Path the payload appends progress heartbeats to "
                              "(#105); injected as DELEGATE_HEARTBEAT_PATH")
+    parser.add_argument("--terminate-request-file", dest="terminate_request_file",
+                        default=None,
+                        help="TOOL-036: path an external actor (the runner) "
+                             "creates to request termination. The delegate "
+                             "remains the sole kill authority and executes "
+                             "the kill itself.")
 
     try:
         args = parser.parse_args()
