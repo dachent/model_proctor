@@ -8,6 +8,13 @@
   "max_stdout_bytes": 65536,
   "max_stderr_bytes": 65536,
   "max_log_bytes": 67108864,
+  "stall_guard": {
+    "enabled": false,
+    "heartbeat_stale_after_s": 20,
+    "capture_interval_s": 10,
+    "capture_timeout_s": 5,
+    "max_extensions": 1
+  },
   "model_dispatch_template": {
     "command": [
       "C:/absolute/path/to/kimi.exe",
@@ -26,7 +33,8 @@
     "environment": {},
     "required_environment": [],
     "write_allowed": false,
-    "allow_breakaway": false
+    "allow_breakaway": false,
+    "on_timeout": "kill_tree"
   },
   "agents": {
     "example-coder": {
@@ -54,7 +62,8 @@
         "EXAMPLE_API_KEY"
       ],
       "write_allowed": false,
-      "allow_breakaway": false
+      "allow_breakaway": false,
+      "on_timeout": "kill_tree"
     },
     "example-reviewer": {
       "command": [

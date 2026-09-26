@@ -1,0 +1,62 @@
+{
+  "case_id": "2026-09-16-monitor-smb-self-hang",
+  "class": "monitor_measurement_failure",
+  "dispatch": {
+    "agent": "kimi-worker",
+    "timeout_s": 1800
+  },
+  "events": [
+    {
+      "t": 0,
+      "type": "dispatch_open"
+    },
+    {
+      "bytes_written": 4096,
+      "t": 300,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": 14.2,
+      "last_write_age_s": 45,
+      "probe_ok": true,
+      "stack_frames": null,
+      "t": 300,
+      "type": "probe"
+    },
+    {
+      "bytes_written": 20480,
+      "t": 600,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": -1.0,
+      "last_write_age_s": -1,
+      "probe_ok": true,
+      "stack_frames": null,
+      "t": 900,
+      "type": "probe"
+    },
+    {
+      "bytes_written": 45056,
+      "t": 1200,
+      "type": "progress"
+    },
+    {
+      "probe_ok": false,
+      "t": 1500,
+      "type": "probe"
+    },
+    {
+      "bytes_written": 90112,
+      "t": 1800,
+      "type": "progress"
+    }
+  ],
+  "expect": {
+    "kill": false,
+    "measurement_degraded": true
+  },
+  "incident_date": "2026-09-16",
+  "schema_version": 1,
+  "source_note": "Monitor wedged stat-ing the SMB-hosted run dir; the CPU counter returned -1 at t=900 and the t=1500 probe never completed. The worker kept writing throughout \u2014 every kill input was a measurement artifact."
+}

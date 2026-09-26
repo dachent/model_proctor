@@ -12,7 +12,9 @@ Harness-specific code lives under `harnesses/<harness>/`; everything cross-harne
 under `harnesses/` reaches repo-level assets only through an explicit `REPO_ROOT`,
 never through the harness root.
 
-- `harnesses/kimi-code/delegate/` — the wrapper (`delegate.py`), live config (`agents.json`), annotated example
+- `harnesses/kimi-code/delegate/` — the wrapper (`delegate.py`), the single kill authority
+  (`killauthority.py`, TOOL-036: sole terminator of delegate-owned worker trees, plus the
+  repo-wide `KILL_SITES` registry), live config (`agents.json`), annotated example
   (`agents.example.json`), tests (`tests/test_delegate.py`), docs (`README.md`).
 - `harnesses/codex/delegate/` — explicit Codex catalog dispatch (`delegate.py`, `catalog.py`), tracked local-config
   example, tests, and operator documentation. It is a separate adapter with its own explicit-destination installer;
@@ -37,7 +39,20 @@ never through the harness root.
   refuses on divergence; `-m` module shadowing is rejected (cmd_verify runs with
   `cwd=ws`, so the workspace is `sys.path[0]`); the git tree signature hashes content,
   not just `git status` letters. `init` refuses to re-baseline an initialized workspace
-  without `--reinit`. Production-runner tasks (TOOL-019) are barred from `flash` absent
+  without `--reinit`. Budgets have phase semantics (TOOL-033): dispatch `timeout_s`,
+  a separate `verify_timeout_s`, and a clock-free monitor phase for detached
+  payloads (envelope status `payload_running_detached`); acceptance refuses while a
+  detached payload may be in flight, with `accept --allow-detached-payload` as the
+  counted override. Payloads may emit progress heartbeats (#105/TOOL-034): the runner forwards
+  `--heartbeat-file <state>/heartbeats/<dispatch_id>.jsonl` and `--dispatch-id`
+  to the delegate, which injects `DELEGATE_HEARTBEAT_PATH`/`DELEGATE_DISPATCH_ID`
+  into the child environment; the drain lands `dispatch_progress` journal
+  records, and `status` reports per-dispatch `payload_progress`. Observer
+  isolation (#109/TOOL-038): monitor paths read only runner-state and
+  payload-emitted files and abstain + report `measurement_degraded` on any
+  measurement failure (never kill, never refuse); acceptance paths
+  (init/verify/accept) bound every workspace-tree measurement to
+  `MEASUREMENT_BUDGET_S` (120s) and fail closed on expiry. Production-runner tasks (TOOL-019) are barred from `flash` absent
   an explicit `lane`, and require fresh `preflight_receipts`. `harnesses/kimi-code/runner/pilot.py` drives
   the loop against real workers and appends an evidence row.
   Tests in `harnesses/kimi-code/runner/tests/`: S1–S7 + git-root cases, `test_production_guard.py`,
@@ -45,6 +60,11 @@ never through the harness root.
   `test_state_boundary.py`.
   The boundary is **tamper-evident against a non-adversarial worker**, not sealed
   against a hostile one — residuals tracked in #40.
+- `harnesses/kimi-code/replay/` — regression replay corpus for the monitoring redesign
+  (TOOL-039, #110): recorded incident signatures (`corpus/`, regenerate with `gen_corpus.py`)
+  replayed on a simulated clock against the kill predicate — the reference oracle
+  (`reference_predicate.py`) today, the #106 production predicate via `production_bridge.py`
+  once it exists. Tests in `harnesses/kimi-code/replay/tests/`.
 - `policy/delegation-policy.md` — superseded Phase-2 dynamic-routing research policy.
   It is retained for provenance only; it is not production authority and no installed
   skill is derived from it.
@@ -62,9 +82,14 @@ never through the harness root.
 - Codex catalog delegate tests: `python -m unittest discover -s harnesses/codex/delegate/tests -v`
 - Extractor tests: `python -m unittest discover -s scripts/tests -v`
 - Runner smoke suite (MVP-001): `python -m unittest discover -s harnesses/kimi-code/runner/tests -v`
+- Replay corpus (TOOL-039): `python -m unittest discover -s harnesses/kimi-code/replay/tests -v`
 - Contract parity (core vs Kimi, exhaustive lane table): `python -m unittest discover -s core/tests -v`
 - ZCode harness: `python -m unittest discover -s harnesses/zcode/tests -v`
 - Delegate a task: `python harnesses/kimi-code/delegate/delegate.py --agent <name> --workspace <path> --task "<text>"`
+- Timeout stack report/preflight (#108): `python harnesses/kimi-code/runner/runner.py timeouts --task <task.json>`
+  (every knob in one JSON report — delegate self-abort, delegate ceiling, stall-guard
+  ladder, runner breaker, termination-request window, pilot breaker; exit 1 with named
+  violations on an inverted stack)
 - Extract a session log: `python scripts/extract_log.py <wire.jsonl...> --out <dir>`
 - Rebuild watch: `python evals/meter.py --rebuild-watch <hours>`
 - Eval self-test: `python evals/run_eval.py --self-test`
@@ -91,6 +116,10 @@ never through the harness root.
   known feature keys only, no string booleans (A12). Every harness validates
   task files through it at the command boundary; the kimi runner resolves it
   in both repo and flat-install layouts (`runner._task_schema`).
+- `core/timeout_stack.py` — the one timeout sizing authority (#108 TOOL-037):
+  margin constants and derived ceilings (delegate ceiling, runner breaker,
+  pilot breaker) plus `validate_stack`. Harnesses import it; nothing
+  re-derives a timeout margin.
 - `harnesses/zcode/` — the ZCode harness. ZCode owns subagent dispatch, so the proctor
   gates it in front of the `Agent` tool rather than owning it. Native shims contain no
   policy: every constant arrives in `lane.json` from the core.

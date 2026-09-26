@@ -27,9 +27,11 @@ KNOWN_FEATURES = frozenset((
 
 # Budget fields this schema understands. Unknown budget keys pass through:
 # budgets evolve faster than the schema, and an unknown key changes no
-# decision the core makes.
+# decision the core makes. verify_timeout_s (#108) sizes the verifier
+# separately from dispatch timeout_s; before the split one knob served
+# both scopes.
 _INT_BUDGET_FIELDS = ("max_dispatches", "max_stagnant")
-_NUM_BUDGET_FIELDS = ("timeout_s", "max_preflight_age_s")
+_NUM_BUDGET_FIELDS = ("timeout_s", "verify_timeout_s", "max_preflight_age_s")
 
 
 class TaskSchemaError(Exception):

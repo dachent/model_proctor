@@ -1,0 +1,95 @@
+{
+  "case_id": "2026-08-25-maxminutes-slow-vm-kill-1",
+  "class": "maxminutes_healthy_slow_run",
+  "dispatch": {
+    "agent": "kimi-worker",
+    "max_minutes": 45,
+    "timeout_s": 1800
+  },
+  "events": [
+    {
+      "t": 0,
+      "type": "dispatch_open"
+    },
+    {
+      "bytes_written": 8192,
+      "t": 600,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": 3.5,
+      "last_write_age_s": 220,
+      "probe_ok": true,
+      "stack_frames": null,
+      "t": 600,
+      "type": "probe"
+    },
+    {
+      "bytes_written": 16384,
+      "t": 1200,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": 4.1,
+      "last_write_age_s": 300,
+      "probe_ok": true,
+      "stack_frames": null,
+      "t": 1200,
+      "type": "probe"
+    },
+    {
+      "bytes_written": 24576,
+      "t": 1800,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": 5.9,
+      "last_write_age_s": 240,
+      "probe_ok": true,
+      "stack_frames": null,
+      "t": 1800,
+      "type": "probe"
+    },
+    {
+      "bytes_written": 32768,
+      "t": 2400,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": 4.4,
+      "last_write_age_s": 480,
+      "probe_ok": true,
+      "stack_frames": null,
+      "t": 2400,
+      "type": "probe"
+    },
+    {
+      "bytes_written": 40960,
+      "t": 3000,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": 6.8,
+      "last_write_age_s": 610,
+      "probe_ok": true,
+      "stack_frames": null,
+      "t": 3000,
+      "type": "probe"
+    },
+    {
+      "cpu_percent": 5.2,
+      "last_write_age_s": 300,
+      "probe_ok": true,
+      "stack_frames": null,
+      "t": 3300,
+      "type": "probe"
+    }
+  ],
+  "expect": {
+    "backstop_crossed": true,
+    "kill": false
+  },
+  "incident_date": "2026-08-25",
+  "schema_version": 1,
+  "source_note": "First of three MaxMinutes wall-clock kills of one healthy run on a slow VM. Progress stayed fresh through the 45-minute backstop; the wall clock was the only kill input."
+}

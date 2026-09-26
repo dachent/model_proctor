@@ -276,6 +276,7 @@ class DelegateTransportContract(unittest.TestCase):
         self.assertEqual(result["terminal_evidence"], [self.app_events()[-1]])
         self.assertEqual(proc.wait_timeouts, [1, 1])
         self.assertEqual(proc.kill_calls, 1)
+        self.assertEqual(result["kill_authority"], "codex:cleanup_kill")
 
     def test_timeout_error_class_survives_failed_cleanup(self):
         """A second failure while reaping must not hide an expired deadline."""

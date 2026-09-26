@@ -1,0 +1,98 @@
+{
+  "case_id": "2026-09-25-com-wedge-attempt07",
+  "class": "control_genuine_wedge",
+  "dispatch": {
+    "agent": "kimi-worker",
+    "timeout_s": 1800
+  },
+  "events": [
+    {
+      "t": 0,
+      "type": "dispatch_open"
+    },
+    {
+      "bytes_written": 4096,
+      "t": 300,
+      "type": "progress"
+    },
+    {
+      "bytes_written": 12288,
+      "t": 900,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": 21.0,
+      "last_write_age_s": 300,
+      "probe_ok": true,
+      "stack_frames": [
+        "combase!CoWaitForMultipleHandles",
+        "msxml6!Document::load",
+        "python310!PyEval_EvalFrameDefault"
+      ],
+      "t": 1200,
+      "type": "probe"
+    },
+    {
+      "cpu_percent": 25.5,
+      "last_write_age_s": 600,
+      "probe_ok": true,
+      "stack_frames": [
+        "combase!CoWaitForMultipleHandles",
+        "msxml6!Document::load",
+        "python310!PyEval_EvalFrameDefault"
+      ],
+      "t": 1500,
+      "type": "probe"
+    },
+    {
+      "cpu_percent": 29.8,
+      "last_write_age_s": 900,
+      "probe_ok": true,
+      "stack_frames": [
+        "combase!CoWaitForMultipleHandles",
+        "msxml6!Document::load",
+        "python310!PyEval_EvalFrameDefault"
+      ],
+      "t": 1800,
+      "type": "probe"
+    },
+    {
+      "cpu_percent": 27.3,
+      "last_write_age_s": 1200,
+      "probe_ok": true,
+      "stack_frames": [
+        "combase!CoWaitForMultipleHandles",
+        "msxml6!Document::load",
+        "python310!PyEval_EvalFrameDefault"
+      ],
+      "t": 2100,
+      "type": "probe"
+    },
+    {
+      "cpu_percent": 30.6,
+      "last_write_age_s": 1500,
+      "probe_ok": true,
+      "stack_frames": [
+        "combase!CoWaitForMultipleHandles",
+        "msxml6!Document::load",
+        "python310!PyEval_EvalFrameDefault"
+      ],
+      "t": 2400,
+      "type": "probe"
+    }
+  ],
+  "expect": {
+    "evidence_keys": [
+      "stack_frames"
+    ],
+    "kill": true,
+    "kill_window_s": [
+      2300,
+      2500
+    ],
+    "reason": "confirmed_wedge"
+  },
+  "incident_date": "2026-09-25",
+  "schema_version": 1,
+  "source_note": "CONTROL. Attempt 07: same wedge signature \u2014 writes silent from t=900, kill expected at t=2400 (25 min of silence)."
+}

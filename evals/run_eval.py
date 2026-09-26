@@ -113,11 +113,20 @@ def launch_kimi(case, config, run_dir):
     # cost accounting
     est_tokens = (len(case["task_prompt"].encode("utf-8")) + len(stdout.encode("utf-8"))) // 4
     tokens_reported = parse_reported_tokens(stdout)
+    return _result_row(started_at, wall, agent_exit, timed_out, est_tokens,
+                       tokens_reported)
+
+
+def _result_row(started_at, wall, agent_exit, timed_out, est_tokens, tokens_reported):
     return {
         "started_at": started_at,
         "wall_clock_s": round(wall, 2),
         "agent_exit": agent_exit,
         "timed_out": timed_out,
+        # TOOL-036: this harness owns the kimi.exe tree it spawned (no Job
+        # Object); the timeout taskkill at :95-98 is its own-child cleanup
+        # authority, attributed here.
+        "kill_authority": "eval:taskkill_tree_force" if timed_out else "none",
         "est_tokens": est_tokens,
         "tokens_reported": tokens_reported,
     }

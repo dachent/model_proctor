@@ -33,6 +33,31 @@ CASES = REPO_ROOT / "evals" / "cases.yaml"  # JSON syntax
 PRICING = REPO_ROOT / "evals" / "pricing.yaml"
 PILOT_LOG = REPO_ROOT / "evals" / "pilot-2026-08-25.jsonl"
 
+_TIMEOUT_STACK = None
+
+
+def _timeout_stack():
+    """core/timeout_stack.py — the one timeout sizing authority (#108).
+    Dual layout like runner._timeout_stack: flat install (sibling file) or
+    repo checkout (REPO_ROOT/core/)."""
+    global _TIMEOUT_STACK
+    if _TIMEOUT_STACK is None:
+        import importlib.util
+        here = Path(__file__).resolve().parent
+        candidates = [here / "timeout_stack.py",
+                      REPO_ROOT / "core" / "timeout_stack.py"]
+        for cand in candidates:
+            if cand.is_file():
+                spec = importlib.util.spec_from_file_location(
+                    "timeout_stack", str(cand))
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                _TIMEOUT_STACK = mod
+                break
+        else:
+            raise RuntimeError("timeout_stack.py not found (broken install)")
+    return _TIMEOUT_STACK
+
 DEFAULT_OUT = r"C:\Dev\bootstrap-state\model-proctor\pilot"
 def _sessions_root():
     """Return the sessions directory, respecting KIMI_CODE_HOME if set."""
@@ -73,12 +98,17 @@ def run_runner(*argv, timeout=900):
     return r.returncode, out
 
 
-def find_wires(session_ids, not_before, homes=()):
+def find_wires(session_ids, not_before, homes=(), deadline=None):
     """Locate wire.jsonl files for the given child session ids.
 
     With TOOL-013 isolation (delegate.py injects a seeded per-dispatch
     KIMI_CODE_HOME), wires live under <child_home>/sessions/; the env/default
     home is only a fallback for isolation-disabled runs.
+
+    #109: session dirs can sit on sync-deferred mounts. Past `deadline`
+    (time.monotonic() clock) return the partial list — abstaining with what
+    was measured beats wedging the pilot; callers already treat wires as
+    best-effort evidence.
     """
     roots = [Path(h) / "sessions" for h in homes if h] + [_sessions_root()]
     wires = []
@@ -86,6 +116,8 @@ def find_wires(session_ids, not_before, homes=()):
         if not sid:
             continue
         for root in roots:
+            if deadline is not None and time.monotonic() > deadline:
+                return sorted(set(wires))
             if not root.is_dir():
                 continue
             for p in root.glob(f"*/{sid}/agents/*/wire.jsonl"):
@@ -336,7 +368,8 @@ def run_case(case, out_root, dry_run, lane_override=None, max_dispatches=None,
         if agent_map:
             disp_argv += ["--agent-map", agent_map]
         rc, disp = run_runner(*disp_argv,
-                              timeout=task["budget"]["timeout_s"] + 300)
+                              timeout=_timeout_stack().pilot_breaker_s(
+                                  task["budget"]["timeout_s"]))
         summary["attempts"].append({
             "agent": disp.get("agent"), "lane": disp.get("lane"),
             "envelope_status": disp.get("envelope_status"),
@@ -368,7 +401,8 @@ def run_case(case, out_root, dry_run, lane_override=None, max_dispatches=None,
                             capture_output=True, timeout=120)
     summary["hidden_pass"] = hidden.returncode == 0
 
-    wires = find_wires(session_ids, t0, homes=child_homes)
+    wires = find_wires(session_ids, t0, homes=child_homes,
+                       deadline=time.monotonic() + 30)
     summary["wire_files"] = len(wires)
     # delegate._CHILD_SESSION_RE scrapes these out of a bounded stdout tail --
     # a human-readable "kimi -r session_..." hint. find_wires keys on them, so

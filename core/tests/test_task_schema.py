@@ -44,6 +44,11 @@ class ValidTasks(unittest.TestCase):
         t = task_schema.validate_task(base())
         self.assertNotIn("features", t)   # harness defaults fill it
 
+    def test_verify_timeout_accepted(self):
+        t = base()
+        t["budget"] = {"timeout_s": 60, "verify_timeout_s": 120}
+        task_schema.validate_task(t)
+
 
 class Refusals(unittest.TestCase):
     def _refused(self, mutate, field):
@@ -99,6 +104,14 @@ class Refusals(unittest.TestCase):
     def test_zero_timeout_refused(self):
         self._refused(lambda t: t.update(budget={"timeout_s": 0}),
                       "budget.timeout_s")
+
+    def test_string_verify_timeout_refused(self):
+        self._refused(lambda t: t.update(budget={"verify_timeout_s": "120"}),
+                      "budget.verify_timeout_s")
+
+    def test_zero_verify_timeout_refused(self):
+        self._refused(lambda t: t.update(budget={"verify_timeout_s": 0}),
+                      "budget.verify_timeout_s")
 
     def test_future_schema_version_refused(self):
         self._refused(lambda t: t.update(schema_version=2), "schema_version")

@@ -1,0 +1,57 @@
+{
+  "case_id": "2026-09-17-impossible-write-ages-negative-cpu",
+  "class": "monitor_measurement_failure",
+  "dispatch": {
+    "agent": "kimi-worker",
+    "timeout_s": 1800
+  },
+  "events": [
+    {
+      "t": 0,
+      "type": "dispatch_open"
+    },
+    {
+      "bytes_written": 4096,
+      "t": 240,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": 22.0,
+      "last_write_age_s": 30,
+      "probe_ok": true,
+      "stack_frames": null,
+      "t": 240,
+      "type": "probe"
+    },
+    {
+      "bytes_written": 16384,
+      "t": 480,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": -3.5,
+      "last_write_age_s": 999999,
+      "probe_ok": true,
+      "stack_frames": null,
+      "t": 960,
+      "type": "probe"
+    },
+    {
+      "bytes_written": 32768,
+      "t": 1440,
+      "type": "progress"
+    },
+    {
+      "probe_ok": false,
+      "t": 1680,
+      "type": "probe"
+    }
+  ],
+  "expect": {
+    "kill": false,
+    "measurement_degraded": true
+  },
+  "incident_date": "2026-09-17",
+  "schema_version": 1,
+  "source_note": "Write age 999999 s at t=960 \u2014 older than the dispatch itself \u2014 and CPU -3.5%: physically impossible samples must read as measurement_degraded, never as a stalled worker."
+}

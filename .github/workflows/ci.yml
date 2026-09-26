@@ -27,6 +27,7 @@ jobs:
             "harnesses/codex/delegate/tests",
             "harnesses/codex/skill/model-proctor/tests",
             "harnesses/kimi-code/runner/tests",
+            "harnesses/kimi-code/replay/tests",
             "core/tests",
             "scripts/tests",
             "evals/tests",

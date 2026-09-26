@@ -124,6 +124,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workspace", required=True)
     parser.add_argument("--task-file", required=True)
     parser.add_argument("--timeout", type=float, required=True)
+    # #105 (TOOL-034): the runner forwards these verbatim to whatever
+    # --delegate names; the Codex bridge accepts and ignores them (Codex
+    # payload env injection is out of scope for the bridge).
+    parser.add_argument("--dispatch-id", default=None)
+    parser.add_argument("--heartbeat-file", default=None)
+    # TOOL-036 (#107): the runner forwards its terminate-request channel
+    # verbatim too. The bridge is transport-only over the Codex adapter,
+    # which owns its own direct child; there is no delegate-side job tree
+    # for a request file to reach, so accept and ignore.
+    parser.add_argument("--terminate-request-file", default=None)
     return parser
 
 
