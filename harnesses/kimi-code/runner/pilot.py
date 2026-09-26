@@ -33,6 +33,31 @@ CASES = REPO_ROOT / "evals" / "cases.yaml"  # JSON syntax
 PRICING = REPO_ROOT / "evals" / "pricing.yaml"
 PILOT_LOG = REPO_ROOT / "evals" / "pilot-2026-08-25.jsonl"
 
+_TIMEOUT_STACK = None
+
+
+def _timeout_stack():
+    """core/timeout_stack.py — the one timeout sizing authority (#108).
+    Dual layout like runner._timeout_stack: flat install (sibling file) or
+    repo checkout (REPO_ROOT/core/)."""
+    global _TIMEOUT_STACK
+    if _TIMEOUT_STACK is None:
+        import importlib.util
+        here = Path(__file__).resolve().parent
+        candidates = [here / "timeout_stack.py",
+                      REPO_ROOT / "core" / "timeout_stack.py"]
+        for cand in candidates:
+            if cand.is_file():
+                spec = importlib.util.spec_from_file_location(
+                    "timeout_stack", str(cand))
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                _TIMEOUT_STACK = mod
+                break
+        else:
+            raise RuntimeError("timeout_stack.py not found (broken install)")
+    return _TIMEOUT_STACK
+
 DEFAULT_OUT = r"C:\Dev\bootstrap-state\model-proctor\pilot"
 def _sessions_root():
     """Return the sessions directory, respecting KIMI_CODE_HOME if set."""
@@ -343,7 +368,8 @@ def run_case(case, out_root, dry_run, lane_override=None, max_dispatches=None,
         if agent_map:
             disp_argv += ["--agent-map", agent_map]
         rc, disp = run_runner(*disp_argv,
-                              timeout=task["budget"]["timeout_s"] + 300)
+                              timeout=_timeout_stack().pilot_breaker_s(
+                                  task["budget"]["timeout_s"]))
         summary["attempts"].append({
             "agent": disp.get("agent"), "lane": disp.get("lane"),
             "envelope_status": disp.get("envelope_status"),

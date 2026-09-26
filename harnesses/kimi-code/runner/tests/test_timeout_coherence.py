@@ -195,5 +195,28 @@ class FlatInstallLayout(unittest.TestCase):
         self.assertEqual(out["error"], "timeout_stack_module_missing")
 
 
+class PilotBreaker(unittest.TestCase):
+    def test_pilot_resolves_the_authority_and_nests(self):
+        # pilot.py is import-safe (module level defines paths/constants
+        # only). This pins that pilot's loader resolves the same authority
+        # and that its breaker nests outside the runner's with margin.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "pilot", str(ROOT / "runner" / "pilot.py"))
+        pilot = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pilot)
+        stack = pilot._timeout_stack()
+        # importlib loads a fresh module OBJECT, so identity with the test's
+        # own import is wrong to assert; equality of the derived constants is
+        # what "same authority" means here.
+        self.assertEqual(stack.RUNNER_BREAKER_MARGIN_S,
+                         ts.RUNNER_BREAKER_MARGIN_S)
+        self.assertEqual(stack.PILOT_BREAKER_MARGIN_S,
+                         ts.PILOT_BREAKER_MARGIN_S)
+        self.assertGreaterEqual(
+            stack.pilot_breaker_s(600),
+            stack.runner_breaker_s(600) + stack.MIN_REPORT_MARGIN_S)
+
+
 if __name__ == "__main__":
     unittest.main()
