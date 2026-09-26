@@ -45,7 +45,16 @@ never through the harness root.
   refuses on divergence; `-m` module shadowing is rejected (cmd_verify runs with
   `cwd=ws`, so the workspace is `sys.path[0]`); the git tree signature hashes content,
   not just `git status` letters. `init` refuses to re-baseline an initialized workspace
-  without `--reinit`. Production-runner tasks (TOOL-019) are barred from `flash` absent
+  without `--reinit`. Payloads may emit progress heartbeats (#105/TOOL-034): the runner forwards
+  `--heartbeat-file <state>/heartbeats/<dispatch_id>.jsonl` and `--dispatch-id`
+  to the delegate, which injects `DELEGATE_HEARTBEAT_PATH`/`DELEGATE_DISPATCH_ID`
+  into the child environment; the drain lands `dispatch_progress` journal
+  records, and `status` reports per-dispatch `payload_progress`. Observer
+  isolation (#109/TOOL-038): monitor paths read only runner-state and
+  payload-emitted files and abstain + report `measurement_degraded` on any
+  measurement failure (never kill, never refuse); acceptance paths
+  (init/verify/accept) bound every workspace-tree measurement to
+  `MEASUREMENT_BUDGET_S` (120s) and fail closed on expiry. Production-runner tasks (TOOL-019) are barred from `flash` absent
   an explicit `lane`, and require fresh `preflight_receipts`. `harnesses/kimi-code/runner/pilot.py` drives
   the loop against real workers and appends an evidence row.
   Tests in `harnesses/kimi-code/runner/tests/`: S1–S7 + git-root cases, `test_production_guard.py`,

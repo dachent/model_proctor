@@ -167,3 +167,11 @@ The FIRST action on any resume — new morning, reopened machine, post-crash —
 - `last_receipt` with `dispatch_seq: 0` + `verifier_nondiscriminating: true` carries no worker
   evidence; `accept` refuses it unless `--allow-zero-dispatch` is supplied. That override is
   counted and should be treated as a reviewed exception.
+- `payload_progress` (#105) shows each open dispatch's last payload-emitted
+  stage/counters. `status: "stale"` means the payload went quiet beyond the
+  staleness threshold — a signal to investigate, never proof of death; kill
+  decisions remain wall-clock/budget decisions, not heartbeat decisions.
+  `status: "absent"` only means the payload never emitted (most don't).
+  `measurement_degraded: true` with `degraded_components` (#109) means the
+  monitor itself could not take a measurement (corrupt/unreadable heartbeat,
+  missing protocol module) — the report is partial, not the run.

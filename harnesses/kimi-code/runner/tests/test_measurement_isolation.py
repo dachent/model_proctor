@@ -180,5 +180,32 @@ class MonitorIsolationTest(unittest.TestCase):
         self.assertIn("degraded_components", out)
 
 
+import pilot  # noqa: E402  (same sys.path entry as runner)
+
+
+class FindWiresDeadlineTest(unittest.TestCase):
+    """#109: session-dir statting abstains with partial results past its
+    deadline instead of wedging the pilot on a sync-deferred mount."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="runner-wires-")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        home = Path(self.tmp) / "home"
+        self.wire = (home / "sessions" / "s" / "sid-1" / "agents" / "a"
+                     / "wire.jsonl")
+        self.wire.parent.mkdir(parents=True)
+        self.wire.write_text("{}\n", encoding="utf-8")
+        self.home = str(home)
+
+    def test_expired_deadline_abstains_partial(self):
+        self.assertEqual(
+            pilot.find_wires(["sid-1"], 0, homes=[self.home],
+                             deadline=time.monotonic() - 1), [])
+
+    def test_no_deadline_finds_wire(self):
+        found = pilot.find_wires(["sid-1"], 0, homes=[self.home])
+        self.assertEqual([Path(p) for p in found], [self.wire])
+
+
 if __name__ == "__main__":
     unittest.main()
