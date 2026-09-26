@@ -51,6 +51,8 @@ Commands:
   accept   --workspace ws --task task.json           refuse unless receipt fresh+green
   record   --workspace ws --task task.json [--wire wire.jsonl ...] [--pricing pricing.yaml]
   status   --workspace ws                            print runner state
+  timeouts --task task.json [--delegate path]        report the timeout stack;
+                                                     refuse an inverted one
   (stateful commands accept --state-dir to relocate the external state root)
 
 Every command prints exactly one JSON object on stdout. Exit 0 = success,
@@ -2030,11 +2032,36 @@ def cmd_timeouts(args):
     if not knobs.get("knobs_valid", False):
         violations.append("delegate_config_invalid: "
                           + str(knobs.get("error", "unknown")))
+    # TOOL-035/036 composition: with stall_guard enabled the ladder may add
+    # worst_case_added_s past the wall-clock deadline. The +120 breaker alone
+    # does not cover the +150 worst case; the guarantee lives in the breaker's
+    # termination-REQUEST window (+120 + TERMINATION_REQUEST_WAIT_S), shown
+    # here as its own layer (timeout_stack.py docstring, Ruling 2026-09-26).
+    sg = knobs.get("stall_guard")
+    sg = sg if isinstance(sg, dict) else {}
+    sg_added = sg.get("worst_case_added_s")
+    if isinstance(sg_added, bool) or not isinstance(sg_added, (int, float)):
+        sg_added = 0.0
+    layers = stack.stack_layers(timeout_s, grace)
+    if sg.get("enabled"):
+        layers.insert(2, ("stall_guard_ladder", "ladder",
+                          float(timeout_s) + sg_added))
+        composed = (float(timeout_s) + sg_added + stack.KILL_GRACE_MAX_S
+                    + stack.DELEGATE_OVERHEAD_S)
+        window = stack.runner_breaker_s(timeout_s) + TERMINATION_REQUEST_WAIT_S
+        if composed + stack.MIN_REPORT_MARGIN_S > window:
+            violations.append(
+                "stall_guard_stack_exceeds_request_window: worst case "
+                f"{composed:.0f}s + {stack.MIN_REPORT_MARGIN_S:.0f}s report "
+                f"margin exceeds breaker + request window {window:.0f}s")
+    layers.insert(-1, ("runner_request_window", "request_window",
+                       stack.runner_breaker_s(timeout_s)
+                       + TERMINATION_REQUEST_WAIT_S))
     return _emit({
         "task_id": task["task_id"],
         "budget": task["budget"],
         "layers": [{"layer": n, "kind": k, "seconds": s}
-                   for n, k, s in stack.stack_layers(timeout_s, grace)],
+                   for n, k, s in layers],
         "constants": {
             "DELEGATE_OVERHEAD_S": stack.DELEGATE_OVERHEAD_S,
             "KILL_GRACE_MAX_S": stack.KILL_GRACE_MAX_S,
@@ -2045,6 +2072,7 @@ def cmd_timeouts(args):
         },
         "delegate": delegate_py,
         "delegate_knobs": knobs,
+        "stall_guard": sg,
         "coherent": not violations,
         "violations": violations,
     }, 0 if not violations else 1)

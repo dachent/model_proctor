@@ -95,7 +95,8 @@ No other state is required.
   "acl_warning": false,
   "job_warning": false,
   "error": null,
-  "kill_evidence": null
+  "kill_evidence": null,
+  "kill_authority": "none"
 }
 ```
 
@@ -108,6 +109,7 @@ No other state is required.
 | `child_pid` | The delegate-known child pid (the bootstrap pid for WMI-detached payloads), or `null`. Informational only — Windows recycles pids; nothing may kill by this value later (TOOL-033) |
 | `acl_warning` | `icacls` hardening of the run directory failed (run continued; logs may inherit default ACLs) |
 | `job_warning` | Job Object creation/assignment failed; timeout falls back to `taskkill`-only tree kill (degraded — grandchildren created in the Popen→assign window may escape) |
+| `kill_authority` | TOOL-036 attribution of every payload death to exactly one authority: `none` (payload root exited on its own), `delegate:timeout`, `delegate:interrupted`, or `delegate:runner_requested`. Stamped on every envelope. Full vocabulary and the kill-path registry: `docs/kill-authority.md` |
 
 | Status | Meaning |
 |---|---|

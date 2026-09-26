@@ -86,10 +86,35 @@ class TimeoutsCommand(unittest.TestCase):
         self.assertEqual(seconds, sorted(seconds))
         self.assertEqual([l["layer"] for l in out["layers"]],
                          ["delegate_self_abort", "delegate_ceiling",
-                          "runner_breaker", "pilot_breaker"])
+                          "runner_breaker", "runner_request_window",
+                          "pilot_breaker"])
         self.assertEqual(out["delegate_knobs"]["default_kill_grace_seconds"], 5)
         self.assertEqual(out["budget"]["verify_timeout_s"],
                          ts.DEFAULT_VERIFY_TIMEOUT_S)
+
+    def test_stall_guard_ladder_and_request_window_are_reported(self):
+        # TOOL-035+037: with stall_guard enabled the report must show the
+        # ladder layer and the +180 request window that actually covers the
+        # +150 worst case — the +120 breaker alone does not.
+        cfg = json.loads(EXAMPLE_CONFIG.read_text(encoding="utf-8"))
+        cfg["stall_guard"]["enabled"] = True
+        sg_cfg = Path(self.tmp) / "sg-agents.json"
+        sg_cfg.write_text(json.dumps(cfg), encoding="utf-8")
+        rc, out = run_runner(
+            "timeouts", "--task", self.task, "--delegate", str(DELEGATE),
+            env_extra={"DELEGATE_CONFIG": str(sg_cfg)})
+        self.assertEqual(rc, 0, out)
+        self.assertTrue(out["coherent"], out)
+        names = [l["layer"] for l in out["layers"]]
+        self.assertIn("stall_guard_ladder", names)
+        self.assertIn("runner_request_window", names)
+        ladder = out["layers"][names.index("stall_guard_ladder")]
+        window = out["layers"][names.index("runner_request_window")]
+        self.assertEqual(ladder["seconds"], 60 + 60.0)  # timeout + worst ladder
+        self.assertEqual(window["seconds"],
+                         ts.runner_breaker_s(60) + 60)  # breaker + request wait
+        self.assertTrue(out["stall_guard"]["enabled"])
+        self.assertEqual(out["stall_guard"]["worst_case_added_s"], 60.0)
 
     def test_inverted_delegate_config_is_refused_by_name(self):
         bad = Path(self.tmp) / "bad-agents.json"

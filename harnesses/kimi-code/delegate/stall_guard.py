@@ -53,10 +53,12 @@ REQUIRED_CAPTURES = 2  # ticket-pinned: two consecutive identical captures
 _MAX_HEARTBEAT_READ_BYTES = 65536   # tail-bounded: heartbeat-flood guard
 _MAX_CAPTURE_BYTES = 262144
 
-# Worst-case seconds the ladder may add past the wall-clock deadline. Keeps
-# the delegate ceiling (timeout + this + kill grace + ~30s) inside the
-# runner's wrapper deadline (timeout_s + 120). TOOL-037 owns the full
-# sizing rule.
+# Worst-case seconds the ladder may add past the wall-clock deadline. The
+# delegate ceiling (timeout + this + kill grace + ~30s overhead = +150) no
+# longer fits the runner's +120 wrapper breaker alone; the headroom lives in
+# TOOL-036's termination-request window: breaker (+120) + request wait
+# (+60) = +180 >= +150 + +30 report margin. TOOL-037 (core/timeout_stack.py)
+# owns the full sizing rule.
 MAX_ADDED_SECONDS = 60.0
 
 
@@ -118,8 +120,9 @@ class StallPolicy:
                 policy.worst_case_added_s() > MAX_ADDED_SECONDS:
             raise PolicyError(
                 f"stall_guard worst case {policy.worst_case_added_s():.1f}s "
-                f"exceeds {MAX_ADDED_SECONDS:.0f}s (must stay inside the "
-                "runner's timeout_s + 120 wrapper deadline)")
+                f"exceeds {MAX_ADDED_SECONDS:.0f}s (must fit the runner's "
+                "breaker + termination-request window — "
+                "core/timeout_stack.py)")
         return policy
 
 

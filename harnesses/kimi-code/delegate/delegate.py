@@ -475,6 +475,22 @@ def _print_timeout_knobs():
                    for name, a in (cfg.get("agents") or {}).items()
                    if isinstance(a, dict)},
     }
+    # TOOL-035/037: the stall_guard ladder adds up to worst_case_added_s past
+    # the wall-clock deadline; the runner composes this into its timeouts
+    # report, whose +120 breaker alone does not cover the +150 worst case.
+    sg_block = cfg.get("stall_guard")
+    sg_out = {"configured": sg_block is not None, "enabled": False,
+              "worst_case_added_s": 0.0,
+              "max_added_seconds_cap": stall_guard.MAX_ADDED_SECONDS}
+    if isinstance(sg_block, dict):
+        try:
+            policy = stall_guard.StallPolicy.from_config(sg_block)
+            sg_out["enabled"] = policy.enabled
+            if policy.enabled:
+                sg_out["worst_case_added_s"] = policy.worst_case_added_s()
+        except stall_guard.PolicyError as e:
+            sg_out["error"] = str(e)
+    out["stall_guard"] = sg_out
     if error:
         out["error"] = error
     sys.stdout.write(json.dumps(out, indent=2, sort_keys=True) + "\n")

@@ -73,5 +73,51 @@ class TimeoutKnobs(unittest.TestCase):
         self.assertIn("error", out)
 
 
+class StallGuardKnobs(unittest.TestCase):
+    """TOOL-035/037: the probe must surface the stall_guard ladder — the
+    runner's timeouts report composes it into the true worst case."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="knobs-sg-")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _config(self, stall_block):
+        base = json.loads(EXAMPLE_CONFIG.read_text(encoding="utf-8"))
+        if stall_block is None:
+            base.pop("stall_guard", None)
+        else:
+            base["stall_guard"] = stall_block
+        p = Path(self.tmp) / "agents.json"
+        p.write_text(json.dumps(base), encoding="utf-8")
+        return p
+
+    def test_absent_block_reports_not_configured(self):
+        rc, out = run_knobs({"DELEGATE_CONFIG": str(self._config(None))})
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(out["stall_guard"]["configured"], False)
+        self.assertEqual(out["stall_guard"]["enabled"], False)
+        self.assertEqual(out["stall_guard"]["worst_case_added_s"], 0.0)
+
+    def test_disabled_block_reports_zero_ladder(self):
+        rc, out = run_knobs({"DELEGATE_CONFIG": str(EXAMPLE_CONFIG)})
+        self.assertEqual(rc, 0, out)
+        sg = out["stall_guard"]
+        self.assertTrue(sg["configured"])
+        self.assertFalse(sg["enabled"])
+        self.assertEqual(sg["worst_case_added_s"], 0.0)
+        self.assertEqual(sg["max_added_seconds_cap"], 60.0)
+
+    def test_enabled_block_reports_worst_case(self):
+        cfg = self._config({"enabled": True})
+        rc, out = run_knobs({"DELEGATE_CONFIG": str(cfg)})
+        self.assertEqual(rc, 0, out)
+        sg = out["stall_guard"]
+        self.assertTrue(sg["enabled"])
+        self.assertEqual(sg["worst_case_added_s"], 60.0)
+        self.assertEqual(sg["max_added_seconds_cap"], 60.0)
+
+
 if __name__ == "__main__":
     unittest.main()

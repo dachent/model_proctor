@@ -373,8 +373,10 @@ class TestReportDetached(DelegateTestBase):
 
 @unittest.skipUnless(_IS_WINDOWS, "detached custody is Windows-only")
 class TestDetachedCustodyRegression(DelegateTestBase):
-    """#103 regression signature: the runner kills the delegate
-    (runner.py:738,754 proc.kill), the delegate's job handle closes, and
+    """#103 regression signature: the delegate's launcher dies to an
+    EXTERNAL kill (this test kills it directly, standing in for any outside
+    terminator — pre-TOOL-036 that was the runner's proc.kill; the runner
+    has been read-only since), the delegate's job handle closes, and
     KILL_ON_JOB_CLOSE wipes the worker tree. A detached payload must not be
     in that job at all. The paired control proves the cascade still fires
     for contained workers, so the survival assertion is load-bearing."""

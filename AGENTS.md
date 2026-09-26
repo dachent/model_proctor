@@ -86,6 +86,10 @@ never through the harness root.
 - Contract parity (core vs Kimi, exhaustive lane table): `python -m unittest discover -s core/tests -v`
 - ZCode harness: `python -m unittest discover -s harnesses/zcode/tests -v`
 - Delegate a task: `python harnesses/kimi-code/delegate/delegate.py --agent <name> --workspace <path> --task "<text>"`
+- Timeout stack report/preflight (#108): `python harnesses/kimi-code/runner/runner.py timeouts --task <task.json>`
+  (every knob in one JSON report — delegate self-abort, delegate ceiling, stall-guard
+  ladder, runner breaker, termination-request window, pilot breaker; exit 1 with named
+  violations on an inverted stack)
 - Extract a session log: `python scripts/extract_log.py <wire.jsonl...> --out <dir>`
 - Rebuild watch: `python evals/meter.py --rebuild-watch <hours>`
 - Eval self-test: `python evals/run_eval.py --self-test`
