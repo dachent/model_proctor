@@ -227,6 +227,46 @@ class DispatchJournalTest(unittest.TestCase):
         self.assertEqual(events, ["dispatch_open", "dispatch_finished"])
         self.assertEqual(journal_lines(sdir)[-1]["envelope_status"], "timeout")
 
+    # ── TOOL-035: kill evidence rides the journal, state, and status ────
+    def test_kill_evidence_propagates_to_journal_state_and_status(self):
+        ws, task, sdir = self._setup_ready()
+        evidence = {"schema_version": 1, "kill_reason": "condition_met_stall",
+                    "predicate": {"heartbeat_stale": True,
+                                  "progress_flat": True,
+                                  "stacks_identical": True,
+                                  "abstain": None},
+                    "stack_captures": [{"seq": 1, "ok": True,
+                                        "signature": "aaa"},
+                                       {"seq": 2, "ok": True,
+                                        "signature": "aaa"}],
+                    "extensions_used": 0}
+        env = {"FAKE_WORKER_MODE": "timeout",
+               "FAKE_WORKER_KILL_EVIDENCE": json.dumps(evidence)}
+        rc, out = run_runner("dispatch", "--workspace", ws, "--task", task,
+                             "--delegate", str(FAKE_WORKER), env_extra=env)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(out["envelope_status"], "timeout")
+        finished = [e for e in journal_lines(sdir)
+                    if e["event"] == "dispatch_finished"]
+        self.assertEqual(finished[-1]["kill_evidence"]["kill_reason"],
+                         "condition_met_stall")
+        rc, out = run_runner("status", "--workspace", ws)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(out["last_kill_evidence"]["kill_reason"],
+                         "condition_met_stall")
+
+    def test_dispatch_without_kill_evidence_journals_null(self):
+        ws, task, sdir = self._setup_ready()
+        rc, out = run_runner("dispatch", "--workspace", ws, "--task", task,
+                             "--delegate", str(FAKE_WORKER))
+        self.assertEqual(rc, 0, out)
+        finished = [e for e in journal_lines(sdir)
+                    if e["event"] == "dispatch_finished"]
+        self.assertIn("kill_evidence", finished[-1])
+        self.assertIsNone(finished[-1]["kill_evidence"])
+        rc, out = run_runner("status", "--workspace", ws)
+        self.assertIsNone(out["last_kill_evidence"])
+
     # ── C2: status is a one-shot dead-run detector ──────────────────────
     def test_status_stall_detector(self):
         ws, task, sdir = self._setup_ready()

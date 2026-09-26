@@ -846,9 +846,12 @@ def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None,
     A5 (#73): instead of one blocking subprocess.run, poll the child so a
     `dispatch_heartbeat` journal record lands at least once per interval —
     `status` can then tell alive-but-slow from dead within one heartbeat
-    instead of one full timeout. The kill semantics are unchanged: past
-    timeout + 120s grace the child is killed and a timeout envelope returned
-    (the delegate enforces the same ceiling on its side).
+    instead of one full timeout. Kill semantics (TOOL-035):
+    timeout_s + 120 is a documented last-resort BACKSTOP, never the primary
+    stall detector — the delegate's condition-based predicate (stall_guard,
+    when enabled) owns the kill decision and attaches kill_evidence to the
+    envelope. This wrapper kill exists only for a wedged delegate process;
+    consolidating the two kill sites is #107's scope.
     #105: dispatch_id/heartbeat_file wire the payload progress side channel;
     both are forwarded verbatim and the heartbeat file is drained by the
     caller's on_heartbeat."""
@@ -1203,6 +1206,8 @@ def cmd_dispatch(args):
         "duration_seconds": envelope.get("duration_seconds", wall),
         "child_session_id": envelope.get("child_session_id"),
         "child_home": envelope.get("child_home"),
+        # TOOL-035: condition-kill evidence travels with the run record.
+        "kill_evidence": envelope.get("kill_evidence"),
         # Which preflight evidence authorised this dispatch, and how old it
         # was — the check previously left no trace at all.
         "preflight_ages_seconds": preflight_ages,
@@ -1225,6 +1230,7 @@ def cmd_dispatch(args):
         "agent": agent, "envelope_status": envelope_status,
         "duration_seconds": round(envelope.get("duration_seconds", wall), 3),
         "heartbeats": heartbeat_count[0],
+        "kill_evidence": envelope.get("kill_evidence"),
         # #105: additive payload-progress summary (existing keys unchanged).
         "payload_heartbeats": progress["count"],
         "payload_heartbeat_status": progress["status"],
@@ -1787,6 +1793,10 @@ def cmd_status(args):
         "failure_count": len(state.get("failures", [])),
         "reinit_count": state.get("reinit_count", 0),
         "last_dispatch": (state.get("dispatches") or [{}])[-1].get("at"),
+        # TOOL-035: the last dispatch's kill evidence is visible without
+        # opening state.json by hand.
+        "last_kill_evidence": (state.get("dispatches") or [{}])[-1].get(
+            "kill_evidence"),
         "last_activity_at": (time.strftime("%Y-%m-%dT%H:%M:%S",
                                            time.localtime(last_epoch))
                              if last_epoch is not None else None),

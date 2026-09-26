@@ -12,6 +12,8 @@ Env knobs:
                         the sleep, "implement" after) to --heartbeat-file (#105)
   FAKE_WORKER_SLEEP     seconds to sleep between the two beats (or before the
                         envelope when not emitting)
+  FAKE_WORKER_KILL_EVIDENCE  JSON string; attached to the envelope as
+                        kill_evidence (TOOL-035 propagation tests)
 """
 
 import argparse
@@ -77,7 +79,7 @@ def main():
         "timeout": ("timeout", None, 124),
     }[mode]
 
-    sys.stdout.write(json.dumps({
+    envelope = {
         "schema_version": 1,
         "status": status,
         "agent": args.agent,
@@ -88,7 +90,11 @@ def main():
         "run_dir": None,
         "error": None if status in ("completed", "failed") else f"fake_{status}",
         "child_session_id": "fake-session-0001" if status == "completed" else None,
-    }) + "\n")
+    }
+    evidence_json = os.environ.get("FAKE_WORKER_KILL_EVIDENCE")
+    if evidence_json:
+        envelope["kill_evidence"] = json.loads(evidence_json)
+    sys.stdout.write(json.dumps(envelope) + "\n")
     return exit_code
 
 
