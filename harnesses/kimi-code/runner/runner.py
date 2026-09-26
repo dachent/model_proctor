@@ -104,7 +104,11 @@ CONFIG_SURFACE_GLOBS = ("*.pth",)
 # subset: provider failures switch lane class, not intelligence).
 LATERAL_SWITCH = {"flash": "glm", "glm": "k3", "k3": "glm"}
 
-DEFAULT_BUDGET = {"max_dispatches": 4, "max_stagnant": 3, "timeout_s": 1800}
+# TOOL-033 phase semantics: timeout_s owns the DISPATCH (payload-launch)
+# phase only; verify_timeout_s owns the VERIFY phase. Neither spans a
+# detached payload's lifetime — the monitor phase is clock-free by design.
+DEFAULT_BUDGET = {"max_dispatches": 4, "max_stagnant": 3, "timeout_s": 1800,
+                  "verify_timeout_s": 600}
 
 # TOOL-036: the runner is read-only with respect to the worker tree. Past
 # timeout + WRAPPER_GRACE_S it REQUESTS termination from the delegate (the
@@ -1356,6 +1360,10 @@ def _cmd_verify_impl(args):
     sroot = _state_root(ws, args.state_dir)
     state = _load_state(sroot)
     check_state_identity(state, task, ws, sroot)
+    # TOOL-033: the verifier runs on its own budget. Pre-split states carry
+    # no verify_timeout_s; they keep the legacy behavior exactly (timeout_s).
+    verify_timeout_s = state["budget"].get("verify_timeout_s",
+                                           state["budget"]["timeout_s"])
 
     # A verifier that passes on the UNMODIFIED init tree has no discriminating
     # power: it will pass whatever the worker does, so acceptance means
@@ -1432,7 +1440,7 @@ def _cmd_verify_impl(args):
     try:
         with tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as tf:
             r = subprocess.run(argv, cwd=ws, stdout=tf, stderr=subprocess.STDOUT,
-                               timeout=state["budget"]["timeout_s"],
+                               timeout=verify_timeout_s,
                                env=verifier_env)
             tf.seek(0)
             output = tf.read()
@@ -1448,7 +1456,7 @@ def _cmd_verify_impl(args):
             "passed": False,
             "rejected": "verifier_timeout",
             "verifier_exit": None,
-            "timeout_s": state["budget"]["timeout_s"],
+            "verify_timeout_s": verify_timeout_s,
             "dispatch_seq": len(state["dispatches"]),
             "verifier_argv": task["verifier"]["argv"],
             "tree_sig": _measure_with_deadline(lambda: tree_signature(ws), MEASUREMENT_BUDGET_S, "tree_signature"),
@@ -1460,7 +1468,7 @@ def _cmd_verify_impl(args):
                                 "budget; this refusal replaces any earlier "
                                 "receipt, so acceptance is blocked until a "
                                 "verify completes",
-                      "timeout_s": state["budget"]["timeout_s"],
+                      "verify_timeout_s": verify_timeout_s,
                       "receipt": receipt}, 1)
     except OSError as exc:
         # A01 companion: the verifier could not launch at all (missing

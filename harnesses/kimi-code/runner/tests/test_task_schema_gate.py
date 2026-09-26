@@ -77,6 +77,26 @@ class TaskSchemaGate(unittest.TestCase):
         rc, out = run_runner("init", "--workspace", ws, "--task", task)
         self.assertEqual(rc, 0, out)
 
+    def test_string_verify_timeout_refused(self):
+        ws = make_workspace(self.tmp)
+        task = make_task(self.tmp, budget={"max_dispatches": 4,
+                                           "max_stagnant": 3,
+                                           "timeout_s": 60,
+                                           "verify_timeout_s": "600"})
+        rc, out = run_runner("init", "--workspace", ws, "--task", task)
+        self.assertEqual(rc, 3, out)
+        self.assertEqual(out["error"], "task_schema_invalid")
+        self.assertEqual(out["field"], "budget.verify_timeout_s")
+
+    def test_verify_timeout_positive_number_accepted(self):
+        ws = make_workspace(self.tmp)
+        task = make_task(self.tmp, budget={"max_dispatches": 4,
+                                           "max_stagnant": 3,
+                                           "timeout_s": 60,
+                                           "verify_timeout_s": 300})
+        rc, out = run_runner("init", "--workspace", ws, "--task", task)
+        self.assertEqual(rc, 0, out)
+
     def test_flat_install_layout_resolves_the_schema(self):
         # Regression (2026-09-09): the eagerly-built candidates tuple indexed
         # parents[2] unconditionally, which crashed EVERY command in the flat

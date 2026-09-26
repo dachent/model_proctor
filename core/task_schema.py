@@ -29,7 +29,7 @@ KNOWN_FEATURES = frozenset((
 # budgets evolve faster than the schema, and an unknown key changes no
 # decision the core makes.
 _INT_BUDGET_FIELDS = ("max_dispatches", "max_stagnant")
-_NUM_BUDGET_FIELDS = ("timeout_s", "max_preflight_age_s")
+_NUM_BUDGET_FIELDS = ("timeout_s", "verify_timeout_s", "max_preflight_age_s")
 
 
 class TaskSchemaError(Exception):

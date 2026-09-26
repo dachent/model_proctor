@@ -104,7 +104,8 @@ class A01VerifierTimeout(unittest.TestCase):
         # Now a task whose verifier sleeps past a 2s budget -> A01.
         slow_task = make_task(
             self.tmp, ["{python}", "-c", "import time; time.sleep(30)"],
-            budget={"max_dispatches": 4, "max_stagnant": 3, "timeout_s": 2},
+            budget={"max_dispatches": 4, "max_stagnant": 3, "timeout_s": 60,
+                    "verify_timeout_s": 2},
             task_id="t_slow")
         rc, out = run_runner("init", "--workspace", self.ws,
                              "--task", slow_task, "--reinit")
@@ -118,6 +119,48 @@ class A01VerifierTimeout(unittest.TestCase):
                              "--task", slow_task)
         self.assertEqual(rc, 1, out)
         self.assertEqual(out["reason"], "receipt not green")
+
+    def test_verify_timeout_is_independent_of_dispatch_timeout(self):
+        # TOOL-033: budget.timeout_s used to size BOTH dispatch and verify
+        # (dispatch timeout vs cmd_verify's subprocess.run). A large dispatch
+        # budget must not extend the verifier's clock.
+        slow_task = make_task(
+            self.tmp, ["{python}", "-c", "import time; time.sleep(30)"],
+            budget={"max_dispatches": 4, "max_stagnant": 3,
+                    "timeout_s": 600, "verify_timeout_s": 2},
+            task_id="t_split")
+        rc, out = run_runner("init", "--workspace", self.ws,
+                             "--task", slow_task, "--reinit")
+        self.assertEqual(rc, 0, out)
+        t0 = time.monotonic()
+        rc, out = run_runner("verify", "--workspace", self.ws,
+                             "--task", slow_task, timeout=60)
+        wall = time.monotonic() - t0
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(out["error"], "verifier_timeout")
+        self.assertEqual(out["verify_timeout_s"], 2)
+        self.assertLess(wall, 30)
+
+    def test_pre_split_state_falls_back_to_dispatch_timeout(self):
+        # States initialized before TOOL-033 carry no verify_timeout_s; the
+        # verifier must keep the legacy behavior exactly (timeout_s).
+        slow_task = make_task(
+            self.tmp, ["{python}", "-c", "import time; time.sleep(30)"],
+            budget={"max_dispatches": 4, "max_stagnant": 3, "timeout_s": 2,
+                    "verify_timeout_s": 600},
+            task_id="t_legacy")
+        rc, out = run_runner("init", "--workspace", self.ws,
+                             "--task", slow_task, "--reinit")
+        self.assertEqual(rc, 0, out)
+        state_path = Path(out["state_dir"]) / "state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        del state["budget"]["verify_timeout_s"]  # pre-TOOL-033 state shape
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        rc, out = run_runner("verify", "--workspace", self.ws,
+                             "--task", slow_task, timeout=60)
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(out["error"], "verifier_timeout")
+        self.assertEqual(out["verify_timeout_s"], 2)  # fell back to timeout_s
 
     def test_unlaunchable_verifier_is_refused_not_crashed(self):
         bad_task = make_task(self.tmp,
