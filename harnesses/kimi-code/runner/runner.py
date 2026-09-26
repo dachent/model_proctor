@@ -190,6 +190,45 @@ def _task_schema():
     return _TASK_SCHEMA
 
 
+_HEARTBEAT_MOD = "unset"
+
+
+def _heartbeat_module():
+    """delegate/heartbeat.py — the payload progress protocol (#105/TOOL-034).
+
+    Same two-layout resolution as _task_schema (repo: sibling
+    harnesses/kimi-code/delegate/; flat install: a sibling file), but
+    FAIL-SOFT per the #109 doctrine: an unresolvable or unimportable module
+    means payload progress is unmeasurable — abstain (None), never refuse.
+    """
+    global _HEARTBEAT_MOD
+    if _HEARTBEAT_MOD == "unset":
+        import importlib.util
+        here = Path(__file__).resolve().parent
+        _HEARTBEAT_MOD = None
+        for cand in (here / "heartbeat.py",
+                     here.parent / "delegate" / "heartbeat.py"):
+            if cand.is_file():
+                spec = importlib.util.spec_from_file_location("heartbeat",
+                                                              str(cand))
+                mod = importlib.util.module_from_spec(spec)
+                try:
+                    spec.loader.exec_module(mod)
+                except Exception:
+                    break  # unimportable == unmeasurable: abstain
+                _HEARTBEAT_MOD = mod
+                break
+    return _HEARTBEAT_MOD
+
+
+def _heartbeat_file(root, dispatch_id):
+    """Payload heartbeat side channel: <state>/heartbeats/<dispatch_id>.jsonl.
+
+    Lives with the runner state (outside the workspace, local fs) so monitor
+    reads never touch worker-writable or sync-deferred trees (#109)."""
+    return Path(root) / "heartbeats" / f"{dispatch_id}.jsonl"
+
+
 def load_task(path):
     task = _load_json(path, "task file")
     missing = [k for k in ("task_id", "prompt", "scope", "verifier") if k not in task]
@@ -705,7 +744,8 @@ def resolve_delegate(explicit):
         "error": "delegate.py not found; pass --delegate or set DELEGATE_PATH"}, 3))
 
 
-def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None):
+def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None,
+                 dispatch_id=None, heartbeat_file=None):
     """One worker attempt through the delegate wrapper. Returns the envelope.
 
     A5 (#73): instead of one blocking subprocess.run, poll the child so a
@@ -713,7 +753,10 @@ def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None):
     `status` can then tell alive-but-slow from dead within one heartbeat
     instead of one full timeout. The kill semantics are unchanged: past
     timeout + 120s grace the child is killed and a timeout envelope returned
-    (the delegate enforces the same ceiling on its side)."""
+    (the delegate enforces the same ceiling on its side).
+    #105: dispatch_id/heartbeat_file wire the payload progress side channel;
+    both are forwarded verbatim and the heartbeat file is drained by the
+    caller's on_heartbeat."""
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False,
                                      encoding="utf-8") as tf:
         tf.write(prompt)
@@ -722,6 +765,12 @@ def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None):
     try:
         cmd = [sys.executable, delegate_py, "--agent", agent, "--workspace", str(ws),
                "--task-file", task_file, "--timeout", str(timeout_s)]
+        # #105: forwarded verbatim; the delegate injects them into the child
+        # env. Whatever --delegate names must tolerate these two flags.
+        if heartbeat_file is not None:
+            cmd += ["--heartbeat-file", str(heartbeat_file)]
+        if dispatch_id is not None:
+            cmd += ["--dispatch-id", dispatch_id]
         # No job object on the delegate, deliberately (#103): for contained
         # workers the delegate's own KILL_ON_JOB_CLOSE job must collapse when
         # this delegate dies — including via our proc.kill() below — and a
@@ -991,6 +1040,39 @@ def cmd_dispatch(args):
         "timeout_s": state["budget"]["timeout_s"], "runner_pid": os.getpid(),
     })
     heartbeat_count = [0]
+    # #105: payload progress drain state. The heartbeat file is runner-owned
+    # and local; reads are bounded and every failure downgrades to a status
+    # string (#109: abstain + report — this never raises, never kills).
+    hb_file = _heartbeat_file(sroot, dispatch_id)
+    hb_file.parent.mkdir(parents=True, exist_ok=True)
+    hb = _heartbeat_module()
+    progress = {"count": 0, "last_epoch": None,
+                "status": "unavailable" if hb is None else "absent"}
+
+    def _drain_payload_progress():
+        if hb is None:
+            return
+        try:
+            rec, status = hb.read_latest(str(hb_file))
+        except Exception:
+            progress["status"] = "unreadable"
+            return
+        progress["status"] = status
+        if rec is None:
+            return
+        epoch = rec.get("epoch")
+        if isinstance(epoch, (int, float)) and not isinstance(epoch, bool):
+            if progress["last_epoch"] is not None and epoch <= progress["last_epoch"]:
+                return  # already journaled (dedupe across drains)
+            progress["last_epoch"] = epoch
+        progress["count"] += 1
+        _journal_append(sroot, {
+            "event": "dispatch_progress", "dispatch_id": dispatch_id,
+            "payload_seq": rec.get("seq"), "payload_pid": rec.get("pid"),
+            "stage": rec.get("stage"), "sub_stage": rec.get("sub_stage"),
+            "counters": rec.get("counters") or {},
+            "payload_ts": rec.get("ts"),
+        })
 
     def _heartbeat():
         # A5 (#73): alive-but-slow vs dead must be distinguishable within one
@@ -1000,11 +1082,13 @@ def cmd_dispatch(args):
             "event": "dispatch_heartbeat", "dispatch_id": dispatch_id,
             "beat": heartbeat_count[0],
         })
+        _drain_payload_progress()
 
     t0 = time.monotonic()
     envelope = run_delegate(delegate_py, agent, ws, task["prompt"],
                             state["budget"]["timeout_s"],
-                            on_heartbeat=_heartbeat)
+                            on_heartbeat=_heartbeat, dispatch_id=dispatch_id,
+                            heartbeat_file=str(hb_file))
     wall = time.monotonic() - t0
     envelope_status = envelope.get("status")
     state["dispatches"].append({
@@ -1027,12 +1111,16 @@ def cmd_dispatch(args):
     # A1 (#73): the open entry is closed with the envelope result — including
     # the provider/tool failure statuses, so a timeout or internal_error
     # leaves a finished pair, not a dangling open.
+    _drain_payload_progress()  # final drain: fast workers beat the 10s tick
     _journal_append(sroot, {
         "event": "dispatch_finished", "dispatch_id": dispatch_id,
         "task_id": state["task_id"], "dispatch_seq": dispatch_seq,
         "agent": agent, "envelope_status": envelope_status,
         "duration_seconds": round(envelope.get("duration_seconds", wall), 3),
         "heartbeats": heartbeat_count[0],
+        # #105: additive payload-progress summary (existing keys unchanged).
+        "payload_heartbeats": progress["count"],
+        "payload_heartbeat_status": progress["status"],
     })
     cls, rec = classify_and_recommend(state, state["lane"])
     return _emit({
