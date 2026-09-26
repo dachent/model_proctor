@@ -106,6 +106,13 @@ LATERAL_SWITCH = {"flash": "glm", "glm": "k3", "k3": "glm"}
 
 DEFAULT_BUDGET = {"max_dispatches": 4, "max_stagnant": 3, "timeout_s": 1800}
 
+# TOOL-036: the runner is read-only with respect to the worker tree. Past
+# timeout + WRAPPER_GRACE_S it REQUESTS termination from the delegate (the
+# sole kill authority) and reports the outcome; it never kills the delegate.
+# Env overrides exist for hermetic tests.
+WRAPPER_GRACE_S = 120
+TERMINATION_REQUEST_WAIT_S = 60
+
 
 # ── small utilities ─────────────────────────────────────────────────────
 
@@ -839,27 +846,59 @@ def resolve_delegate(explicit):
         "error": "delegate.py not found; pass --delegate or set DELEGATE_PATH"}, 3))
 
 
+def _request_termination(proc, request_file, wait_s):
+    """Read-only terminal action (TOOL-036): request, bounded wait, never kill.
+
+    Returns (outcome, stdout, stderr). outcome is one of:
+      delegate_executed     the delegate ran its kill authority and exited
+      unresolved            request delivered; delegate still wedged after wait
+      request_write_failed  the request channel itself failed (wedged fs)
+      no_request_channel    no request_file was configured for this dispatch
+    """
+    if not request_file:
+        return "no_request_channel", "", ""
+    try:
+        with open(request_file, "w", encoding="utf-8") as f:
+            json.dump({"reason": "delegate_wrapper_timeout",
+                       "requested_at": time.strftime("%Y-%m-%dT%H:%M:%S")}, f)
+    except OSError:
+        return "request_write_failed", "", ""
+    try:
+        out, err = proc.communicate(timeout=wait_s)
+    except subprocess.TimeoutExpired:
+        return "unresolved", "", ""
+    return "delegate_executed", out, err
+
+
 def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None,
-                 dispatch_id=None, heartbeat_file=None):
+                 dispatch_id=None, heartbeat_file=None,
+                 request_file=None, on_termination=None):
     """One worker attempt through the delegate wrapper. Returns the envelope.
 
     A5 (#73): instead of one blocking subprocess.run, poll the child so a
     `dispatch_heartbeat` journal record lands at least once per interval —
     `status` can then tell alive-but-slow from dead within one heartbeat
     instead of one full timeout. Kill semantics (TOOL-035):
-    timeout_s + 120 is a documented last-resort BACKSTOP, never the primary
-    stall detector — the delegate's condition-based predicate (stall_guard,
-    when enabled) owns the kill decision and attaches kill_evidence to the
-    envelope. This wrapper kill exists only for a wedged delegate process;
-    consolidating the two kill sites is #107's scope.
+    timeout_s + WRAPPER_GRACE_S is a documented last-resort BACKSTOP, never
+    the primary stall detector — the delegate's condition-based predicate
+    (stall_guard, when enabled) owns the kill decision and attaches
+    kill_evidence to the envelope. TOOL-036 (#107): past the backstop the
+    runner REQUESTS termination via request_file and waits up to
+    TERMINATION_REQUEST_WAIT_S for the delegate's kill authority to execute
+    and emit its own attributed envelope; if the delegate stays wedged the
+    runner reports delegate_wrapper_timeout with kill_authority
+    unresolved_reported. The runner never kills the delegate.
     #105: dispatch_id/heartbeat_file wire the payload progress side channel;
     both are forwarded verbatim and the heartbeat file is drained by the
     caller's on_heartbeat."""
+    wrapper_grace = float(os.environ.get("MP_WRAPPER_GRACE_S", WRAPPER_GRACE_S))
+    request_wait = float(os.environ.get("MP_TERMINATION_REQUEST_WAIT_S",
+                                        TERMINATION_REQUEST_WAIT_S))
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False,
                                      encoding="utf-8") as tf:
         tf.write(prompt)
         task_file = tf.name
-    deadline = time.monotonic() + timeout_s + 120
+    deadline = time.monotonic() + timeout_s + wrapper_grace
     try:
         cmd = [sys.executable, delegate_py, "--agent", agent, "--workspace", str(ws),
                "--task-file", task_file, "--timeout", str(timeout_s)]
@@ -869,12 +908,20 @@ def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None,
             cmd += ["--heartbeat-file", str(heartbeat_file)]
         if dispatch_id is not None:
             cmd += ["--dispatch-id", dispatch_id]
+        if request_file:
+            # Stale-file defense (TOOL-036): the delegate consumes the file on
+            # its first poll; it must not exist before spawn.
+            try:
+                os.unlink(request_file)
+            except OSError:
+                pass
+            cmd += ["--terminate-request-file", request_file]
         # No job object on the delegate, deliberately (#103): for contained
         # workers the delegate's own KILL_ON_JOB_CLOSE job must collapse when
-        # this delegate dies — including via our proc.kill() below — and a
-        # runner-side job would nest, not protect. For allow_breakaway
-        # workers the payload is WMI-detached inside the delegate
-        # (TOOL-032) and never enters any job this process could close.
+        # this delegate dies — from any cause — and a runner-side job would
+        # nest, not protect. For allow_breakaway workers the payload is
+        # WMI-detached inside the delegate (TOOL-032) and never enters any
+        # job this process could close.
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 text=True)
     except OSError:
@@ -883,31 +930,43 @@ def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None,
         except OSError:
             pass
         raise
+
+    def _on_deadline():
+        outcome, o, e = _request_termination(proc, request_file, request_wait)
+        if on_termination is not None:
+            try:
+                on_termination(outcome)
+            except OSError:
+                pass
+        return outcome, o, e
+
     out, err = "", ""
     try:
         while True:
             remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                proc.kill()
-                proc.wait()
-                return {"status": "timeout", "error": "delegate_wrapper_timeout",
-                        "duration_seconds": timeout_s, "agent": agent}
-            try:
-                out, err = proc.communicate(timeout=min(remaining, 10))
-                break
-            except subprocess.TimeoutExpired:
-                # A5 (#73): alive-but-slow vs dead must be distinguishable
-                # within one heartbeat interval, not one full timeout.
-                if on_heartbeat is not None:
-                    try:
-                        on_heartbeat()
-                    except OSError:
-                        pass
-                if time.monotonic() > deadline:
-                    proc.kill()
-                    proc.wait()
-                    return {"status": "timeout", "error": "delegate_wrapper_timeout",
+            expired = remaining <= 0
+            if not expired:
+                try:
+                    out, err = proc.communicate(timeout=min(remaining, 10))
+                    break
+                except subprocess.TimeoutExpired:
+                    # A5 (#73): alive-but-slow vs dead must be distinguishable
+                    # within one heartbeat interval, not one full timeout.
+                    if on_heartbeat is not None:
+                        try:
+                            on_heartbeat()
+                        except OSError:
+                            pass
+                    expired = time.monotonic() > deadline
+            if expired:
+                outcome, out, err = _on_deadline()
+                if outcome != "delegate_executed":
+                    return {"status": "timeout",
+                            "error": "delegate_wrapper_timeout",
+                            "kill_authority": "unresolved_reported",
+                            "termination_request": outcome,
                             "duration_seconds": timeout_s, "agent": agent}
+                break  # the delegate emitted its own attributed envelope
     finally:
         try:
             os.unlink(task_file)
@@ -916,15 +975,14 @@ def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None,
     line = (out or "").strip().splitlines()
     if not line:
         return {"status": "internal_error", "error": "empty delegate output",
-                "stderr": (err or "")[-500:], "agent": agent}
-    if not line:
-        return {"status": "internal_error", "error": "empty delegate output",
-                "stderr": (r.stderr or "")[-500:], "agent": agent}
+                "stderr": (err or "")[-500:], "agent": agent,
+                "kill_authority": "none"}
     try:
         return json.loads(line[-1])
     except json.JSONDecodeError:
         return {"status": "internal_error", "error": "unparseable delegate envelope",
-                "stdout_tail": (r.stdout or "")[-500:], "agent": agent}
+                "stdout_tail": (out or "")[-500:], "agent": agent,
+                "kill_authority": "none"}
 
 
 # ── commands ────────────────────────────────────────────────────────────
@@ -1072,7 +1130,7 @@ def cmd_dispatch(args):
     # (timeout + 120s) means the open entry cannot belong to a live dispatch
     # of THIS run's budget, so it is marked orphaned in the journal
     # (append-only, never rewritten) and stops re-reporting once acked.
-    journal_ceiling = state["budget"]["timeout_s"] + 120
+    journal_ceiling = state["budget"]["timeout_s"] + WRAPPER_GRACE_S
     orphans = []
     for did, e in sorted(_journal_open(sroot).items()):
         started = _ts_to_epoch(e.get("at"))
@@ -1195,10 +1253,27 @@ def cmd_dispatch(args):
         _drain_payload_progress()
 
     t0 = time.monotonic()
+    # TOOL-036: per-dispatch terminate-request path (uuid-named; the runner
+    # unlinks before spawn as stale-file defense).
+    req_path = str(sroot / f"{dispatch_id}.terminate")
+
+    def _termination(outcome):
+        # TOOL-036: for_dispatch_id, NOT dispatch_id — _journal_open
+        # (:674-685) masks any earlier record sharing dispatch_id, and
+        # dispatch_open must stay visible until dispatch_finished pairs it.
+        _journal_append(sroot, {
+            "event": "dispatch_termination_requested",
+            "for_dispatch_id": dispatch_id,
+            "task_id": state["task_id"],
+            "reason": "delegate_wrapper_timeout",
+            "outcome": outcome,
+        })
+
     envelope = run_delegate(delegate_py, agent, ws, task["prompt"],
                             state["budget"]["timeout_s"],
                             on_heartbeat=_heartbeat, dispatch_id=dispatch_id,
-                            heartbeat_file=str(hb_file))
+                            heartbeat_file=str(hb_file),
+                            request_file=req_path, on_termination=_termination)
     wall = time.monotonic() - t0
     envelope_status = envelope.get("status")
     state["dispatches"].append({
@@ -1208,6 +1283,8 @@ def cmd_dispatch(args):
         "child_home": envelope.get("child_home"),
         # TOOL-035: condition-kill evidence travels with the run record.
         "kill_evidence": envelope.get("kill_evidence"),
+        # TOOL-036: who terminated the payload tree (or "none").
+        "kill_authority": envelope.get("kill_authority"),
         # Which preflight evidence authorised this dispatch, and how old it
         # was — the check previously left no trace at all.
         "preflight_ages_seconds": preflight_ages,
@@ -1231,6 +1308,7 @@ def cmd_dispatch(args):
         "duration_seconds": round(envelope.get("duration_seconds", wall), 3),
         "heartbeats": heartbeat_count[0],
         "kill_evidence": envelope.get("kill_evidence"),
+        "kill_authority": envelope.get("kill_authority"),
         # #105: additive payload-progress summary (existing keys unchanged).
         "payload_heartbeats": progress["count"],
         "payload_heartbeat_status": progress["status"],
@@ -1466,7 +1544,7 @@ def cmd_accept(args):
     # closes the reproduction: accept during a live writer.
     _open = _journal_open(sroot)
     _ceiling = (state.get("budget", {}).get("timeout_s",
-                                            DEFAULT_BUDGET["timeout_s"]) + 120)
+                                            DEFAULT_BUDGET["timeout_s"]) + WRAPPER_GRACE_S)
     _live = sorted(
         did for did, e in _open.items()
         if (_t := _ts_to_epoch(e.get("at"))) is not None
@@ -1767,7 +1845,7 @@ def cmd_status(args):
     seconds_since = (round(now - last_epoch) if last_epoch is not None else None)
 
     open_dispatches = _journal_open(sroot)
-    ceiling = timeout_s + 120
+    ceiling = timeout_s + WRAPPER_GRACE_S
     orphans = sorted(
         did for did, e in open_dispatches.items()
         if (started := _ts_to_epoch(e.get("at"))) is not None

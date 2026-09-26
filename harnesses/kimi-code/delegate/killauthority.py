@@ -62,13 +62,14 @@ KILL_SITES = [
     {
         "site": "runner wrapper-deadline kill",
         "file": "harnesses/kimi-code/runner/runner.py",
-        "classification": "custody_violation_documented",
-        "expected": {"proc_kill": 3},
-        "note": "proc.kill() on the delegate at the wrapper deadline "
-                "(runner.py:891 and :907) reaches into delegate custody; the "
-                "delegate's job close then wipes the worker tree. The third "
-                "match is the #103 design comment at runner.py:874. Task 5 "
-                "removes all three; the runner becomes request/report-only.",
+        "classification": "external_readonly",
+        "expected": {},
+        "must_not_contain": ["proc.kill"],
+        "note": "Read-only since TOOL-036 task 5: past timeout + "
+                "WRAPPER_GRACE_S the runner writes a terminate-request file, "
+                "waits TERMINATION_REQUEST_WAIT_S, and reports the outcome "
+                "(dispatch_termination_requested + kill_authority). It never "
+                "kills the delegate.",
     },
     {
         "site": "pilot runner spawn",

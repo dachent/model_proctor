@@ -32,6 +32,9 @@ def main():
     parser.add_argument("--timeout", type=float, default=None)
     parser.add_argument("--dispatch-id", default=None)
     parser.add_argument("--heartbeat-file", default=None)
+    # TOOL-036: the runner forwards --terminate-request-file verbatim too;
+    # the fake never wedges, so accept and ignore.
+    parser.add_argument("--terminate-request-file", default=None)
     args = parser.parse_args()
 
     write_rel = os.environ.get("FAKE_WORKER_WRITE")

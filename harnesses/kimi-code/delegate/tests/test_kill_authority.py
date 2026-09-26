@@ -72,6 +72,14 @@ class TestKillSiteRegistry(unittest.TestCase):
                         f"and justify in KILL_SITES")
 
 
+    def test_no_custody_violations_remain(self):
+        """TOOL-036 tier-b: no external actor may hold a kill site."""
+        bad = [e["site"] for e in killauthority.KILL_SITES
+               if e["classification"] == "custody_violation_documented"]
+        self.assertEqual(bad, [],
+                         f"external actors still hold kill sites: {bad}")
+
+
 class _Recorder:
     """DI fakes recording every authority action in order."""
 
