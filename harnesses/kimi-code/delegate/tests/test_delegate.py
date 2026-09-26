@@ -398,6 +398,7 @@ _ENVELOPE_KEYS = {
     "acl_warning": bool,
     "job_warning": bool,
     "child_home": (str, type(None)),
+    "child_pid": (int, type(None)),
     "error": (str, type(None)),
     "kill_evidence": (dict, type(None)),
     "kill_authority": str,

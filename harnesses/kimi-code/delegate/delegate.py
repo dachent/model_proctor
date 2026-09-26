@@ -1106,6 +1106,40 @@ def _run_detached_dispatch(agent_name, agent, cfg, argv, workspace, child_env,
             _interrupt_condition = "received KeyboardInterrupt"
 
         if _interrupted.is_set() or timed_out:
+            # TOOL-033 (#104): budget expiry on a detached payload is a
+            # REPORT, never a kill. The payload is WMI-parented outside every
+            # job (TOOL-032), so it outlives this delegate by design; killing
+            # at budget expiry is exactly the measured production harm this
+            # ticket removes. Opt-in only: validation couples report_detached
+            # to allow_breakaway (_validate_agent). Interruption is NOT a
+            # budget event — the interrupted path below still terminates
+            # (operator Ctrl+C / runner request is an explicit kill order).
+            # release(), not terminate(): no kill ran, so the attribution
+            # stays "none".
+            if (timed_out and not _interrupted.is_set()
+                    and agent.get("on_timeout", "kill_tree") == "report_detached"):
+                authority.release()
+                stdout_text, stdout_trunc = _read_log_capped(
+                    spec["stdout_log"], cfg["max_stdout_bytes"])
+                stderr_text, stderr_trunc = _read_log_capped(
+                    spec["stderr_log"], cfg["max_stderr_bytes"])
+                duration = time.monotonic() - start_time
+                result = _make_result(
+                    "payload_running_detached", agent=agent_name,
+                    duration=duration,
+                    stdout_text=stdout_text, stderr_text=stderr_text,
+                    stdout_trunc=stdout_trunc, stderr_trunc=stderr_trunc,
+                    run_dir=run_dir, acl_warning=acl_warning,
+                    child_session_id=extract_child_session_id(
+                        stdout_text, stderr_text),
+                    child_home=child_home,
+                    # Informational: the delegate-known bootstrap pid. Windows
+                    # recycles pids; nothing may kill by this value later.
+                    child_pid=pid,
+                    error="dispatch budget expired; payload detached — "
+                          "reported, not killed",
+                )
+                return result, EXIT_DETACHED
             # KillAuthority with job=None: taskkill /T /F from the
             # bootstrap pid still reaches the payload tree through
             # parent-PID links while the bootstrap is alive.
@@ -1692,7 +1726,7 @@ def _make_result(status, agent=None, child_exit_code=None, duration=None,
                  stdout_log_trunc=False, stderr_log_trunc=False,
                  run_dir=None, acl_warning=False, job_warning=False,
                  child_session_id=None, child_home=None, error=None,
-                 kill_evidence=None, kill_authority="none"):
+                 kill_evidence=None, kill_authority="none", child_pid=None):
     """Build the JSON result envelope."""
     return {
         "schema_version": 1,
@@ -1701,6 +1735,7 @@ def _make_result(status, agent=None, child_exit_code=None, duration=None,
         "child_exit_code": child_exit_code,
         "child_session_id": child_session_id,
         "child_home": child_home,
+        "child_pid": child_pid,
         "duration_seconds": round(duration, 3) if duration is not None else None,
         "stdout": stdout_text,
         "stderr": stderr_text,

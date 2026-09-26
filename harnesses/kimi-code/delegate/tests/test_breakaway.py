@@ -296,6 +296,81 @@ class TestDetachedDispatch(DelegateTestBase):
                          "timeout kill must still reach a detached payload's tree")
 
 
+@unittest.skipUnless(_IS_WINDOWS, "detached budget semantics need WMI (Windows-only)")
+class TestReportDetached(DelegateTestBase):
+    """TOOL-033: budget expiry on a detached payload is reported, never killed.
+
+    Ruling (plan-vs-code reconciliation): since TOOL-032 every breakaway
+    agent launches via WMI (_run_detached_dispatch), so the payload is never
+    inside a Job Object — there is no job close to reap a "direct child".
+    "Never kill" therefore means the payload is ALIVE after the delegate
+    exits; the test pins survival and reaps the payload itself for hygiene.
+    child_pid is the delegate-known bootstrap pid — informational only
+    (Windows recycles pids; nothing may kill by it later).
+    """
+
+    def _sleeper_config(self, script_name, pid_name, on_timeout):
+        sleeper = self._script(script_name, _PID_SLEEPER)
+        pid_file = os.path.join(self.workspace, pid_name)
+        a = make_agent(sleeper, prompt_delivery="argument",
+                       extra_args=[pid_file],
+                       default_timeout=3, minimum_timeout=1,
+                       maximum_timeout=300)
+        a["allow_breakaway"] = True
+        if on_timeout is not None:
+            a["on_timeout"] = on_timeout
+        return self._config({"test-agent": a}), pid_file
+
+    def _reap_payload(self, pid_file):
+        if os.path.exists(pid_file):
+            with open(pid_file) as f:
+                pid = int(f.read().strip())
+            subprocess.run([delegate._TASKKILL_EXE, "/PID", str(pid),
+                            "/T", "/F"],
+                           capture_output=True, timeout=15,
+                           env=delegate._MINIMAL_TOOL_ENV)
+
+    def test_budget_expiry_reports_detached_never_kills(self):
+        cfg, pid_file = self._sleeper_config("det_sleeper", "det_pid.txt",
+                                             "report_detached")
+        t0 = time.monotonic()
+        out, err, rc = self._run("test-agent", task="ignored", config=cfg,
+                                 timeout_wrap=180)
+        wall = time.monotonic() - t0
+        result = self._assert_result(out, err, rc,
+                                     "payload_running_detached", 125)
+        try:
+            self.assertIsNone(result["child_exit_code"])
+            # No kill sequence ran (grace + taskkills would add seconds);
+            # the wall bound is smoke only — WMI cold start dominates. The
+            # load-bearing pins are status/attribution/survival below.
+            self.assertLess(wall, 60)
+            self.assertIsInstance(result["child_pid"], int)
+            self.assertEqual(result["kill_authority"], "none")
+            self.assertIn("reported, not killed", result["error"])
+            with open(pid_file) as f:
+                payload_pid = int(f.read().strip())
+            # The escaped payload is OUTSIDE every job (TOOL-032), so
+            # "reported, never killed" means it is still running after the
+            # delegate exited. Survival here is the fix, not a leak.
+            self.assertTrue(delegate.is_pid_alive(payload_pid),
+                            "detached payload died at budget expiry — the "
+                            "report path must never kill")
+        finally:
+            self._reap_payload(pid_file)
+
+    def test_kill_tree_remains_the_default_with_breakaway(self):
+        # allow_breakaway alone must NOT change timeout behavior — the
+        # on_timeout opt-in is a separate, deliberate config act.
+        cfg, pid_file = self._sleeper_config("kill_sleeper", "kill_pid.txt",
+                                             None)
+        out, err, rc = self._run("test-agent", task="ignored", config=cfg,
+                                 timeout_wrap=180)
+        result = self._assert_result(out, err, rc, "timeout", 124)
+        self.assertIsNone(result["child_pid"])
+        self.assertEqual(result["kill_authority"], "delegate:timeout")
+
+
 @unittest.skipUnless(_IS_WINDOWS, "detached custody is Windows-only")
 class TestDetachedCustodyRegression(DelegateTestBase):
     """#103 regression signature: the runner kills the delegate
