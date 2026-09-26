@@ -637,6 +637,45 @@ def _ts_to_epoch(ts):
         return None
 
 
+def _payload_progress(sroot, open_ids):
+    """#105/#109: payload-emitted progress for open dispatches.
+
+    Monitor-path rule (#109): read ONLY runner-state and payload-emitted
+    files; every failure downgrades to a status string; this function never
+    raises and its output never feeds a kill or refusal. "stale"/"absent" are
+    payload signals; "corrupt"/"unreadable"/"unavailable" and unjudgeable
+    epochs are degraded MEASUREMENT (the bool)."""
+    hb = _heartbeat_module()
+    if hb is None:
+        return {did: {"status": "unavailable"} for did in sorted(open_ids)}, \
+            bool(open_ids)
+    out, degraded = {}, False
+    for did in sorted(open_ids):
+        try:
+            rec, status = hb.read_latest(str(_heartbeat_file(sroot, did)))
+        except Exception:
+            rec, status = None, "unreadable"
+        entry = {"status": status}
+        if rec is not None:
+            entry.update({
+                "stage": rec.get("stage"),
+                "sub_stage": rec.get("sub_stage"),
+                "counters": rec.get("counters") or {},
+                "pid": rec.get("pid"),
+            })
+            epoch = rec.get("epoch")
+            if isinstance(epoch, (int, float)) and not isinstance(epoch, bool):
+                entry["age_seconds"] = round(time.time() - epoch)
+                if hb.is_stale(rec):
+                    entry["status"] = "stale"
+            else:
+                degraded = True  # freshness unjudgeable = degraded measurement
+        if status in ("unreadable", "corrupt"):
+            degraded = True
+        out[did] = entry
+    return out, degraded
+
+
 def _load_state(root):
     p = _state_path(root)
     if not p.is_file():
@@ -1627,6 +1666,8 @@ def cmd_status(args):
         and now - started > ceiling
     )
 
+    progress, progress_degraded = _payload_progress(sroot, open_dispatches)
+
     last_receipt = None
     task_id = state.get("task_id")
     receipt_path = _receipt_path(sroot, task_id) if task_id else None
@@ -1665,6 +1706,12 @@ def cmd_status(args):
         },
         # Back-compat: status used to dump the raw state; tests and leaders
         # read those keys directly, so keep them at top level.
+        # #105/#109: payload-emitted progress for open dispatches. Monitor
+        # path: degradation is reported, never refused on, never killed on.
+        "payload_progress": progress,
+        "measurement_degraded": progress_degraded,
+        "degraded_components": (["payload_progress"]
+                                if progress_degraded else []),
         **state,
     }
     return _emit(out)

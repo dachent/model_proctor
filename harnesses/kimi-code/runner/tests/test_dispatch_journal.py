@@ -283,6 +283,40 @@ class DispatchJournalTest(unittest.TestCase):
         rc, out = run_runner("status", "--workspace", ws)
         self.assertEqual(out["allow_zero_dispatch_count"], 1)
 
+    # ── #105/#109: status surfaces payload progress, degrades, never refuses ──
+    def _open_with_heartbeat(self, hb_text):
+        """Hand-write a fresh open dispatch plus its heartbeat file (the
+        crash-signature idiom from test_orphaned_open_dispatch_is_surfaced)."""
+        ws, task, sdir = self._setup_ready()
+        started = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
+        (sdir / "journal.jsonl").write_text(
+            json.dumps({"journal_seq": 0, "event": "dispatch_open",
+                        "task_id": "t1", "dispatch_id": "live-1",
+                        "dispatch_seq": 0, "agent": "glm-worker",
+                        "timeout_s": 60, "runner_pid": 999999,
+                        "at": started}) + "\n",
+            encoding="utf-8")
+        hb_dir = sdir / "heartbeats"
+        hb_dir.mkdir()
+        (hb_dir / "live-1.jsonl").write_text(hb_text, encoding="utf-8")
+        return ws
+
+    def test_status_reports_payload_progress(self):
+        now = time.time()
+        ws = self._open_with_heartbeat(json.dumps({
+            "v": 1, "ts": time.strftime("%Y-%m-%dT%H:%M:%S",
+                                        time.localtime(now)),
+            "epoch": now, "pid": 4321, "seq": 3, "dispatch_id": "live-1",
+            "stage": "verify", "sub_stage": None,
+            "counters": {"tests_run": 12}}) + "\n")
+        rc, out = run_runner("status", "--workspace", ws)
+        self.assertEqual(rc, 0, out)
+        p = out["payload_progress"]["live-1"]
+        self.assertEqual(p["status"], "ok")
+        self.assertEqual(p["stage"], "verify")
+        self.assertEqual(p["counters"], {"tests_run": 12})
+        self.assertLess(p["age_seconds"], 60)
+        self.assertFalse(out["measurement_degraded"])
         self.assertEqual(out["degraded_components"], [])
 
     def test_status_degrades_on_corrupt_heartbeat(self):
