@@ -57,6 +57,8 @@ EXIT_OK = 0
 EXIT_INVALID = 64
 EXIT_INTERNAL = 70
 EXIT_TIMEOUT = 124
+# Budget expiry on a detached payload: reported, not killed (TOOL-033).
+EXIT_DETACHED = 125
 EXIT_INTERRUPTED = 130
 
 # ---------------------------------------------------------------------------
@@ -414,6 +416,7 @@ def resolve_model_agent(cfg, model_id, write):
         agent["resume_args"] = [tok.replace("{model}", model_id)
                                 for tok in agent["resume_args"]]
     agent["allow_breakaway"] = False
+    agent["on_timeout"] = "kill_tree"
     agent["write_allowed"] = bool(write)
     return agent
 
@@ -498,6 +501,12 @@ def _validate_config(cfg, cfg_path):
             raise ConfigError(
                 "model_dispatch_template.command must contain a {model} "
                 "placeholder token")
+        # TOOL-033: checked before the allow_breakaway guard so the error
+        # names the knob that must not appear here, whichever is set.
+        if tpl.get("on_timeout", "kill_tree") != "kill_tree":
+            raise ConfigError(
+                "model_dispatch_template.on_timeout must be 'kill_tree' "
+                "(model-mode dispatch always owns its payload's lifetime)")
         if tpl.get("allow_breakaway"):
             raise ConfigError(
                 "model_dispatch_template.allow_breakaway must be false "
@@ -596,6 +605,21 @@ def _validate_agent(name, agent, global_max_timeout, check_executable=False):
             f"Agent '{name}': allow_breakaway requires prompt_delivery "
             f"'argument' or 'file' — detached WMI launch (TOOL-032) cannot "
             f"pipe stdin to a process parented outside the job")
+    # on_timeout (TOOL-033) — budget-phase semantics. "kill_tree" (default)
+    # preserves the legacy everything-dies-with-the-dispatch guarantee.
+    # "report_detached" turns budget expiry into a report instead of a kill;
+    # it is only coherent for breakaway-capable agents — without
+    # allow_breakaway nothing can outlive the job, so the report would lie.
+    ot = agent.get("on_timeout", "kill_tree")
+    if ot not in ("kill_tree", "report_detached"):
+        raise ConfigError(
+            f"Agent '{name}': on_timeout must be 'kill_tree' or "
+            f"'report_detached', not {ot!r}")
+    if ot == "report_detached" and not ab:
+        raise ConfigError(
+            f"Agent '{name}': on_timeout 'report_detached' requires "
+            "allow_breakaway: true (without breakaway no payload can "
+            "outlive the job, so the detached report would be a lie)")
     # resume_args — optional argv template for session resume (e.g. kimi's
     # ["-r", "{session_id}"]).  Exactly one element must contain the
     # placeholder.  Missing field = the agent does not support resume.

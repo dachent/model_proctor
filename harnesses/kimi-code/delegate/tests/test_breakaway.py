@@ -78,6 +78,72 @@ class TestBreakawayValidation(DelegateTestBase):
         self.assertIn("prompt_delivery", result["error"])
 
 
+class TestOnTimeoutValidation(DelegateTestBase):
+    """TOOL-033: on_timeout is typed, valued, and coupled to breakaway."""
+
+    def _agent_with(self, on_timeout, allow_breakaway):
+        # prompt_delivery="argument": WMI-detached launch (TOOL-032) cannot
+        # pipe stdin, so breakaway+stdin is refused for a different reason —
+        # keep this helper exercising the on_timeout rules only.
+        a = make_agent(self.echo_script, prompt_delivery="argument")
+        a["on_timeout"] = on_timeout
+        a["allow_breakaway"] = allow_breakaway
+        return self._config({"test-agent": a})
+
+    def test_bad_value_rejected(self):
+        for bad in ("detach", True, 1, None, ""):
+            with self.subTest(value=bad):
+                cfg = self._agent_with(bad, True)
+                out, err, rc = self._run("test-agent", task="hello", config=cfg)
+                self._assert_result(out, err, rc, "invalid", 64)
+
+    def test_report_detached_requires_breakaway(self):
+        cfg = self._agent_with("report_detached", False)
+        out, err, rc = self._run("test-agent", task="hello", config=cfg)
+        self._assert_result(out, err, rc, "invalid", 64)
+
+    @unittest.skipUnless(_IS_WINDOWS, "breakaway dispatch requires WMI (Windows-only)")
+    def test_report_detached_with_breakaway_accepted(self):
+        cfg = self._agent_with("report_detached", True)
+        out, err, rc = self._run("test-agent", task="hello", config=cfg)
+        self._assert_result(out, err, rc, "completed", 0)
+
+    def test_absent_defaults_to_kill_tree(self):
+        cfg = self._config({"test-agent": make_agent(self.echo_script)})
+        out, err, rc = self._run("test-agent", task="hello", config=cfg)
+        self._assert_result(out, err, rc, "completed", 0)
+
+
+class TestOnTimeoutTemplateGuard(DelegateTestBase):
+    """Model-mode dispatch always owns its payload's lifetime."""
+
+    def _template(self):
+        # Model-mode templates are argument-delivered (agents.example.json);
+        # stdin would trip the TOOL-032 breakaway/stdin rule instead of the
+        # on_timeout guards under test.
+        tpl = make_agent(self.echo_script, prompt_delivery="argument")
+        tpl["command"] = [sys.executable, "-m", "{model}", "-p"]
+        return tpl
+
+    def test_template_report_detached_rejected(self):
+        tpl = self._template()
+        tpl["allow_breakaway"] = True   # reach the template guard, not the
+        tpl["on_timeout"] = "report_detached"  # agent-level coupling refusal
+        cfg = self._config({"test-agent": make_agent(self.echo_script)},
+                           extra={"model_dispatch_template": tpl})
+        out, err, rc = self._run("test-agent", task="hello", config=cfg)
+        result = self._assert_result(out, err, rc, "invalid", 64)
+        self.assertIn("on_timeout", result["error"])
+
+    def test_resolve_model_agent_forces_kill_tree(self):
+        tpl = self._template()
+        tpl["allow_breakaway"] = False
+        agent = delegate.resolve_model_agent(
+            {"model_dispatch_template": tpl}, "vendor/model-x", write=False)
+        self.assertEqual(agent["on_timeout"], "kill_tree")
+        self.assertFalse(agent["allow_breakaway"])
+
+
 @unittest.skipUnless(_IS_WINDOWS, "Job Objects are Windows-only")
 class TestBreakawayJobFlags(unittest.TestCase):
     """create_kill_on_close_job composes LimitFlags correctly.

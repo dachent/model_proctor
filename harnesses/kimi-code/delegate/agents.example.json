@@ -33,7 +33,8 @@
     "environment": {},
     "required_environment": [],
     "write_allowed": false,
-    "allow_breakaway": false
+    "allow_breakaway": false,
+    "on_timeout": "kill_tree"
   },
   "agents": {
     "example-coder": {
@@ -61,7 +62,8 @@
         "EXAMPLE_API_KEY"
       ],
       "write_allowed": false,
-      "allow_breakaway": false
+      "allow_breakaway": false,
+      "on_timeout": "kill_tree"
     },
     "example-reviewer": {
       "command": [
