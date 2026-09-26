@@ -129,5 +129,43 @@ class ReadLatestTest(HeartbeatTestBase):
         self.assertIsNone(heartbeat.is_stale(None))
 
 
+from test_delegate import DelegateTestBase, make_agent  # noqa: E402
+
+_ENV_DUMP = (
+    "import os, pathlib\n"
+    "pathlib.Path('env_dump.txt').write_text(\n"
+    "    (os.environ.get('DELEGATE_HEARTBEAT_PATH') or '<absent>') + '\\n' +\n"
+    "    (os.environ.get('DELEGATE_DISPATCH_ID') or '<absent>'),\n"
+    "    encoding='utf-8')\n"
+)
+
+
+class TestHeartbeatEnvInjection(DelegateTestBase):
+    """#105: the delegate injects the heartbeat side-channel coordinates
+    into the child env when (and only when) the runner passes the flags."""
+
+    def setUp(self):
+        super().setUp()
+        dump_script = self._script("env_dump", _ENV_DUMP)
+        self.config_path = self._config({"test-agent": make_agent(dump_script)})
+
+    def test_heartbeat_env_injected_when_flags_passed(self):
+        hb = str(Path(self.tmpdir) / "hb.jsonl")
+        out, err, rc = self._run("test-agent", task="hello",
+                                 extra_argv=["--heartbeat-file", hb,
+                                             "--dispatch-id", "d-42"])
+        self._assert_result(out, err, rc, "completed", 0)
+        dumped = (Path(self.workspace) / "env_dump.txt").read_text(
+            encoding="utf-8").splitlines()
+        self.assertEqual(dumped, [hb, "d-42"])
+
+    def test_no_flags_no_env(self):
+        out, err, rc = self._run("test-agent", task="hello")
+        self._assert_result(out, err, rc, "completed", 0)
+        dumped = (Path(self.workspace) / "env_dump.txt").read_text(
+            encoding="utf-8").splitlines()
+        self.assertEqual(dumped, ["<absent>", "<absent>"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1376,6 +1376,15 @@ def _run_delegate_inner(args, start_time, agent_name):
     # delegate refuses --model/--write spawns (checked at entry above).
     child_env[_CHILD_MARKER] = "1"
 
+    # #105 (TOOL-034): payload progress side channel. INJECTED like the
+    # nesting marker and KIMI_CODE_HOME above — the agent allowlist governs
+    # inheritance, not wrapper invariants. No flag -> no variable -> the
+    # payload simply never emits, which readers report as "absent".
+    if getattr(args, "heartbeat_file", None):
+        child_env["DELEGATE_HEARTBEAT_PATH"] = args.heartbeat_file
+    if getattr(args, "dispatch_id", None):
+        child_env["DELEGATE_DISPATCH_ID"] = args.dispatch_id
+
     # Create run directory
     run_dir, acl_warning = create_run_dir()
 
@@ -1711,6 +1720,12 @@ def main():
     parser.add_argument("--resume-from", dest="resume_from", default=None,
                         help="Resume the child CLI session with this id "
                              "(requires resume_args in the agent config)")
+    parser.add_argument("--dispatch-id", dest="dispatch_id", default=None,
+                        help="Runner-minted dispatch id (#105); injected into "
+                             "the child environment for heartbeat correlation")
+    parser.add_argument("--heartbeat-file", dest="heartbeat_file", default=None,
+                        help="Path the payload appends progress heartbeats to "
+                             "(#105); injected as DELEGATE_HEARTBEAT_PATH")
 
     try:
         args = parser.parse_args()

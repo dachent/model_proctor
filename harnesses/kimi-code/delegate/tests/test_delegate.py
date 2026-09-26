@@ -277,7 +277,8 @@ def make_agent(script_path, prompt_delivery="stdin", **kw):
 
 
 def run_delegate(agent, workspace, task=None, task_file=None, timeout=None,
-                 config_path=None, timeout_wrap=120, resume_from=None):
+                 config_path=None, timeout_wrap=120, resume_from=None,
+                 extra_argv=()):
     argv = [sys.executable, str(_DELEGATE_DIR / "delegate.py"),
             "--agent", agent, "--workspace", workspace]
     if task is not None:
@@ -288,6 +289,7 @@ def run_delegate(agent, workspace, task=None, task_file=None, timeout=None,
         argv += ["--timeout", str(timeout)]
     if resume_from is not None:
         argv += ["--resume-from", resume_from]
+    argv += list(extra_argv)
     env = dict(os.environ)
     if config_path:
         env["DELEGATE_CONFIG"] = config_path
@@ -376,12 +378,13 @@ class DelegateTestBase(unittest.TestCase):
         return make_agents_json(self.tmpdir, agents, roots, extra)
 
     def _run(self, agent, ws=None, task=None, task_file=None, timeout=None, config=None,
-             timeout_wrap=120, resume_from=None):
+             timeout_wrap=120, resume_from=None, extra_argv=()):
         return run_delegate(
             agent, ws or self.workspace,
             task=task, task_file=task_file, timeout=timeout,
             config_path=config or self.config_path,
             timeout_wrap=timeout_wrap, resume_from=resume_from,
+            extra_argv=extra_argv,
         )
 
     def _assert_result(self, out, err, rc, expected_status, expected_rc=None):
