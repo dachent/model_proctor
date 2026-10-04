@@ -912,8 +912,8 @@ _HOME_SEED_FILES = ("config.toml", "device_id", "region")
 _HOME_SEED_DIRS = ("credentials",)
 
 
-def create_isolated_home():
-    """Create a per-dispatch isolated KIMI_CODE_HOME. Returns the path, or None
+def create_isolated_home(path=None):
+    """Create an isolated KIMI_CODE_HOME. Returns the path, or None
     when isolation is disabled (DELEGATE_NO_HOME_ISOLATION=1).
 
     Kimi Code CLI auto-registers every CWD it runs in as a workspace and writes
@@ -926,12 +926,22 @@ def create_isolated_home():
     metering live under <home>/sessions/, so delegate never deletes it;
     callers remove it after metering (see runner/pilot.py) and orphaned
     delegate-kimi-home-* dirs are swept by the caller side.
-    """
+
+    Resume-handoff (owner directive 2026-09-30): when ``path`` is given, that
+    existing home is REUSED as-is (no re-seed) so the child sessions persist
+    across the task's dispatches and --resume-from can find them. The caller
+    owns its lifecycle."""
     if os.environ.get("DELEGATE_NO_HOME_ISOLATION"):
         return None
     src = os.environ.get("KIMI_CODE_HOME") or os.path.join(
         os.environ.get("USERPROFILE", str(Path.home())), ".kimi-code")
-    home = tempfile.mkdtemp(prefix="delegate-kimi-home-")
+    if path:
+        os.makedirs(path, exist_ok=True)
+        home = path
+        if any(os.scandir(home)):
+            return home  # existing home: reuse, keep its session store
+    else:
+        home = tempfile.mkdtemp(prefix="delegate-kimi-home-")
     for name in _HOME_SEED_FILES:
         s = os.path.join(src, name)
         if os.path.isfile(s):
@@ -1524,7 +1534,7 @@ def _run_delegate_inner(args, start_time, agent_name):
     child_env = build_child_environment(agent)
     # Per-dispatch isolated KIMI_CODE_HOME (TOOL-013). Injected directly by the
     # parent — the agent allowlist governs inheritance, not wrapper invariants.
-    child_home = create_isolated_home()
+    child_home = create_isolated_home(args.child_home)
     if child_home is not None:
         child_env["KIMI_CODE_HOME"] = child_home
     # #96 (QC E4): the nesting marker is INJECTED, never inherited — the
@@ -1915,6 +1925,8 @@ def main():
     parser.add_argument("--resume-from", dest="resume_from", default=None,
                         help="Resume the child CLI session with this id "
                              "(requires resume_args in the agent config)")
+    parser.add_argument("--child-home", dest="child_home", default=None,
+                        help="Reuse an existing isolated home (the resume-handoff: sessions persist across dispatches)")
     parser.add_argument("--dispatch-id", dest="dispatch_id", default=None,
                         help="Runner-minted dispatch id (#105); injected into "
                              "the child environment for heartbeat correlation")

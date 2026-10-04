@@ -918,6 +918,7 @@ def _request_termination(proc, request_file, wait_s):
 
 
 def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None,
+                 resume_from=None, child_home=None,
                  dispatch_id=None, heartbeat_file=None,
                  request_file=None, on_termination=None):
     """One worker attempt through the delegate wrapper. Returns the envelope.
@@ -939,7 +940,14 @@ def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None,
     unresolved_reported. The runner never kills the delegate.
     #105: dispatch_id/heartbeat_file wire the payload progress side channel;
     both are forwarded verbatim and the heartbeat file is drained by the
-    caller's on_heartbeat."""
+    caller's on_heartbeat.
+
+    Opt-in resume-handoff (owner directive 2026-09-30): when resume_from
+    carries a prior dispatch's child_session_id, the delegate is invoked
+    with --resume-from so the worker continues its own session — context
+    survives the dispatch caps. When child_home is set, the delegate reuses
+    that isolated home so the session store persists across dispatches.
+    Nothing changes when either is None."""
     # #108: the margin defaults to the sizing authority's derived breaker
     # margin; MP_WRAPPER_GRACE_S shrinks it only for hermetic tests.
     wrapper_grace = float(os.environ.get(
@@ -954,6 +962,10 @@ def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None,
     try:
         cmd = [sys.executable, delegate_py, "--agent", agent, "--workspace", str(ws),
                "--task-file", task_file, "--timeout", str(timeout_s)]
+        if resume_from:
+            cmd += ["--resume-from", resume_from]
+        if child_home:
+            cmd += ["--child-home", child_home]
         # #105: forwarded verbatim; the delegate injects them into the child
         # env. Whatever --delegate names must tolerate these two flags.
         if heartbeat_file is not None:
@@ -968,12 +980,6 @@ def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None,
             except OSError:
                 pass
             cmd += ["--terminate-request-file", request_file]
-        # No job object on the delegate, deliberately (#103): for contained
-        # workers the delegate's own KILL_ON_JOB_CLOSE job must collapse when
-        # this delegate dies — from any cause — and a runner-side job would
-        # nest, not protect. For allow_breakaway workers the payload is
-        # WMI-detached inside the delegate (TOOL-032) and never enters any
-        # job this process could close.
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 text=True)
     except OSError:
@@ -1323,11 +1329,36 @@ def cmd_dispatch(args):
             "outcome": outcome,
         })
 
+    # Opt-in resume-handoff (owner directive 2026-09-30): a task file that
+    # declares "resume": true makes dispatch #2+ continue the prior child
+    # session (its recorded child_session_id), so worker context survives
+    # the dispatch caps. Every task without the flag is unchanged.
+    resume_from = None
+    child_home = None
+    if task.get("resume"):
+        child_home = os.path.join(sroot, "child-home")
+        try:
+            journal_path = os.path.join(sroot, "journal.jsonl")
+            with open(journal_path, encoding="utf-8") as jf:
+                for line in reversed(jf.readlines()[-5000:]):
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if (rec.get("event") == "dispatch_finished"
+                            and rec.get("child_session_id")
+                            and rec.get("task_id") == state["task_id"]
+                            and rec.get("child_home") == child_home):
+                        resume_from = rec["child_session_id"]
+                        break
+        except OSError:
+            resume_from = None
     envelope = run_delegate(delegate_py, agent, ws, task["prompt"],
                             state["budget"]["timeout_s"],
                             on_heartbeat=_heartbeat, dispatch_id=dispatch_id,
                             heartbeat_file=str(hb_file),
-                            request_file=req_path, on_termination=_termination)
+                            request_file=req_path, on_termination=_termination,
+                            resume_from=resume_from, child_home=child_home)
     wall = time.monotonic() - t0
     envelope_status = envelope.get("status")
     # TOOL-033: a detached report is a custody state, not a failure — it must
@@ -1366,8 +1397,10 @@ def cmd_dispatch(args):
         "task_id": state["task_id"], "dispatch_seq": dispatch_seq,
         "agent": agent, "envelope_status": envelope_status,
         "detached": detached,
-        "duration_seconds": round(envelope.get("duration_seconds", wall), 3),
+        "duration_seconds": round(envelope.get("duration_seconds") or wall, 3),
         "heartbeats": heartbeat_count[0],
+        "child_session_id": envelope.get("child_session_id"),
+        "child_home": envelope.get("child_home"),
         "kill_evidence": envelope.get("kill_evidence"),
         "kill_authority": envelope.get("kill_authority"),
         # #105: additive payload-progress summary (existing keys unchanged).
