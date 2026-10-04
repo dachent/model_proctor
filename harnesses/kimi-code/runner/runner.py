@@ -1055,6 +1055,7 @@ def cmd_dispatch(args):
         "agent": agent, "envelope_status": envelope_status,
         "duration_seconds": round(envelope.get("duration_seconds", wall), 3),
         "heartbeats": heartbeat_count[0],
+        "child_session_id": envelope.get("child_session_id"),
     })
     cls, rec = classify_and_recommend(state, state["lane"])
     return _emit({
