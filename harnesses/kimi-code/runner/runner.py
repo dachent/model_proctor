@@ -1060,7 +1060,7 @@ def cmd_dispatch(args):
         "event": "dispatch_finished", "dispatch_id": dispatch_id,
         "task_id": state["task_id"], "dispatch_seq": dispatch_seq,
         "agent": agent, "envelope_status": envelope_status,
-        "duration_seconds": round(envelope.get("duration_seconds", wall), 3),
+        "duration_seconds": round(envelope.get("duration_seconds") or wall, 3),
         "heartbeats": heartbeat_count[0],
         "child_session_id": envelope.get("child_session_id"),
     })
