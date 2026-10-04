@@ -168,6 +168,43 @@ class DispatchJournalTest(unittest.TestCase):
         rc, out = run_runner("status", "--workspace", ws)
         self.assertEqual(out["orphaned_dispatch_ids"], [], out)
 
+    # ── #105: payload-emitted progress lands in the journal ──────────────
+    def test_payload_heartbeat_is_journaled(self):
+        # FAKE_WORKER_SLEEP=11 spans one 10s runner heartbeat tick, so the
+        # dispatch-loop drain fires mid-run; the final drain dedupes.
+        # (One ~11s test; the honest cost of exercising the real poll loop.)
+        ws, task, sdir = self._setup_ready()
+        env = {"FAKE_WORKER_HEARTBEAT": "1", "FAKE_WORKER_SLEEP": "11"}
+        rc, out = run_runner("dispatch", "--workspace", ws, "--task", task,
+                             "--delegate", str(FAKE_WORKER), env_extra=env)
+        self.assertEqual(rc, 0, out)
+        prog = [e for e in journal_lines(sdir)
+                if e["event"] == "dispatch_progress"]
+        self.assertTrue(prog, "expected dispatch_progress records")
+        self.assertEqual(prog[0]["stage"], "intake")
+        stages = {e["stage"] for e in prog}
+        self.assertEqual(stages, {"intake", "implement"})
+        fin = [e for e in journal_lines(sdir)
+               if e["event"] == "dispatch_finished"]
+        self.assertEqual(fin[0]["payload_heartbeats"], len(prog))
+        self.assertEqual(fin[0]["payload_heartbeat_status"], "ok")
+        # Runner-generated heartbeats are untouched (the liveness floor).
+        beats = [e for e in journal_lines(sdir)
+                 if e["event"] == "dispatch_heartbeat"]
+        self.assertTrue(beats, "runner heartbeat cadence must not regress")
+
+    def test_payload_heartbeat_absent_means_no_data(self):
+        ws, task, sdir = self._setup_ready()
+        rc, out = run_runner("dispatch", "--workspace", ws, "--task", task,
+                             "--delegate", str(FAKE_WORKER))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual([e for e in journal_lines(sdir)
+                          if e["event"] == "dispatch_progress"], [])
+        fin = [e for e in journal_lines(sdir)
+               if e["event"] == "dispatch_finished"]
+        self.assertEqual(fin[0]["payload_heartbeats"], 0)
+        self.assertEqual(fin[0]["payload_heartbeat_status"], "absent")
+
     # ── A1: a torn trailing line is reported, never fatal ───────────────
     def test_torn_tail_reported_not_fatal(self):
         ws, task, sdir = self._setup_ready()
@@ -189,6 +226,46 @@ class DispatchJournalTest(unittest.TestCase):
                   if e["event"].startswith("dispatch")]
         self.assertEqual(events, ["dispatch_open", "dispatch_finished"])
         self.assertEqual(journal_lines(sdir)[-1]["envelope_status"], "timeout")
+
+    # ── TOOL-035: kill evidence rides the journal, state, and status ────
+    def test_kill_evidence_propagates_to_journal_state_and_status(self):
+        ws, task, sdir = self._setup_ready()
+        evidence = {"schema_version": 1, "kill_reason": "condition_met_stall",
+                    "predicate": {"heartbeat_stale": True,
+                                  "progress_flat": True,
+                                  "stacks_identical": True,
+                                  "abstain": None},
+                    "stack_captures": [{"seq": 1, "ok": True,
+                                        "signature": "aaa"},
+                                       {"seq": 2, "ok": True,
+                                        "signature": "aaa"}],
+                    "extensions_used": 0}
+        env = {"FAKE_WORKER_MODE": "timeout",
+               "FAKE_WORKER_KILL_EVIDENCE": json.dumps(evidence)}
+        rc, out = run_runner("dispatch", "--workspace", ws, "--task", task,
+                             "--delegate", str(FAKE_WORKER), env_extra=env)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(out["envelope_status"], "timeout")
+        finished = [e for e in journal_lines(sdir)
+                    if e["event"] == "dispatch_finished"]
+        self.assertEqual(finished[-1]["kill_evidence"]["kill_reason"],
+                         "condition_met_stall")
+        rc, out = run_runner("status", "--workspace", ws)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(out["last_kill_evidence"]["kill_reason"],
+                         "condition_met_stall")
+
+    def test_dispatch_without_kill_evidence_journals_null(self):
+        ws, task, sdir = self._setup_ready()
+        rc, out = run_runner("dispatch", "--workspace", ws, "--task", task,
+                             "--delegate", str(FAKE_WORKER))
+        self.assertEqual(rc, 0, out)
+        finished = [e for e in journal_lines(sdir)
+                    if e["event"] == "dispatch_finished"]
+        self.assertIn("kill_evidence", finished[-1])
+        self.assertIsNone(finished[-1]["kill_evidence"])
+        rc, out = run_runner("status", "--workspace", ws)
+        self.assertIsNone(out["last_kill_evidence"])
 
     # ── C2: status is a one-shot dead-run detector ──────────────────────
     def test_status_stall_detector(self):
@@ -245,6 +322,64 @@ class DispatchJournalTest(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         rc, out = run_runner("status", "--workspace", ws)
         self.assertEqual(out["allow_zero_dispatch_count"], 1)
+
+    # ── #105/#109: status surfaces payload progress, degrades, never refuses ──
+    def _open_with_heartbeat(self, hb_text):
+        """Hand-write a fresh open dispatch plus its heartbeat file (the
+        crash-signature idiom from test_orphaned_open_dispatch_is_surfaced)."""
+        ws, task, sdir = self._setup_ready()
+        started = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
+        (sdir / "journal.jsonl").write_text(
+            json.dumps({"journal_seq": 0, "event": "dispatch_open",
+                        "task_id": "t1", "dispatch_id": "live-1",
+                        "dispatch_seq": 0, "agent": "glm-worker",
+                        "timeout_s": 60, "runner_pid": 999999,
+                        "at": started}) + "\n",
+            encoding="utf-8")
+        hb_dir = sdir / "heartbeats"
+        hb_dir.mkdir()
+        (hb_dir / "live-1.jsonl").write_text(hb_text, encoding="utf-8")
+        return ws
+
+    def test_status_reports_payload_progress(self):
+        now = time.time()
+        ws = self._open_with_heartbeat(json.dumps({
+            "v": 1, "ts": time.strftime("%Y-%m-%dT%H:%M:%S",
+                                        time.localtime(now)),
+            "epoch": now, "pid": 4321, "seq": 3, "dispatch_id": "live-1",
+            "stage": "verify", "sub_stage": None,
+            "counters": {"tests_run": 12}}) + "\n")
+        rc, out = run_runner("status", "--workspace", ws)
+        self.assertEqual(rc, 0, out)
+        p = out["payload_progress"]["live-1"]
+        self.assertEqual(p["status"], "ok")
+        self.assertEqual(p["stage"], "verify")
+        self.assertEqual(p["counters"], {"tests_run": 12})
+        self.assertLess(p["age_seconds"], 60)
+        self.assertFalse(out["measurement_degraded"])
+        self.assertEqual(out["degraded_components"], [])
+
+    def test_status_degrades_on_corrupt_heartbeat(self):
+        ws = self._open_with_heartbeat('garbage\n{"v":1\n')
+        rc, out = run_runner("status", "--workspace", ws)
+        # Abstain + report: exit 0, verdict present, degradation named.
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(out["payload_progress"]["live-1"]["status"], "corrupt")
+        self.assertTrue(out["measurement_degraded"])
+        self.assertIn("payload_progress", out["degraded_components"])
+
+    def test_status_reports_stale_payload_without_killing_verdict(self):
+        old = time.time() - 3600
+        ws = self._open_with_heartbeat(json.dumps({
+            "v": 1, "ts": time.strftime("%Y-%m-%dT%H:%M:%S",
+                                        time.localtime(old)),
+            "epoch": old, "pid": 4321, "seq": 1, "dispatch_id": "live-1",
+            "stage": "implement", "sub_stage": None, "counters": {}}) + "\n")
+        rc, out = run_runner("status", "--workspace", ws)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(out["payload_progress"]["live-1"]["status"], "stale")
+        # Silence is a reported signal, NOT broken measurement and NOT death.
+        self.assertFalse(out["measurement_degraded"])
 
 
 if __name__ == "__main__":

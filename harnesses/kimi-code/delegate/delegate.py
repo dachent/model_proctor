@@ -16,6 +16,14 @@ Windows has no POSIX SIGTERM.
 
 Actual wall-clock ceiling ≈ timeout + default_kill_grace_seconds + overhead
 (taskkill invocations, proc.wait, reader joins) ≈ timeout + grace + ~30 s.
+The margin constants behind this estimate live in core/timeout_stack.py
+(#108) — that module is the sizing authority; update it, not this prose.
+With stall_guard enabled (TOOL-035) the deadline is a documented backstop
+that triggers the evidence ladder instead of an immediate kill; add up to
+stall_guard.MAX_ADDED_SECONDS (60 s) for the ladder, whose headroom lives
+in the runner's post-breaker termination-request window (TOOL-036). Config
+validation keeps the total inside the runner's derived wrapper deadline
+(timeout_stack.runner_breaker_s).
 """
 
 import argparse
@@ -31,6 +39,9 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+
+import stall_guard  # TOOL-035 (#106): condition-based kill predicate
+import killauthority  # TOOL-036 (#107): single kill authority + KILL_SITES registry
 
 # ---------------------------------------------------------------------------
 # Platform guard
@@ -50,6 +61,8 @@ EXIT_OK = 0
 EXIT_INVALID = 64
 EXIT_INTERNAL = 70
 EXIT_TIMEOUT = 124
+# Budget expiry on a detached payload: reported, not killed (TOOL-033).
+EXIT_DETACHED = 125
 EXIT_INTERRUPTED = 130
 
 # ---------------------------------------------------------------------------
@@ -78,6 +91,8 @@ def _resolve_system_tool(name):
 
 _TASKKILL_EXE = _resolve_system_tool("taskkill.exe") if _IS_WINDOWS else "taskkill"
 _ICACLS_EXE = _resolve_system_tool("icacls.exe") if _IS_WINDOWS else "icacls"
+_POWERSHELL_EXE = (_resolve_system_tool(os.path.join("WindowsPowerShell", "v1.0", "powershell.exe"))
+                   if _IS_WINDOWS else "powershell")
 
 _MINIMAL_TOOL_ENV = None
 if _IS_WINDOWS:
@@ -97,13 +112,17 @@ if _IS_WINDOWS:
     # worker exit.
     #
     # Timeout kills remain effective for descendants still reachable through
-    # parent-PID links, because kill_process_tree force-taskkill /T /F's them
-    # before closing the job. RESIDUAL: that reachability is exactly what
+    # parent-PID links, because KillAuthority.terminate force-taskkills /T /F
+    # them before closing the job. RESIDUAL: that reachability is exactly what
     # breakaway is bought to remove. A process that escaped the job AND whose
     # intermediate parent has already exited is in neither the job nor the /T
     # walk, so a timeout kill will not reach it — surviving the run is the
     # feature, and outliving a timeout is its cost. Enable per agent only
     # where an orphaned pipeline is preferable to a killed one.
+    # TOOL-032 (#103): for allow_breakaway agents the delegate now launches
+    # the worker via WMI (wmi_spawn_detached) entirely outside the job; this
+    # flag remains only as the composition primitive tested by
+    # test_breakaway.py.
     _JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x0400
     _JobObjectExtendedLimitInformation = 9
     _PROCESS_SET_QUOTA = 0x0100
@@ -174,6 +193,8 @@ if _IS_WINDOWS:
     # fail, keeping all descendants inside the kill-on-close boundary (legacy
     # guarantee). With the flag set, detached grandchildren survive worker exit —
     # required for workers that launch supervised long-running pipelines.
+    # Detached-payload agents (allow_breakaway) no longer pass through here —
+    # see _run_detached_dispatch.
     def create_kill_on_close_job(allow_breakaway=False):
         """Create a Job Object that kills all assigned processes when the handle closes."""
         job = _k32.CreateJobObjectW(None, None)
@@ -226,6 +247,44 @@ if _IS_WINDOWS:
         _k32.CloseHandle(handle)
         return True
 
+    _SYNCHRONIZE = 0x00100000
+
+    _k32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    _k32.WaitForSingleObject.restype = wintypes.DWORD
+
+    _k32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    _k32.GetExitCodeProcess.restype = wintypes.BOOL
+
+    def open_waitable_process(pid):
+        """Open a SYNCHRONIZE|query handle on pid. Raises CustodyError if it cannot.
+
+        The CustodyError carries .winerror. ERROR_INVALID_PARAMETER (87) means
+        the pid no longer exists — the spawned process died before custody was
+        established, so nothing is running and a respawn abandons no payload.
+        Any other error (e.g. ERROR_ACCESS_DENIED on a live process) must NOT
+        be retried: a second spawn would strand the first payload outside
+        every custody.
+        """
+        handle = _k32.OpenProcess(
+            _SYNCHRONIZE | _PROCESS_QUERY_LIMIT_INFORMATION, False, pid)
+        if not handle:
+            err = ctypes.get_last_error()
+            exc = CustodyError(
+                f"OpenProcess({pid}) failed: {ctypes.WinError(err)}")
+            exc.winerror = err
+            raise exc
+        return handle
+
+    def reap_handle(handle, timeout_ms):
+        """Wait up to timeout_ms for the process. Returns its exit code, or None if still running."""
+        if _k32.WaitForSingleObject(handle, timeout_ms) != 0:  # WAIT_OBJECT_0
+            return None
+        code = wintypes.DWORD(0)
+        if not _k32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            raise CustodyError(
+                f"GetExitCodeProcess failed: {ctypes.WinError(ctypes.get_last_error())}")
+        return code.value
+
 
 # ---------------------------------------------------------------------------
 # Configuration loading and validation
@@ -233,6 +292,15 @@ if _IS_WINDOWS:
 
 class ConfigError(Exception):
     """Raised when configuration is invalid."""
+
+
+class CustodyError(Exception):
+    """Raised when detached-payload custody cannot be established or verified.
+
+    Distinct from ConfigError/InputError: custody failures are runtime launch
+    failures and map to an internal_error envelope, never to a silent fallback
+    into the kill-on-close job (TOOL-032, #103).
+    """
 
 
 # Placeholder substituted with the session id inside an agent's resume_args.
@@ -363,6 +431,7 @@ def resolve_model_agent(cfg, model_id, write):
         agent["resume_args"] = [tok.replace("{model}", model_id)
                                 for tok in agent["resume_args"]]
     agent["allow_breakaway"] = False
+    agent["on_timeout"] = "kill_tree"
     agent["write_allowed"] = bool(write)
     return agent
 
@@ -387,6 +456,58 @@ def load_config():
     return cfg
 
 
+def _print_timeout_knobs():
+    """#108: emit this delegate's resolved timeout knobs as JSON on stdout.
+
+    Discovery companion for `runner.py timeouts`: the runner owns the stack
+    report, but the delegate owns its config, so it reports its own knobs.
+    A config that fails validation is still reported (knobs_valid: false)
+    so the caller can name the violation instead of crashing on it.
+    """
+    path = None
+    try:
+        path = _resolve_config_path()
+        cfg = load_config()
+        valid, error = True, None
+    except ConfigError as e:
+        valid, error = False, str(e)
+        try:
+            cfg = json.loads(path.read_text(encoding="utf-8")) if path else {}
+        except Exception:
+            cfg = {}
+    out = {
+        "knobs_valid": valid,
+        "config_path": str(path) if path is not None else None,
+        "max_timeout_seconds": cfg.get("max_timeout_seconds"),
+        "default_kill_grace_seconds": cfg.get("default_kill_grace_seconds"),
+        "agents": {name: {k: a.get(k) for k in
+                          ("default_timeout", "minimum_timeout",
+                           "maximum_timeout")}
+                   for name, a in (cfg.get("agents") or {}).items()
+                   if isinstance(a, dict)},
+    }
+    # TOOL-035/037: the stall_guard ladder adds up to worst_case_added_s past
+    # the wall-clock deadline; the runner composes this into its timeouts
+    # report, whose +120 breaker alone does not cover the +150 worst case.
+    sg_block = cfg.get("stall_guard")
+    sg_out = {"configured": sg_block is not None, "enabled": False,
+              "worst_case_added_s": 0.0,
+              "max_added_seconds_cap": stall_guard.MAX_ADDED_SECONDS}
+    if isinstance(sg_block, dict):
+        try:
+            policy = stall_guard.StallPolicy.from_config(sg_block)
+            sg_out["enabled"] = policy.enabled
+            if policy.enabled:
+                sg_out["worst_case_added_s"] = policy.worst_case_added_s()
+        except stall_guard.PolicyError as e:
+            sg_out["error"] = str(e)
+    out["stall_guard"] = sg_out
+    if error:
+        out["error"] = error
+    sys.stdout.write(json.dumps(out, indent=2, sort_keys=True) + "\n")
+    return 0 if valid else EXIT_INVALID
+
+
 def _validate_config(cfg, cfg_path):
     if not isinstance(cfg, dict):
         raise ConfigError("Configuration root must be an object")
@@ -409,6 +530,12 @@ def _validate_config(cfg, cfg_path):
             raise ConfigError("max_log_bytes must be an integer")
         if cfg["max_log_bytes"] <= 0:
             raise ConfigError("max_log_bytes must be positive")
+    # TOOL-035 (#106): optional condition-based kill predicate block.
+    if "stall_guard" in cfg:
+        try:
+            stall_guard.StallPolicy.from_config(cfg["stall_guard"])
+        except stall_guard.PolicyError as e:
+            raise ConfigError(str(e))
     if cfg["max_task_bytes"] <= 0:
         raise ConfigError("max_task_bytes must be positive")
     _validate_finite_number(cfg["max_timeout_seconds"], "max_timeout_seconds")
@@ -441,6 +568,12 @@ def _validate_config(cfg, cfg_path):
             raise ConfigError(
                 "model_dispatch_template.command must contain a {model} "
                 "placeholder token")
+        # TOOL-033: checked before the allow_breakaway guard so the error
+        # names the knob that must not appear here, whichever is set.
+        if tpl.get("on_timeout", "kill_tree") != "kill_tree":
+            raise ConfigError(
+                "model_dispatch_template.on_timeout must be 'kill_tree' "
+                "(model-mode dispatch always owns its payload's lifetime)")
         if tpl.get("allow_breakaway"):
             raise ConfigError(
                 "model_dispatch_template.allow_breakaway must be false "
@@ -527,11 +660,33 @@ def _validate_agent(name, agent, global_max_timeout, check_executable=False):
         raise ConfigError(f"Agent '{name}': write_allowed must be a boolean")
     # allow_breakaway — opt-in JOB_OBJECT_LIMIT_BREAKAWAY_OK for workers that
     # must launch deliberately-detached long-running processes (e.g. weekly
-    # pipeline orchestrators). Default False preserves the legacy
-    # everything-dies-with-the-worker guarantee.
+    # pipeline orchestrators).
+    # Default False preserves the legacy everything-dies-with-the-worker
+    # guarantee. True = WMI-detached launch (TOOL-032): the payload is
+    # parented to the WMI provider and survives launcher death.
     ab = agent.get("allow_breakaway", False)
     if not isinstance(ab, bool):
         raise ConfigError(f"Agent '{name}': allow_breakaway must be a boolean")
+    if ab and pd == "stdin":
+        raise ConfigError(
+            f"Agent '{name}': allow_breakaway requires prompt_delivery "
+            f"'argument' or 'file' — detached WMI launch (TOOL-032) cannot "
+            f"pipe stdin to a process parented outside the job")
+    # on_timeout (TOOL-033) — budget-phase semantics. "kill_tree" (default)
+    # preserves the legacy everything-dies-with-the-dispatch guarantee.
+    # "report_detached" turns budget expiry into a report instead of a kill;
+    # it is only coherent for breakaway-capable agents — without
+    # allow_breakaway nothing can outlive the job, so the report would lie.
+    ot = agent.get("on_timeout", "kill_tree")
+    if ot not in ("kill_tree", "report_detached"):
+        raise ConfigError(
+            f"Agent '{name}': on_timeout must be 'kill_tree' or "
+            f"'report_detached', not {ot!r}")
+    if ot == "report_detached" and not ab:
+        raise ConfigError(
+            f"Agent '{name}': on_timeout 'report_detached' requires "
+            "allow_breakaway: true (without breakaway no payload can "
+            "outlive the job, so the detached report would be a lie)")
     # resume_args — optional argv template for session resume (e.g. kimi's
     # ["-r", "{session_id}"]).  Exactly one element must contain the
     # placeholder.  Missing field = the agent does not support resume.
@@ -871,69 +1026,284 @@ class OutputReader(threading.Thread):
 # ---------------------------------------------------------------------------
 # Kill sequence
 # ---------------------------------------------------------------------------
+# TOOL-036 (#107): the kill sequence lives in killauthority.KillAuthority
+# (same five steps, moved verbatim in behavior). Every exit path routes
+# through one authority instance; the old inlined kill function is gone.
 
-def kill_process_tree(pid, grace_seconds, job=None):
-    """Execute the full kill sequence.
 
-    Order: graceful taskkill /T → grace wait (early return if child exits)
-    → force taskkill /T /F (while parent-PID links are intact so /T can
-    enumerate descendants) → close job handle (kernel terminates anything
-    still in the job) → belt-and-braces force taskkill again.
+_WMI_CREATE_PS = (
+    "$ErrorActionPreference = 'Stop'; "
+    "$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create "
+    "-Arguments @{ CommandLine = $env:MP_DETACH_CL; CurrentDirectory = $env:MP_DETACH_CWD }; "
+    "Write-Output (ConvertTo-Json -Compress -InputObject "
+    "@{ ProcessId = $r.ProcessId; ReturnValue = $r.ReturnValue })"
+)
 
-    Does NOT call proc.terminate() — killing the root before tree enumeration
-    orphans grandchildren.  The force taskkill /T /F runs BEFORE job close so
-    that out-of-job descendants (created in the Popen→assign window) are still
-    reachable via parent-PID links.
+
+# The first Win32_Process.Create on a freshly booted host races Winmgmt and
+# PowerShell cold start (CI run 36264707350: the delegate suite's first real
+# WMI spawn failed internal_error on a cold windows-latest runner while every
+# later spawn in the same job passed). Measured on that runner (run
+# 36266718079): each cold attempt errors in ~13s and WMI stayed cold until
+# ~75s into the job, outlasting a 3-attempt/2s-backoff retry — so allow 5
+# attempts with 5s backoff, covering roughly the first two minutes when
+# failures are fast. Launcher-level failures are transient, so retry them
+# before going fail-loud; a nonzero ReturnValue is WMI's definitive answer
+# and is never retried.
+_WMI_SPAWN_ATTEMPTS = 5
+_WMI_SPAWN_RETRY_BACKOFF_S = 5.0
+
+# A spawn whose process is already gone at OpenProcess (winerror 87) launched
+# nothing that still runs, so respawning it abandons no payload. Observed on
+# cold windows-latest CI runners, where the job's FIRST WMI-spawned bootstrap
+# died at birth while every later detached dispatch succeeded (PR #112, run
+# 36267769104). Only winerror 87 is retried; a live-but-unopenable process
+# (access denied) must not be spawned again. Each attempt pays a full spawn
+# (~13s cold), which paces the retries through the warm-up window by itself.
+_DETACH_CUSTODY_ATTEMPTS = 3
+
+
+def wmi_spawn_detached(command_line, working_dir, timeout_s=30):
+    """Spawn a process via WMI Win32_Process.Create. Returns the new PID.
+
+    The new process is parented to the WMI provider service, so it never
+    enters this delegate's job object and survives the delegate's death —
+    the actual escape that JOB_OBJECT_LIMIT_BREAKAWAY_OK only *permits*
+    (and Python's subprocess never requests). The command line travels via
+    the MP_DETACH_CL / MP_DETACH_CWD environment variables to avoid nested
+    PowerShell quoting; the launcher runs under _MINIMAL_TOOL_ENV like
+    taskkill/icacls. Raises CustodyError on any failure: there is no
+    contained fallback for a caller that asked for detachment. Launcher-level
+    failures (invocation error, timeout, unparseable output) are retried up
+    to _WMI_SPAWN_ATTEMPTS times for cold-start tolerance; a definitive
+    nonzero ReturnValue raises immediately.
     """
-    # Step 1: graceful taskkill (no /F) — sends WM_CLOSE; console processes
-    # without a message loop ignore it, but it is cheap and non-destructive.
-    try:
-        subprocess.run(
-            [_TASKKILL_EXE, "/PID", str(pid), "/T"],
-            capture_output=True, timeout=10, shell=False,
-            env=_MINIMAL_TOOL_ENV,
-        )
-    except Exception:
-        pass
-
-    # Step 2: grace period — poll for child exit so we don't sleep the full
-    # grace if the child died immediately after step 1.
-    if grace_seconds > 0:
-        deadline = time.monotonic() + grace_seconds
-        while time.monotonic() < deadline:
-            # We cannot call proc.poll() here (no proc ref), so just sleep
-            # in small increments. The caller will reap after we return.
-            time.sleep(min(0.2, deadline - time.monotonic()))
-
-    # Step 3: force taskkill /T /F while parent links are intact.
-    # This catches descendants created before job assignment (the
-    # Popen→assign window) that the job close cannot reach.
-    try:
-        subprocess.run(
-            [_TASKKILL_EXE, "/PID", str(pid), "/T", "/F"],
-            capture_output=True, timeout=10, shell=False,
-            env=_MINIMAL_TOOL_ENV,
-        )
-    except Exception:
-        pass
-
-    # Step 4: close job handle — kernel terminates anything still in the job.
-    if job is not None:
+    if not _IS_WINDOWS:
+        raise CustodyError("WMI detached launch is Windows-only")
+    env = dict(_MINIMAL_TOOL_ENV)
+    env["MP_DETACH_CL"] = command_line
+    env["MP_DETACH_CWD"] = working_dir
+    last_err = None
+    for attempt in range(_WMI_SPAWN_ATTEMPTS):
+        if attempt:
+            time.sleep(_WMI_SPAWN_RETRY_BACKOFF_S)
         try:
-            close_job(job)
-        except Exception:
-            pass
+            out = subprocess.run(
+                [_POWERSHELL_EXE, "-NoProfile", "-NonInteractive", "-Command", _WMI_CREATE_PS],
+                capture_output=True, timeout=timeout_s, env=env, text=True,
+            )
+        except (OSError, subprocess.TimeoutExpired) as e:
+            last_err = CustodyError(
+                f"WMI launcher invocation failed: {type(e).__name__}: {e}")
+            continue
+        lines = (out.stdout or "").strip().splitlines()
+        try:
+            payload = json.loads(lines[-1])
+            pid = int(payload["ProcessId"])
+            rv = int(payload["ReturnValue"])
+        except (ValueError, KeyError, TypeError, IndexError):
+            last_err = CustodyError(
+                "WMI launcher returned unparseable output: "
+                f"stdout={(out.stdout or '')[-200:]!r} stderr={(out.stderr or '')[-200:]!r}")
+            continue
+        if rv != 0 or pid <= 0:
+            raise CustodyError(f"Win32_Process.Create failed: ReturnValue={rv}")
+        return pid
+    raise last_err
 
-    # Step 5: belt-and-braces — force kill again after job close for any
-    # process that survived both prior steps.
+
+_DETACH_BOOTSTRAP = (
+    "import json, subprocess, sys\n"
+    "spec = json.load(open(sys.argv[1], 'r', encoding='utf-8'))\n"
+    "with open(spec['stdout_log'], 'wb') as out, open(spec['stderr_log'], 'wb') as err:\n"
+    "    rc = subprocess.call(spec['argv'], cwd=spec['cwd'], env=spec['env'],"
+    " stdin=subprocess.DEVNULL, stdout=out, stderr=err)\n"
+    "sys.exit(rc)\n"
+)
+
+
+def _read_log_capped(path, cap):
+    """Read up to `cap` bytes of a run_dir log. Returns (text, truncated)."""
     try:
-        subprocess.run(
-            [_TASKKILL_EXE, "/PID", str(pid), "/T", "/F"],
-            capture_output=True, timeout=10, shell=False,
-            env=_MINIMAL_TOOL_ENV,
+        with open(path, "rb") as f:
+            data = f.read(cap + 1)
+    except OSError:
+        return "", False
+    return data[:cap].decode("utf-8", errors="replace"), len(data) > cap
+
+
+def _run_detached_dispatch(agent_name, agent, cfg, argv, workspace, child_env,
+                           child_home, run_dir, acl_warning, timeout, start_time,
+                           term_file=None):
+    """Launch the worker OUTSIDE the delegate's job via WMI (TOOL-032, #103).
+
+    Custody contract: the payload is parented to the WMI provider service, so
+    an external actor killing this delegate cannot collapse it
+    through the KILL_ON_JOB_CLOSE cascade — surviving the launcher is the
+    feature; outliving the budget if the delegate dies first is the documented
+    cost (see the design comment at the BREAKAWAY_OK constant).
+
+    Fail-loud: any WMI failure returns internal_error and NOTHING is launched;
+    there is no fallback to a job-contained Popen, because silently containing
+    a payload the operator configured as detached inverts the guarantee.
+
+    The full child_env (isolated KIMI_CODE_HOME, _CHILD_MARKER, allowlisted
+    vars) round-trips through detach_spec.json inside the ACL-hardened
+    run_dir; the bootstrap re-creates it verbatim, so TOOL-013 home isolation
+    and the anti-nesting marker survive detachment.
+
+    RESIDUAL: log caps are enforced at read-back, not live — a detached
+    payload can grow stdout.log/stderr.log past max_log_bytes while it runs.
+    """
+    # TOOL-036: the terminate-request poll below assigns these module globals.
+    global _interrupt_condition, _termination_requested
+    spec_path = os.path.join(run_dir, "detach_spec.json")
+    spec = {
+        "argv": argv,
+        "cwd": workspace,
+        "env": child_env,
+        "stdout_log": os.path.join(run_dir, "stdout.log"),
+        "stderr_log": os.path.join(run_dir, "stderr.log"),
+    }
+    with open(spec_path, "w", encoding="utf-8") as f:
+        json.dump(spec, f)
+    pid = handle = None
+    for attempt in range(_DETACH_CUSTODY_ATTEMPTS):
+        try:
+            pid = wmi_spawn_detached(
+                subprocess.list2cmdline([sys.executable, "-c", _DETACH_BOOTSTRAP, spec_path]),
+                workspace)
+            handle = open_waitable_process(pid)
+        except CustodyError as e:
+            if (getattr(e, "winerror", None) == 87
+                    and attempt + 1 < _DETACH_CUSTODY_ATTEMPTS):
+                time.sleep(1.0)
+                continue
+            return _make_result("internal_error", agent=agent_name, run_dir=run_dir,
+                                acl_warning=acl_warning, child_home=child_home,
+                                error=f"detached custody unavailable: {e}"), EXIT_INTERNAL
+        break
+
+    # TOOL-036: the delegate is the sole kill authority for the detached tree
+    # too. The authority owns the bootstrap pid only — the waitable handle
+    # stays with the finally below because the kill path reaps through it
+    # AFTER terminate() runs (terminate would otherwise close it first).
+    authority = killauthority.KillAuthority(
+        pid, cfg["default_kill_grace_seconds"],
+        tool_argv0=_TASKKILL_EXE, tool_env=_MINIMAL_TOOL_ENV,
+    )
+
+    deadline = time.monotonic() + timeout
+    timed_out = False
+    rc = None
+    try:
+        try:
+            while True:
+                if _interrupted.is_set():
+                    break
+                if term_file and os.path.exists(term_file):
+                    # TOOL-036: same request channel as the contained path.
+                    _termination_requested = True
+                    _interrupted.set()
+                    _interrupt_condition = (
+                        "termination requested by external actor via "
+                        "--terminate-request-file")
+                    break
+                rc = reap_handle(handle, 100)
+                if rc is not None:
+                    break
+                if time.monotonic() >= deadline:
+                    # Final reap: the payload may have exited at the deadline.
+                    rc = reap_handle(handle, 0)
+                    if rc is not None:
+                        break
+                    timed_out = True
+                    break
+        except KeyboardInterrupt:
+            _interrupted.set()
+            _interrupt_condition = "received KeyboardInterrupt"
+
+        if _interrupted.is_set() or timed_out:
+            # TOOL-033 (#104): budget expiry on a detached payload is a
+            # REPORT, never a kill. The payload is WMI-parented outside every
+            # job (TOOL-032), so it outlives this delegate by design; killing
+            # at budget expiry is exactly the measured production harm this
+            # ticket removes. Opt-in only: validation couples report_detached
+            # to allow_breakaway (_validate_agent). Interruption is NOT a
+            # budget event — the interrupted path below still terminates
+            # (operator Ctrl+C / runner request is an explicit kill order).
+            # release(), not terminate(): no kill ran, so the attribution
+            # stays "none".
+            if (timed_out and not _interrupted.is_set()
+                    and agent.get("on_timeout", "kill_tree") == "report_detached"):
+                authority.release()
+                stdout_text, stdout_trunc = _read_log_capped(
+                    spec["stdout_log"], cfg["max_stdout_bytes"])
+                stderr_text, stderr_trunc = _read_log_capped(
+                    spec["stderr_log"], cfg["max_stderr_bytes"])
+                duration = time.monotonic() - start_time
+                result = _make_result(
+                    "payload_running_detached", agent=agent_name,
+                    duration=duration,
+                    stdout_text=stdout_text, stderr_text=stderr_text,
+                    stdout_trunc=stdout_trunc, stderr_trunc=stderr_trunc,
+                    run_dir=run_dir, acl_warning=acl_warning,
+                    child_session_id=extract_child_session_id(
+                        stdout_text, stderr_text),
+                    child_home=child_home,
+                    # Informational: the delegate-known bootstrap pid. Windows
+                    # recycles pids; nothing may kill by this value later.
+                    child_pid=pid,
+                    error="dispatch budget expired; payload detached — "
+                          "reported, not killed",
+                )
+                return result, EXIT_DETACHED
+            # KillAuthority with job=None: taskkill /T /F from the
+            # bootstrap pid still reaches the payload tree through
+            # parent-PID links while the bootstrap is alive.
+            if _interrupted.is_set():
+                reason = ("runner_requested" if _termination_requested
+                          else "interrupted")
+            else:
+                reason = "timeout"
+            attribution = authority.terminate(reason)
+            reap_handle(handle, 10000)
+            stdout_text, stdout_trunc = _read_log_capped(
+                spec["stdout_log"], cfg["max_stdout_bytes"])
+            stderr_text, stderr_trunc = _read_log_capped(
+                spec["stderr_log"], cfg["max_stderr_bytes"])
+            duration = time.monotonic() - start_time
+            status = "interrupted" if _interrupted.is_set() else "timeout"
+            result = _make_result(
+                status, agent=agent_name, duration=duration,
+                stdout_text=stdout_text, stderr_text=stderr_text,
+                stdout_trunc=stdout_trunc, stderr_trunc=stderr_trunc,
+                run_dir=run_dir, acl_warning=acl_warning,
+                child_session_id=extract_child_session_id(stdout_text, stderr_text),
+                child_home=child_home,
+                error=_interrupt_condition if _interrupted.is_set() else None,
+                kill_authority=attribution,
+            )
+            return result, EXIT_INTERRUPTED if status == "interrupted" else EXIT_TIMEOUT
+
+        duration = time.monotonic() - start_time
+        stdout_text, stdout_trunc = _read_log_capped(
+            spec["stdout_log"], cfg["max_stdout_bytes"])
+        stderr_text, stderr_trunc = _read_log_capped(
+            spec["stderr_log"], cfg["max_stderr_bytes"])
+        status = "completed" if rc == 0 else "failed"
+        result = _make_result(
+            status, agent=agent_name, child_exit_code=rc, duration=duration,
+            stdout_text=stdout_text, stderr_text=stderr_text,
+            stdout_trunc=stdout_trunc, stderr_trunc=stderr_trunc,
+            run_dir=run_dir, acl_warning=acl_warning,
+            child_session_id=extract_child_session_id(stdout_text, stderr_text),
+            child_home=child_home,
         )
-    except Exception:
-        pass
+        authority.release()
+        return result, EXIT_OK
+    finally:
+        close_process_handle(handle)
 
 
 # ---------------------------------------------------------------------------
@@ -942,6 +1312,10 @@ def kill_process_tree(pid, grace_seconds, job=None):
 
 _interrupted = threading.Event()
 _interrupt_condition = None
+# TOOL-036: set when the interruption came from the runner's
+# --terminate-request-file rather than a signal/KeyboardInterrupt; selects
+# the delegate:runner_requested attribution.
+_termination_requested = False
 
 
 def _signal_handler(signum, frame):
@@ -995,6 +1369,10 @@ def run_delegate(args):
 
 def _run_delegate_inner(args, start_time, agent_name):
     """Actual run logic. Raises ConfigError/InputError for validation, returns (dict, code) otherwise."""
+    # TOOL-036: the wait loop / SIGINT path assign these module globals;
+    # without this declaration the assignments made every later read
+    # function-local (latent UnboundLocalError on the signal path).
+    global _interrupt_condition, _termination_requested
 
     # #96 (QC E4): no unmanaged nesting. Every delegate child is marked with
     # the INJECTED PROCTOR_CHILD env var; a delegate that finds the marker in
@@ -1136,6 +1514,10 @@ def _run_delegate_inner(args, start_time, agent_name):
     except InputError as e:
         return _make_result("invalid", error=str(e), agent=agent_name), EXIT_INVALID
 
+    # TOOL-035: re-parse (cheap, pure) so the wait loop gets a typed policy;
+    # from_config(None) yields the disabled legacy policy.
+    stall_policy = stall_guard.StallPolicy.from_config(cfg.get("stall_guard"))
+
     # Validate workspace
     try:
         workspace = validate_workspace(args.workspace, cfg["allowed_workspace_roots"])
@@ -1161,8 +1543,30 @@ def _run_delegate_inner(args, start_time, agent_name):
     # delegate refuses --model/--write spawns (checked at entry above).
     child_env[_CHILD_MARKER] = "1"
 
+    # #105 (TOOL-034): payload progress side channel. INJECTED like the
+    # nesting marker and KIMI_CODE_HOME above — the agent allowlist governs
+    # inheritance, not wrapper invariants. No flag -> no variable -> the
+    # payload simply never emits, which readers report as "absent".
+    if getattr(args, "heartbeat_file", None):
+        child_env["DELEGATE_HEARTBEAT_PATH"] = args.heartbeat_file
+    if getattr(args, "dispatch_id", None):
+        child_env["DELEGATE_DISPATCH_ID"] = args.dispatch_id
+
     # Create run directory
     run_dir, acl_warning = create_run_dir()
+
+    # TOOL-035 (#106): observation channel for the stall-guard ladder. The
+    # heartbeat path is TOOL-034's DELEGATE_HEARTBEAT_PATH (injected above
+    # when the runner forwards --heartbeat-file). For a standalone run with
+    # the guard enabled and no --heartbeat-file, default the path into the
+    # run_dir and inject it so the payload can emit. Stack-capture
+    # request/response files live beside the heartbeat file; the payload
+    # derives that directory from the path it already receives — no second
+    # env var. Inert for legacy payloads that never look at it.
+    heartbeat_path = getattr(args, "heartbeat_file", None)
+    if stall_policy.enabled and not heartbeat_path:
+        heartbeat_path = os.path.join(run_dir, stall_guard.HEARTBEAT_FILE)
+        child_env["DELEGATE_HEARTBEAT_PATH"] = heartbeat_path
 
     # Build argv — resume args (if any) go immediately after the executable,
     # before the agent's fixed args.
@@ -1176,6 +1580,15 @@ def _run_delegate_inner(args, start_time, agent_name):
         with open(task_file_in_run_dir, "w", encoding="utf-8") as f:
             f.write(task_text)
         argv.append(task_file_in_run_dir)
+
+    # TOOL-032 (#103): detached payloads launch via WMI outside the job.
+    # The validator guarantees prompt_delivery is "argument" or "file" here,
+    # so argv is complete and no stdin thread is needed.
+    if agent.get("allow_breakaway", False):
+        return _run_detached_dispatch(
+            agent_name, agent, cfg, argv, workspace, child_env, child_home,
+            run_dir, acl_warning, timeout, start_time,
+            term_file=getattr(args, "terminate_request_file", None))
 
     # Launch — catch ValueError (NUL in env, etc.) alongside OSError
     try:
@@ -1213,19 +1626,20 @@ def _run_delegate_inner(args, start_time, agent_name):
             job = create_kill_on_close_job(bool(agent.get("allow_breakaway", False)))
             proc_handle = assign_process_to_job(job, proc.pid)
         except Exception:
-            if job is not None:
-                try:
-                    close_job(job)
-                except Exception:
-                    pass
-                job = None
-            if proc_handle is not None:
-                try:
-                    close_process_handle(proc_handle)
-                except Exception:
-                    pass
-                proc_handle = None
             job_warning = True
+    # TOOL-036 (#107): one authority owns pid + job + process handle from
+    # here on; every exit path below routes through it. On partial job-setup
+    # failure it still closes whatever handles exist (release() is a pure
+    # custody close).
+    authority = killauthority.KillAuthority(
+        proc.pid, cfg["default_kill_grace_seconds"],
+        job=job, proc_handle=proc_handle,
+        job_close=close_job if _IS_WINDOWS else None,
+        proc_close=close_process_handle if _IS_WINDOWS else None,
+        tool_argv0=_TASKKILL_EXE, tool_env=_MINIMAL_TOOL_ENV,
+    )
+    if job_warning:
+        authority.release()
 
     # Start reader threads
     max_log = cfg.get("max_log_bytes", _DEFAULT_MAX_LOG_BYTES)
@@ -1257,9 +1671,21 @@ def _run_delegate_inner(args, start_time, agent_name):
     # Wait with timeout — poll child BEFORE deadline check so a child that
     # exits at the deadline is reported as completed, not timeout.
     timed_out = False
+    kill_reason = None      # TOOL-035: "condition_met_stall" | "wall_clock_backstop"
+    kill_evidence = None    # TOOL-035: predicate evidence for the envelope
+    # TOOL-036: external termination-request channel (the runner writes this
+    # file at its wrapper deadline; the delegate stays the sole kill
+    # authority and executes the kill itself).
+    term_file = getattr(args, "terminate_request_file", None)
     try:
         while True:
             if _interrupted.is_set():
+                break
+            if term_file and os.path.exists(term_file):
+                _termination_requested = True
+                _interrupted.set()
+                _interrupt_condition = ("termination requested by external "
+                                        "actor via --terminate-request-file")
                 break
             rc = proc.poll()
             if rc is not None:
@@ -1270,6 +1696,23 @@ def _run_delegate_inner(args, start_time, agent_name):
                 rc = proc.poll()
                 if rc is not None:
                     break
+                if stall_policy.enabled:
+                    # TOOL-035 (#106): the deadline is a documented backstop,
+                    # not a verdict. The ladder owns the clock from here
+                    # (bounded by policy.worst_case_added_s(), which config
+                    # validation keeps inside the runner's +120 wrapper).
+                    verdict = stall_guard.run_escalation(
+                        heartbeat_path, stall_policy,
+                        proc_alive=lambda: proc.poll() is None,
+                        interrupted=_interrupted.is_set)
+                    if verdict.action == "kill":
+                        timed_out = True
+                        kill_reason = verdict.kill_reason
+                        kill_evidence = verdict.evidence
+                        break
+                    if verdict.action == "interrupted":
+                        break  # _interrupted is set; the interruption path runs
+                    continue  # completed_race: re-poll; the child is exiting
                 timed_out = True
                 break
             time.sleep(min(0.1, remaining))
@@ -1279,8 +1722,10 @@ def _run_delegate_inner(args, start_time, agent_name):
 
     # Handle interruption
     if _interrupted.is_set():
-        kill_process_tree(proc.pid, cfg["default_kill_grace_seconds"], job)
-        job = None  # kill_process_tree closed it
+        # TOOL-036: the request-file path (Task 4) attributes differently
+        # from a signal/KeyboardInterrupt; both are delegate-executed kills.
+        reason = "runner_requested" if _termination_requested else "interrupted"
+        attribution = authority.terminate(reason)
         try:
             proc.wait(timeout=10)
         except Exception:
@@ -1308,14 +1753,13 @@ def _run_delegate_inner(args, start_time, agent_name):
             child_session_id=extract_child_session_id(stdout_text, stderr_text),
             child_home=child_home,
             error=_interrupt_condition,
+            kill_authority=attribution,
         )
-        _cleanup_handles(proc_handle, job)
         return result, EXIT_INTERRUPTED
 
     # Handle timeout
     if timed_out:
-        kill_process_tree(proc.pid, cfg["default_kill_grace_seconds"], job)
-        job = None  # kill_process_tree closed it
+        attribution = authority.terminate("timeout")
         try:
             proc.wait(timeout=10)
         except Exception:
@@ -1342,8 +1786,10 @@ def _run_delegate_inner(args, start_time, agent_name):
             job_warning=job_warning,
             child_session_id=extract_child_session_id(stdout_text, stderr_text),
             child_home=child_home,
+            error=kill_reason,
+            kill_evidence=kill_evidence,
+            kill_authority=attribution,
         )
-        _cleanup_handles(proc_handle, job)
         return result, EXIT_TIMEOUT
 
     # Normal completion
@@ -1367,7 +1813,7 @@ def _run_delegate_inner(args, start_time, agent_name):
             child_home=child_home,
             error=f"Reader thread error: {type(stdout_err or stderr_err).__name__}",
         )
-        _cleanup_handles(proc_handle, job)
+        authority.release()
         return result, EXIT_INTERNAL
 
     duration = time.monotonic() - start_time
@@ -1389,32 +1835,16 @@ def _run_delegate_inner(args, start_time, agent_name):
         child_session_id=extract_child_session_id(stdout_text, stderr_text),
         child_home=child_home,
     )
-    _cleanup_handles(proc_handle, job)
+    authority.release()
     return result, EXIT_OK
-
-
-def _cleanup_handles(proc_handle, job):
-    """Close process and job handles exactly once."""
-    if proc_handle is not None:
-        try:
-            close_process_handle(proc_handle)
-        except Exception:
-            pass
-    # job may already be closed by kill_process_tree; only close if still open.
-    # Caller sets job = None after kill_process_tree, so this only fires on
-    # normal-completion paths where the job was not closed.
-    if job is not None:
-        try:
-            close_job(job)
-        except Exception:
-            pass
 
 
 def _make_result(status, agent=None, child_exit_code=None, duration=None,
                  stdout_text="", stderr_text="", stdout_trunc=False, stderr_trunc=False,
                  stdout_log_trunc=False, stderr_log_trunc=False,
                  run_dir=None, acl_warning=False, job_warning=False,
-                 child_session_id=None, child_home=None, error=None):
+                 child_session_id=None, child_home=None, error=None,
+                 kill_evidence=None, kill_authority="none", child_pid=None):
     """Build the JSON result envelope."""
     return {
         "schema_version": 1,
@@ -1423,6 +1853,7 @@ def _make_result(status, agent=None, child_exit_code=None, duration=None,
         "child_exit_code": child_exit_code,
         "child_session_id": child_session_id,
         "child_home": child_home,
+        "child_pid": child_pid,
         "duration_seconds": round(duration, 3) if duration is not None else None,
         "stdout": stdout_text,
         "stderr": stderr_text,
@@ -1434,6 +1865,8 @@ def _make_result(status, agent=None, child_exit_code=None, duration=None,
         "acl_warning": acl_warning,
         "job_warning": job_warning,
         "error": error,
+        "kill_evidence": kill_evidence,
+        "kill_authority": kill_authority,
     }
 
 
@@ -1463,6 +1896,10 @@ class _NoJsonArgumentParser(argparse.ArgumentParser):
 
 
 def main():
+    if "--print-timeout-knobs" in sys.argv[1:]:
+        # #108 discovery report: no dispatch, so none of the dispatch
+        # arguments apply; short-circuit before they are required.
+        sys.exit(_print_timeout_knobs())
     install_signal_handlers()
     parser = _NoJsonArgumentParser(
         prog="delegate",
@@ -1486,9 +1923,22 @@ def main():
     group.add_argument("--task-file", help="Path to a UTF-8 task file")
     parser.add_argument("--timeout", type=float, default=None, help="Timeout in seconds")
     parser.add_argument("--resume-from", dest="resume_from", default=None,
-                     help="Resume a prior child session by id")
+                        help="Resume the child CLI session with this id "
+                             "(requires resume_args in the agent config)")
     parser.add_argument("--child-home", dest="child_home", default=None,
-                     help="Reuse an existing isolated home (the resume-handoff: sessions persist across dispatches)")
+                        help="Reuse an existing isolated home (the resume-handoff: sessions persist across dispatches)")
+    parser.add_argument("--dispatch-id", dest="dispatch_id", default=None,
+                        help="Runner-minted dispatch id (#105); injected into "
+                             "the child environment for heartbeat correlation")
+    parser.add_argument("--heartbeat-file", dest="heartbeat_file", default=None,
+                        help="Path the payload appends progress heartbeats to "
+                             "(#105); injected as DELEGATE_HEARTBEAT_PATH")
+    parser.add_argument("--terminate-request-file", dest="terminate_request_file",
+                        default=None,
+                        help="TOOL-036: path an external actor (the runner) "
+                             "creates to request termination. The delegate "
+                             "remains the sole kill authority and executes "
+                             "the kill itself.")
 
     try:
         args = parser.parse_args()

@@ -1,0 +1,91 @@
+{
+  "case_id": "2026-09-01-completion-stall-kill-b",
+  "class": "completion_before_stall_kill",
+  "dispatch": {
+    "agent": "kimi-worker",
+    "timeout_s": 1800
+  },
+  "events": [
+    {
+      "t": 0,
+      "type": "dispatch_open"
+    },
+    {
+      "bytes_written": 8192,
+      "t": 300,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": 19.4,
+      "last_write_age_s": 300,
+      "probe_ok": true,
+      "stack_frames": null,
+      "t": 600,
+      "type": "probe"
+    },
+    {
+      "bytes_written": 65536,
+      "t": 900,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": 21.0,
+      "last_write_age_s": 300,
+      "probe_ok": true,
+      "stack_frames": null,
+      "t": 1200,
+      "type": "probe"
+    },
+    {
+      "bytes_written": 196608,
+      "t": 1500,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": 16.8,
+      "last_write_age_s": 300,
+      "probe_ok": true,
+      "stack_frames": null,
+      "t": 1800,
+      "type": "probe"
+    },
+    {
+      "bytes_written": 229376,
+      "t": 2100,
+      "type": "progress"
+    },
+    {
+      "channel": "envelope_completed",
+      "t": 2280,
+      "type": "completion_evidence"
+    },
+    {
+      "cpu_percent": 0.6,
+      "last_write_age_s": 60,
+      "probe_ok": true,
+      "stack_frames": [
+        "ntdll!NtWaitForSingleObject",
+        "python310!PyEval_EvalFrameDefault"
+      ],
+      "t": 2340,
+      "type": "probe"
+    },
+    {
+      "cpu_percent": 0.3,
+      "last_write_age_s": 120,
+      "probe_ok": true,
+      "stack_frames": [
+        "ntdll!NtWaitForSingleObject",
+        "python310!PyEval_EvalFrameDefault"
+      ],
+      "t": 2400,
+      "type": "probe"
+    }
+  ],
+  "expect": {
+    "kill": false
+  },
+  "incident_date": "2026-09-01",
+  "schema_version": 1,
+  "source_note": "Job B the same night: success at t=2280, stall kill at ~t=2400 \u2014 2 min after success."
+}

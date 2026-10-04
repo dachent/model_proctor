@@ -76,11 +76,15 @@ class FailOpenIsBounded(unittest.TestCase):
         env = {**self.env, "ZPROCTOR_GUARD_DEADLINE_MS": "300"}
         p = subprocess.Popen([NODE, str(GUARD)], stdin=subprocess.PIPE,
                              stdout=subprocess.PIPE, env=env, text=True)
-        deadline = time.monotonic() + 8
+        # The contract under test is the guard's own 300ms deadline; this
+        # outer bound is harness patience. Node cold start plus real-time AV
+        # on a fresh CI runner exceeded the original 8s (run 36264707350).
+        deadline = time.monotonic() + 30
         while time.monotonic() < deadline and p.poll() is None:
             time.sleep(0.05)
         if p.poll() is None:
             p.kill()
+            p.wait(timeout=10)
             self.fail("guard hung instead of failing open")
         self.assertEqual(p.stdout.read().strip(), "",
                          "a fail-open must allow, i.e. emit nothing")

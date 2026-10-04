@@ -132,7 +132,8 @@ features honestly is still your job.
   switch reason — never the failed model's full rationale.
 - **Localized defect after broad success** → same-worker targeted repair.
 - Budgets are hard caps (`max_dispatches`, `max_stagnant`, `timeout_s`). A refusal is final
-  until state changes legally.
+  until state changes legally. Verify runs on its own `budget.verify_timeout_s` (default 600),
+  split from dispatch `timeout_s` (TOOL-033); neither clock follows a detached payload.
 
 ## Stopping rules (TOOL-011, #12 — owner directive 2026-08-16)
 
@@ -164,6 +165,17 @@ The FIRST action on any resume — new morning, reopened machine, post-crash —
 - Orphans are advisory. Investigate, then clear with
   `python C:/Tools/model-proctor/runner.py journal --workspace <w> --ack <dispatch_id>`
   so they stop re-reporting.
+- `detached_dispatch_ids` non-empty means a payload outlived its dispatch budget and may
+  still be mutating the tree; `accept` refuses until `--allow-detached-payload` is
+  supplied — a reviewed, counted exception, same standing as `--allow-zero-dispatch`.
 - `last_receipt` with `dispatch_seq: 0` + `verifier_nondiscriminating: true` carries no worker
   evidence; `accept` refuses it unless `--allow-zero-dispatch` is supplied. That override is
   counted and should be treated as a reviewed exception.
+- `payload_progress` (#105) shows each open dispatch's last payload-emitted
+  stage/counters. `status: "stale"` means the payload went quiet beyond the
+  staleness threshold — a signal to investigate, never proof of death; kill
+  decisions remain wall-clock/budget decisions, not heartbeat decisions.
+  `status: "absent"` only means the payload never emitted (most don't).
+  `measurement_degraded: true` with `degraded_components` (#109) means the
+  monitor itself could not take a measurement (corrupt/unreadable heartbeat,
+  missing protocol module) — the report is partial, not the run.

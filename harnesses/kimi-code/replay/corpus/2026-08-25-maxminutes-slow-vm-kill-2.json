@@ -1,0 +1,95 @@
+{
+  "case_id": "2026-08-25-maxminutes-slow-vm-kill-2",
+  "class": "maxminutes_healthy_slow_run",
+  "dispatch": {
+    "agent": "kimi-worker",
+    "max_minutes": 45,
+    "timeout_s": 1800
+  },
+  "events": [
+    {
+      "t": 0,
+      "type": "dispatch_open"
+    },
+    {
+      "bytes_written": 4096,
+      "t": 600,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": 2.8,
+      "last_write_age_s": 400,
+      "probe_ok": true,
+      "stack_frames": null,
+      "t": 600,
+      "type": "probe"
+    },
+    {
+      "bytes_written": 12288,
+      "t": 1500,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": 6.1,
+      "last_write_age_s": 620,
+      "probe_ok": true,
+      "stack_frames": null,
+      "t": 1500,
+      "type": "probe"
+    },
+    {
+      "bytes_written": 20480,
+      "t": 2100,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": 5.5,
+      "last_write_age_s": 700,
+      "probe_ok": true,
+      "stack_frames": null,
+      "t": 2100,
+      "type": "probe"
+    },
+    {
+      "bytes_written": 28672,
+      "t": 2700,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": 3.9,
+      "last_write_age_s": 450,
+      "probe_ok": true,
+      "stack_frames": null,
+      "t": 2700,
+      "type": "probe"
+    },
+    {
+      "bytes_written": 36864,
+      "t": 3300,
+      "type": "progress"
+    },
+    {
+      "cpu_percent": 6.4,
+      "last_write_age_s": 650,
+      "probe_ok": true,
+      "stack_frames": null,
+      "t": 3300,
+      "type": "probe"
+    },
+    {
+      "cpu_percent": 4.7,
+      "last_write_age_s": 300,
+      "probe_ok": true,
+      "stack_frames": null,
+      "t": 3600,
+      "type": "probe"
+    }
+  ],
+  "expect": {
+    "backstop_crossed": true,
+    "kill": false
+  },
+  "incident_date": "2026-08-25",
+  "schema_version": 1,
+  "source_note": "Second MaxMinutes kill after the restart; slower still \u2014 write ages up to 700 s \u2014 and still live at every checkpoint."
+}

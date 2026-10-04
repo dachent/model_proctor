@@ -93,7 +93,7 @@ def _close_pipe(pipe: Any) -> None:
     threading.Thread(target=close, daemon=True).start()
 
 
-def _cleanup(proc: Any) -> int:
+def _cleanup(proc: Any, record: Optional[dict] = None) -> int:
     active_error = sys.exc_info()[1]
     _close_pipe(proc.stdin)
     try:
@@ -101,6 +101,11 @@ def _cleanup(proc: Any) -> int:
             code = proc.wait(timeout=1)
         except subprocess.TimeoutExpired:
             proc.kill()
+            # TOOL-036: this adapter owns only its direct child (no Job
+            # Object). Stamp the attribution at kill time so it survives a
+            # later CleanupFailure; record is the envelope under construction.
+            if record is not None:
+                record["kill_authority"] = "codex:cleanup_kill"
             code = proc.wait(timeout=1)
         if not isinstance(code, int):
             raise CleanupFailure()
@@ -381,7 +386,7 @@ def _run(process: Callable[..., Any], argv: list[str], *, input: bytes, cwd: Opt
             for event in _json_lines(raw):
                 _observe(event, result)
     finally:
-        code = _cleanup(proc)
+        code = _cleanup(proc, record=result)
     if code != 0:
         raise ChildExitFailure()
 
@@ -405,7 +410,9 @@ class _RpcSession:
         self.proc = process(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                             cwd=cwd, env=dict(env))
         if self.proc.stdin is None or self.proc.stdout is None:
-            _cleanup(self.proc)
+            # self.result is not bound yet; result (the caller's envelope
+            # under construction) is the attribution target here.
+            _cleanup(self.proc, record=result)
             raise ValueError("app-server did not provide stdio streams")
         self.events: list[dict[str, Any]] = []
         self.next_id = 1
@@ -491,7 +498,7 @@ class _RpcSession:
         return event
 
     def close(self) -> None:
-        _cleanup(self.proc)
+        _cleanup(self.proc, record=self.result)
 
 
 def _identity(raw: Optional[str], *, transport: str, model: str, effort: str, sandbox: str) -> Optional[str]:

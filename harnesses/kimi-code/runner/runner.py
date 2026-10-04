@@ -51,6 +51,8 @@ Commands:
   accept   --workspace ws --task task.json           refuse unless receipt fresh+green
   record   --workspace ws --task task.json [--wire wire.jsonl ...] [--pricing pricing.yaml]
   status   --workspace ws                            print runner state
+  timeouts --task task.json [--delegate path]        report the timeout stack;
+                                                     refuse an inverted one
   (stateful commands accept --state-dir to relocate the external state root)
 
 Every command prints exactly one JSON object on stdout. Exit 0 = success,
@@ -66,6 +68,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -103,7 +106,19 @@ CONFIG_SURFACE_GLOBS = ("*.pth",)
 # subset: provider failures switch lane class, not intelligence).
 LATERAL_SWITCH = {"flash": "glm", "glm": "k3", "k3": "glm"}
 
-DEFAULT_BUDGET = {"max_dispatches": 4, "max_stagnant": 3, "timeout_s": 1800}
+# TOOL-033 phase semantics: timeout_s owns the DISPATCH (payload-launch)
+# phase only; verify_timeout_s owns the VERIFY phase. Neither spans a
+# detached payload's lifetime — the monitor phase is clock-free by design.
+DEFAULT_BUDGET = {"max_dispatches": 4, "max_stagnant": 3, "timeout_s": 1800,
+                  "verify_timeout_s": 600}
+
+# TOOL-036: the runner is read-only with respect to the worker tree. Past
+# the derived wrapper breaker (timeout_stack.runner_breaker_s, #108 — the
+# historical "+ 120" margin, now owned by the one sizing authority) it
+# REQUESTS termination from the delegate (the sole kill authority) and
+# reports the outcome; it never kills the delegate.
+# Env overrides exist for hermetic tests.
+TERMINATION_REQUEST_WAIT_S = 60
 
 
 # ── small utilities ─────────────────────────────────────────────────────
@@ -149,6 +164,61 @@ def _sha256_file(path):
     return _sha256_bytes(Path(path).read_bytes())
 
 
+# ── measurement doctrine (#109 / TOOL-038) ──────────────────────────────
+# Two path classes, two failure semantics:
+#   MONITOR paths (cmd_status, the dispatch-loop progress drain, the accept
+#     in-flight gate, the orphan sweep) read ONLY runner-state files and
+#     payload-emitted heartbeat files on local disk. A failed or degraded
+#     measurement = ABSTAIN: report measurement_degraded naming the
+#     component, exit 0, and NEVER kill or refuse on a measurement that
+#     could not be taken.
+#   ACCEPTANCE paths (cmd_init baselining, cmd_verify receipts, cmd_accept
+#     staleness checks) FAIL CLOSED: a measurement that cannot finish within
+#     MEASUREMENT_BUDGET_S refuses the acceptance action. The refusal IS the
+#     abstention — no certificate is issued over an unmeasured tree.
+# _git_toplevel's None-abstain (:320-329) is not a violation of this: it
+# selects the files: manifest branch of tree_signature, which is itself a
+# full measurement. _porcelain_entries fails closed (:357-363) and serves
+# acceptance paths only, which this doctrine makes explicit.
+
+MEASUREMENT_BUDGET_S = 120.0
+
+
+class MeasurementTimeout(Exception):
+    """A workspace measurement exceeded its wall-clock budget (#109)."""
+
+    def __init__(self, what):
+        super().__init__(f"measurement timeout: {what}")
+        self.what = what
+
+
+def _measure_with_deadline(fn, budget_s, what):
+    """Run fn() in a daemon thread under a wall-clock budget.
+
+    Why a thread and not a pre-check: a wedged tree (OneDrive/SMB) blocks
+    INSIDE a read syscall, which no deadline check between files can
+    preempt. On expiry the caller gets MeasurementTimeout and the daemon
+    thread is abandoned — runner commands are one-shot processes, so the
+    abandoned thread dies with process exit (a documented residual, same
+    honesty class as the Popen->assign window in delegate.py)."""
+    box = {}
+
+    def _run():
+        try:
+            box["result"] = fn()
+        except BaseException as e:  # propagate, including SystemExit
+            box["error"] = e
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(budget_s)
+    if t.is_alive():
+        raise MeasurementTimeout(what)
+    if "error" in box:
+        raise box["error"]
+    return box.get("result")
+
+
 def _norm(p):
     return os.path.normcase(os.path.normpath(str(p)))
 
@@ -190,6 +260,75 @@ def _task_schema():
     return _TASK_SCHEMA
 
 
+_TIMEOUT_STACK = None
+
+
+def _timeout_stack():
+    """core/timeout_stack.py — the one timeout sizing authority (#108).
+
+    Same dual-layout resolution as _task_schema: repo checkout
+    (harnesses/kimi-code/runner/ -> <repo>/core/) and flat install (sibling
+    file shipped by scripts/install.py). A missing module is a broken
+    install and refuses loudly rather than silently skipping the invariant.
+    """
+    global _TIMEOUT_STACK
+    if _TIMEOUT_STACK is None:
+        import importlib.util
+        here = Path(__file__).resolve().parent
+        candidates = [here / "timeout_stack.py"]
+        if len(here.parents) > 2:
+            candidates.append(here.parents[2] / "core" / "timeout_stack.py")
+        for cand in candidates:
+            if cand.is_file():
+                spec = importlib.util.spec_from_file_location("timeout_stack", str(cand))
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                _TIMEOUT_STACK = mod
+                break
+        else:
+            raise SystemExit(_emit({"error": "timeout_stack_module_missing"}, 4))
+    return _TIMEOUT_STACK
+
+
+_HEARTBEAT_MOD = "unset"
+
+
+def _heartbeat_module():
+    """delegate/heartbeat.py — the payload progress protocol (#105/TOOL-034).
+
+    Same two-layout resolution as _task_schema (repo: sibling
+    harnesses/kimi-code/delegate/; flat install: a sibling file), but
+    FAIL-SOFT per the #109 doctrine: an unresolvable or unimportable module
+    means payload progress is unmeasurable — abstain (None), never refuse.
+    """
+    global _HEARTBEAT_MOD
+    if _HEARTBEAT_MOD == "unset":
+        import importlib.util
+        here = Path(__file__).resolve().parent
+        _HEARTBEAT_MOD = None
+        for cand in (here / "heartbeat.py",
+                     here.parent / "delegate" / "heartbeat.py"):
+            if cand.is_file():
+                spec = importlib.util.spec_from_file_location("heartbeat",
+                                                              str(cand))
+                mod = importlib.util.module_from_spec(spec)
+                try:
+                    spec.loader.exec_module(mod)
+                except Exception:
+                    break  # unimportable == unmeasurable: abstain
+                _HEARTBEAT_MOD = mod
+                break
+    return _HEARTBEAT_MOD
+
+
+def _heartbeat_file(root, dispatch_id):
+    """Payload heartbeat side channel: <state>/heartbeats/<dispatch_id>.jsonl.
+
+    Lives with the runner state (outside the workspace, local fs) so monitor
+    reads never touch worker-writable or sync-deferred trees (#109)."""
+    return Path(root) / "heartbeats" / f"{dispatch_id}.jsonl"
+
+
 def load_task(path):
     task = _load_json(path, "task file")
     missing = [k for k in ("task_id", "prompt", "scope", "verifier") if k not in task]
@@ -218,6 +357,16 @@ def load_task(path):
     task.setdefault("budget", dict(DEFAULT_BUDGET))
     for k, v in DEFAULT_BUDGET.items():
         task["budget"].setdefault(k, v)
+    # #108 tripwire: margins are constants only this repo can edit, so an
+    # inverted stack means a code change broke the derivation — refuse at
+    # every command boundary, not in production.
+    _stack = _timeout_stack()
+    _violations = _stack.validate_stack(
+        _stack.stack_layers(task["budget"]["timeout_s"],
+                            _stack.KILL_GRACE_MAX_S))
+    if _violations:
+        raise SystemExit(_emit({"error": "timeout_stack_inverted",
+                                "violations": _violations}, 3))
     return task
 
 
@@ -598,6 +747,45 @@ def _ts_to_epoch(ts):
         return None
 
 
+def _payload_progress(sroot, open_ids):
+    """#105/#109: payload-emitted progress for open dispatches.
+
+    Monitor-path rule (#109): read ONLY runner-state and payload-emitted
+    files; every failure downgrades to a status string; this function never
+    raises and its output never feeds a kill or refusal. "stale"/"absent" are
+    payload signals; "corrupt"/"unreadable"/"unavailable" and unjudgeable
+    epochs are degraded MEASUREMENT (the bool)."""
+    hb = _heartbeat_module()
+    if hb is None:
+        return {did: {"status": "unavailable"} for did in sorted(open_ids)}, \
+            bool(open_ids)
+    out, degraded = {}, False
+    for did in sorted(open_ids):
+        try:
+            rec, status = hb.read_latest(str(_heartbeat_file(sroot, did)))
+        except Exception:
+            rec, status = None, "unreadable"
+        entry = {"status": status}
+        if rec is not None:
+            entry.update({
+                "stage": rec.get("stage"),
+                "sub_stage": rec.get("sub_stage"),
+                "counters": rec.get("counters") or {},
+                "pid": rec.get("pid"),
+            })
+            epoch = rec.get("epoch")
+            if isinstance(epoch, (int, float)) and not isinstance(epoch, bool):
+                entry["age_seconds"] = round(time.time() - epoch)
+                if hb.is_stale(rec):
+                    entry["status"] = "stale"
+            else:
+                degraded = True  # freshness unjudgeable = degraded measurement
+        if status in ("unreadable", "corrupt"):
+            degraded = True
+        out[did] = entry
+    return out, degraded
+
+
 def _load_state(root):
     p = _state_path(root)
     if not p.is_file():
@@ -705,16 +893,54 @@ def resolve_delegate(explicit):
         "error": "delegate.py not found; pass --delegate or set DELEGATE_PATH"}, 3))
 
 
+def _request_termination(proc, request_file, wait_s):
+    """Read-only terminal action (TOOL-036): request, bounded wait, never kill.
+
+    Returns (outcome, stdout, stderr). outcome is one of:
+      delegate_executed     the delegate ran its kill authority and exited
+      unresolved            request delivered; delegate still wedged after wait
+      request_write_failed  the request channel itself failed (wedged fs)
+      no_request_channel    no request_file was configured for this dispatch
+    """
+    if not request_file:
+        return "no_request_channel", "", ""
+    try:
+        with open(request_file, "w", encoding="utf-8") as f:
+            json.dump({"reason": "delegate_wrapper_timeout",
+                       "requested_at": time.strftime("%Y-%m-%dT%H:%M:%S")}, f)
+    except OSError:
+        return "request_write_failed", "", ""
+    try:
+        out, err = proc.communicate(timeout=wait_s)
+    except subprocess.TimeoutExpired:
+        return "unresolved", "", ""
+    return "delegate_executed", out, err
+
+
 def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None,
-                 resume_from=None, child_home=None):
+                 resume_from=None, child_home=None,
+                 dispatch_id=None, heartbeat_file=None,
+                 request_file=None, on_termination=None):
     """One worker attempt through the delegate wrapper. Returns the envelope.
 
     A5 (#73): instead of one blocking subprocess.run, poll the child so a
     `dispatch_heartbeat` journal record lands at least once per interval —
     `status` can then tell alive-but-slow from dead within one heartbeat
-    instead of one full timeout. The kill semantics are unchanged: past
-    timeout + 120s grace the child is killed and a timeout envelope returned
-    (the delegate enforces the same ceiling on its side).
+    instead of one full timeout. Kill semantics (TOOL-035):
+    timeout_s + the derived runner breaker margin (timeout_stack
+    .runner_breaker_s, #108: worst-case delegate ceiling + report margin)
+    is a documented last-resort BACKSTOP, never
+    the primary stall detector — the delegate's condition-based predicate
+    (stall_guard, when enabled) owns the kill decision and attaches
+    kill_evidence to the envelope. TOOL-036 (#107): past the backstop the
+    runner REQUESTS termination via request_file and waits up to
+    TERMINATION_REQUEST_WAIT_S for the delegate's kill authority to execute
+    and emit its own attributed envelope; if the delegate stays wedged the
+    runner reports delegate_wrapper_timeout with kill_authority
+    unresolved_reported. The runner never kills the delegate.
+    #105: dispatch_id/heartbeat_file wire the payload progress side channel;
+    both are forwarded verbatim and the heartbeat file is drained by the
+    caller's on_heartbeat.
 
     Opt-in resume-handoff (owner directive 2026-09-30): when resume_from
     carries a prior dispatch's child_session_id, the delegate is invoked
@@ -722,11 +948,17 @@ def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None,
     survives the dispatch caps. When child_home is set, the delegate reuses
     that isolated home so the session store persists across dispatches.
     Nothing changes when either is None."""
+    # #108: the margin defaults to the sizing authority's derived breaker
+    # margin; MP_WRAPPER_GRACE_S shrinks it only for hermetic tests.
+    wrapper_grace = float(os.environ.get(
+        "MP_WRAPPER_GRACE_S", _timeout_stack().RUNNER_BREAKER_MARGIN_S))
+    request_wait = float(os.environ.get("MP_TERMINATION_REQUEST_WAIT_S",
+                                        TERMINATION_REQUEST_WAIT_S))
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False,
                                      encoding="utf-8") as tf:
         tf.write(prompt)
         task_file = tf.name
-    deadline = time.monotonic() + timeout_s + 120
+    deadline = time.monotonic() + timeout_s + wrapper_grace
     try:
         cmd = [sys.executable, delegate_py, "--agent", agent, "--workspace", str(ws),
                "--task-file", task_file, "--timeout", str(timeout_s)]
@@ -734,6 +966,20 @@ def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None,
             cmd += ["--resume-from", resume_from]
         if child_home:
             cmd += ["--child-home", child_home]
+        # #105: forwarded verbatim; the delegate injects them into the child
+        # env. Whatever --delegate names must tolerate these two flags.
+        if heartbeat_file is not None:
+            cmd += ["--heartbeat-file", str(heartbeat_file)]
+        if dispatch_id is not None:
+            cmd += ["--dispatch-id", dispatch_id]
+        if request_file:
+            # Stale-file defense (TOOL-036): the delegate consumes the file on
+            # its first poll; it must not exist before spawn.
+            try:
+                os.unlink(request_file)
+            except OSError:
+                pass
+            cmd += ["--terminate-request-file", request_file]
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 text=True)
     except OSError:
@@ -742,31 +988,43 @@ def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None,
         except OSError:
             pass
         raise
+
+    def _on_deadline():
+        outcome, o, e = _request_termination(proc, request_file, request_wait)
+        if on_termination is not None:
+            try:
+                on_termination(outcome)
+            except OSError:
+                pass
+        return outcome, o, e
+
     out, err = "", ""
     try:
         while True:
             remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                proc.kill()
-                proc.wait()
-                return {"status": "timeout", "error": "delegate_wrapper_timeout",
-                        "duration_seconds": timeout_s, "agent": agent}
-            try:
-                out, err = proc.communicate(timeout=min(remaining, 10))
-                break
-            except subprocess.TimeoutExpired:
-                # A5 (#73): alive-but-slow vs dead must be distinguishable
-                # within one heartbeat interval, not one full timeout.
-                if on_heartbeat is not None:
-                    try:
-                        on_heartbeat()
-                    except OSError:
-                        pass
-                if time.monotonic() > deadline:
-                    proc.kill()
-                    proc.wait()
-                    return {"status": "timeout", "error": "delegate_wrapper_timeout",
+            expired = remaining <= 0
+            if not expired:
+                try:
+                    out, err = proc.communicate(timeout=min(remaining, 10))
+                    break
+                except subprocess.TimeoutExpired:
+                    # A5 (#73): alive-but-slow vs dead must be distinguishable
+                    # within one heartbeat interval, not one full timeout.
+                    if on_heartbeat is not None:
+                        try:
+                            on_heartbeat()
+                        except OSError:
+                            pass
+                    expired = time.monotonic() > deadline
+            if expired:
+                outcome, out, err = _on_deadline()
+                if outcome != "delegate_executed":
+                    return {"status": "timeout",
+                            "error": "delegate_wrapper_timeout",
+                            "kill_authority": "unresolved_reported",
+                            "termination_request": outcome,
                             "duration_seconds": timeout_s, "agent": agent}
+                break  # the delegate emitted its own attributed envelope
     finally:
         try:
             os.unlink(task_file)
@@ -775,15 +1033,14 @@ def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None,
     line = (out or "").strip().splitlines()
     if not line:
         return {"status": "internal_error", "error": "empty delegate output",
-                "stderr": (err or "")[-500:], "agent": agent}
-    if not line:
-        return {"status": "internal_error", "error": "empty delegate output",
-                "stderr": (r.stderr or "")[-500:], "agent": agent}
+                "stderr": (err or "")[-500:], "agent": agent,
+                "kill_authority": "none"}
     try:
         return json.loads(line[-1])
     except json.JSONDecodeError:
         return {"status": "internal_error", "error": "unparseable delegate envelope",
-                "stdout_tail": (r.stdout or "")[-500:], "agent": agent}
+                "stdout_tail": (out or "")[-500:], "agent": agent,
+                "kill_authority": "none"}
 
 
 # ── commands ────────────────────────────────────────────────────────────
@@ -833,6 +1090,18 @@ def cmd_init(args):
         raise SystemExit(_emit({"error": f"unknown lane: {lane}"}, 3))
     guard = check_production_guard(task, lane)
     sealed = seal_files(task, ws, sroot)
+    try:
+        init_surface = _measure_with_deadline(
+            lambda: config_surface(ws), MEASUREMENT_BUDGET_S, "config_surface")
+        init_sig = _measure_with_deadline(
+            lambda: tree_signature(ws), MEASUREMENT_BUDGET_S, "tree_signature")
+    except MeasurementTimeout as e:
+        raise SystemExit(_emit({
+            "error": "measurement_timeout",
+            "detail": f"{e.what} exceeded the measurement budget "
+                      f"({MEASUREMENT_BUDGET_S}s); refusing to baseline an "
+                      f"unmeasured tree (#109: acceptance paths fail closed)",
+        }, 1))
     state = {
         "schema_version": SCHEMA_VERSION,
         "task_id": task["task_id"],
@@ -849,8 +1118,8 @@ def cmd_init(args):
         "task_seal": sorted(task.get("seal", [])),
         "scope": task["scope"],
         "budget": task["budget"],
-        "init_config_surface": config_surface(ws),
-        "init_tree_sig": tree_signature(ws),
+        "init_config_surface": init_surface,
+        "init_tree_sig": init_sig,
         "sealed": sealed,
         "dispatches": [],
         "failures": [],
@@ -915,11 +1184,13 @@ def cmd_dispatch(args):
             }, 1))
     # A6 (#73): orphan surfacing is ADVISORY — fields in the JSON output only.
     # Neither dispatch nor status refuses on orphans: blocking would wedge
-    # every legal dispatch after any crash. Age beyond the delegate ceiling
-    # (timeout + 120s) means the open entry cannot belong to a live dispatch
+    # every legal dispatch after any crash. Age beyond the derived runner
+    # breaker (timeout_stack.runner_breaker_s, #108) means the open entry
+    # cannot belong to a live dispatch
     # of THIS run's budget, so it is marked orphaned in the journal
     # (append-only, never rewritten) and stops re-reporting once acked.
-    journal_ceiling = state["budget"]["timeout_s"] + 120
+    journal_ceiling = _timeout_stack().runner_breaker_s(
+        state["budget"]["timeout_s"])
     orphans = []
     for did, e in sorted(_journal_open(sroot).items()):
         started = _ts_to_epoch(e.get("at"))
@@ -997,6 +1268,39 @@ def cmd_dispatch(args):
         "timeout_s": state["budget"]["timeout_s"], "runner_pid": os.getpid(),
     })
     heartbeat_count = [0]
+    # #105: payload progress drain state. The heartbeat file is runner-owned
+    # and local; reads are bounded and every failure downgrades to a status
+    # string (#109: abstain + report — this never raises, never kills).
+    hb_file = _heartbeat_file(sroot, dispatch_id)
+    hb_file.parent.mkdir(parents=True, exist_ok=True)
+    hb = _heartbeat_module()
+    progress = {"count": 0, "last_epoch": None,
+                "status": "unavailable" if hb is None else "absent"}
+
+    def _drain_payload_progress():
+        if hb is None:
+            return
+        try:
+            rec, status = hb.read_latest(str(hb_file))
+        except Exception:
+            progress["status"] = "unreadable"
+            return
+        progress["status"] = status
+        if rec is None:
+            return
+        epoch = rec.get("epoch")
+        if isinstance(epoch, (int, float)) and not isinstance(epoch, bool):
+            if progress["last_epoch"] is not None and epoch <= progress["last_epoch"]:
+                return  # already journaled (dedupe across drains)
+            progress["last_epoch"] = epoch
+        progress["count"] += 1
+        _journal_append(sroot, {
+            "event": "dispatch_progress", "dispatch_id": dispatch_id,
+            "payload_seq": rec.get("seq"), "payload_pid": rec.get("pid"),
+            "stage": rec.get("stage"), "sub_stage": rec.get("sub_stage"),
+            "counters": rec.get("counters") or {},
+            "payload_ts": rec.get("ts"),
+        })
 
     def _heartbeat():
         # A5 (#73): alive-but-slow vs dead must be distinguishable within one
@@ -1006,13 +1310,31 @@ def cmd_dispatch(args):
             "event": "dispatch_heartbeat", "dispatch_id": dispatch_id,
             "beat": heartbeat_count[0],
         })
+        _drain_payload_progress()
 
     t0 = time.monotonic()
+    # TOOL-036: per-dispatch terminate-request path (uuid-named; the runner
+    # unlinks before spawn as stale-file defense).
+    req_path = str(sroot / f"{dispatch_id}.terminate")
+
+    def _termination(outcome):
+        # TOOL-036: for_dispatch_id, NOT dispatch_id — _journal_open
+        # (:674-685) masks any earlier record sharing dispatch_id, and
+        # dispatch_open must stay visible until dispatch_finished pairs it.
+        _journal_append(sroot, {
+            "event": "dispatch_termination_requested",
+            "for_dispatch_id": dispatch_id,
+            "task_id": state["task_id"],
+            "reason": "delegate_wrapper_timeout",
+            "outcome": outcome,
+        })
+
     # Opt-in resume-handoff (owner directive 2026-09-30): a task file that
     # declares "resume": true makes dispatch #2+ continue the prior child
     # session (its recorded child_session_id), so worker context survives
     # the dispatch caps. Every task without the flag is unchanged.
     resume_from = None
+    child_home = None
     if task.get("resume"):
         child_home = os.path.join(sroot, "child-home")
         try:
@@ -1033,21 +1355,33 @@ def cmd_dispatch(args):
             resume_from = None
     envelope = run_delegate(delegate_py, agent, ws, task["prompt"],
                             state["budget"]["timeout_s"],
-                            on_heartbeat=_heartbeat, resume_from=resume_from,
-                            child_home=child_home)
+                            on_heartbeat=_heartbeat, dispatch_id=dispatch_id,
+                            heartbeat_file=str(hb_file),
+                            request_file=req_path, on_termination=_termination,
+                            resume_from=resume_from, child_home=child_home)
     wall = time.monotonic() - t0
     envelope_status = envelope.get("status")
+    # TOOL-033: a detached report is a custody state, not a failure — it must
+    # not count against max_stagnant or trip the provider circuit breaker,
+    # and no budget clock follows the payload into its detached life.
+    detached = envelope_status == "payload_running_detached"
     state["dispatches"].append({
         "agent": agent, "status": envelope_status,
+        "dispatch_id": dispatch_id, "detached": detached,
+        "child_pid": envelope.get("child_pid"),
         "duration_seconds": envelope.get("duration_seconds", wall),
         "child_session_id": envelope.get("child_session_id"),
         "child_home": envelope.get("child_home"),
+        # TOOL-035: condition-kill evidence travels with the run record.
+        "kill_evidence": envelope.get("kill_evidence"),
+        # TOOL-036: who terminated the payload tree (or "none").
+        "kill_authority": envelope.get("kill_authority"),
         # Which preflight evidence authorised this dispatch, and how old it
         # was — the check previously left no trace at all.
         "preflight_ages_seconds": preflight_ages,
         "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     })
-    if envelope_status not in ("completed", "failed"):
+    if envelope_status not in ("completed", "failed", "payload_running_detached"):
         state["failures"].append({
             "kind": "provider_or_tool",
             "fingerprint": f"provider:{envelope_status}",
@@ -1057,21 +1391,33 @@ def cmd_dispatch(args):
     # A1 (#73): the open entry is closed with the envelope result — including
     # the provider/tool failure statuses, so a timeout or internal_error
     # leaves a finished pair, not a dangling open.
+    _drain_payload_progress()  # final drain: fast workers beat the 10s tick
     _journal_append(sroot, {
         "event": "dispatch_finished", "dispatch_id": dispatch_id,
         "task_id": state["task_id"], "dispatch_seq": dispatch_seq,
         "agent": agent, "envelope_status": envelope_status,
+        "detached": detached,
         "duration_seconds": round(envelope.get("duration_seconds") or wall, 3),
         "heartbeats": heartbeat_count[0],
         "child_session_id": envelope.get("child_session_id"),
         "child_home": envelope.get("child_home"),
+        "kill_evidence": envelope.get("kill_evidence"),
+        "kill_authority": envelope.get("kill_authority"),
+        # #105: additive payload-progress summary (existing keys unchanged).
+        "payload_heartbeats": progress["count"],
+        "payload_heartbeat_status": progress["status"],
     })
     cls, rec = classify_and_recommend(state, state["lane"])
+    if detached:
+        rec = {"action": "monitor_detached",
+               "note": "payload outlives the dispatch budget by design; "
+                       "accept refuses until --allow-detached-payload"}
     return _emit({
         "dispatched": True, "agent": agent, "lane": state["lane"],
         "envelope_status": envelope_status,
         "child_session_id": envelope.get("child_session_id"),
         "child_home": envelope.get("child_home"),
+        "detached": detached, "child_pid": envelope.get("child_pid"),
         "failure_class": cls, "recommendation": rec,
         # A6 (#73): advisory only — see the sweep comment above.
         "journal_orphans": [o["orphaned_dispatch_id"] for o in orphans],
@@ -1080,11 +1426,39 @@ def cmd_dispatch(args):
 
 
 def cmd_verify(args):
+    """#109: any workspace measurement inside verify is budgeted; on expiry
+    the refusal is a red receipt, exactly like verifier_timeout — accept
+    then refuses on 'receipt not green' until a verify completes."""
+    try:
+        return _cmd_verify_impl(args)
+    except MeasurementTimeout as e:
+        ws = str(Path(args.workspace).resolve())
+        task = load_task(args.task)
+        sroot = _state_root(ws, args.state_dir)
+        receipt = {
+            "task_id": task["task_id"], "passed": False,
+            "rejected": "measurement_timeout",
+            "detail": f"{e.what} exceeded the measurement budget "
+                      f"({MEASUREMENT_BUDGET_S}s); refusing to issue a "
+                      f"receipt over an unmeasured tree (#109)",
+            "dispatch_seq": len(_load_state(sroot).get("dispatches", [])),
+            "verifier_argv": task["verifier"]["argv"],
+            "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        _write_json_atomic(_receipt_path(sroot, task["task_id"]), receipt)
+        return _emit(receipt, 1)
+
+
+def _cmd_verify_impl(args):
     ws = str(Path(args.workspace).resolve())
     task = load_task(args.task)
     sroot = _state_root(ws, args.state_dir)
     state = _load_state(sroot)
     check_state_identity(state, task, ws, sroot)
+    # TOOL-033: the verifier runs on its own budget. Pre-split states carry
+    # no verify_timeout_s; they keep the legacy behavior exactly (timeout_s).
+    verify_timeout_s = state["budget"].get("verify_timeout_s",
+                                           state["budget"]["timeout_s"])
 
     # A verifier that passes on the UNMODIFIED init tree has no discriminating
     # power: it will pass whatever the worker does, so acceptance means
@@ -1099,12 +1473,12 @@ def cmd_verify(args):
     # baseline when it happens naturally: if the tree has not moved since init,
     # THIS verify already is the baseline run. Costs nothing, and gives
     # init_tree_sig -- written at init and previously read nowhere -- a reader.
-    pre_tree_sig = tree_signature(ws)
+    pre_tree_sig = _measure_with_deadline(lambda: tree_signature(ws), MEASUREMENT_BUDGET_S, "tree_signature")
     baseline_tree = (state.get("init_tree_sig") is not None
                      and pre_tree_sig == state["init_tree_sig"])
 
     # #18: no NEW or REMOVED verification-affecting files since init.
-    now_surface = config_surface(ws)
+    now_surface = _measure_with_deadline(lambda: config_surface(ws), MEASUREMENT_BUDGET_S, "config_surface")
     added = sorted(set(now_surface) - set(state["init_config_surface"]))
     removed = sorted(set(state["init_config_surface"]) - set(now_surface))
     if added or removed:
@@ -1161,7 +1535,7 @@ def cmd_verify(args):
     try:
         with tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as tf:
             r = subprocess.run(argv, cwd=ws, stdout=tf, stderr=subprocess.STDOUT,
-                               timeout=state["budget"]["timeout_s"],
+                               timeout=verify_timeout_s,
                                env=verifier_env)
             tf.seek(0)
             output = tf.read()
@@ -1177,10 +1551,10 @@ def cmd_verify(args):
             "passed": False,
             "rejected": "verifier_timeout",
             "verifier_exit": None,
-            "timeout_s": state["budget"]["timeout_s"],
+            "verify_timeout_s": verify_timeout_s,
             "dispatch_seq": len(state["dispatches"]),
             "verifier_argv": task["verifier"]["argv"],
-            "tree_sig": tree_signature(ws),
+            "tree_sig": _measure_with_deadline(lambda: tree_signature(ws), MEASUREMENT_BUDGET_S, "tree_signature"),
             "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         }
         _write_json_atomic(_receipt_path(sroot, task["task_id"]), receipt)
@@ -1189,7 +1563,7 @@ def cmd_verify(args):
                                 "budget; this refusal replaces any earlier "
                                 "receipt, so acceptance is blocked until a "
                                 "verify completes",
-                      "timeout_s": state["budget"]["timeout_s"],
+                      "verify_timeout_s": verify_timeout_s,
                       "receipt": receipt}, 1)
     except OSError as exc:
         # A01 companion: the verifier could not launch at all (missing
@@ -1202,7 +1576,7 @@ def cmd_verify(args):
             "launch_error": type(exc).__name__,
             "dispatch_seq": len(state["dispatches"]),
             "verifier_argv": task["verifier"]["argv"],
-            "tree_sig": tree_signature(ws),
+            "tree_sig": _measure_with_deadline(lambda: tree_signature(ws), MEASUREMENT_BUDGET_S, "tree_signature"),
             "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         }
         _write_json_atomic(_receipt_path(sroot, task["task_id"]), receipt)
@@ -1229,7 +1603,7 @@ def cmd_verify(args):
         # ("add a test that ..."), so this is evidence for the leader, not a
         # gate. Recorded per task, it becomes its own frequency measurement.
         "verifier_nondiscriminating": bool(baseline_tree and passed),
-        "tree_sig": tree_signature(ws),
+        "tree_sig": _measure_with_deadline(lambda: tree_signature(ws), MEASUREMENT_BUDGET_S, "tree_signature"),
         "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
     _write_json_atomic(_receipt_path(sroot, task["task_id"]), receipt)
@@ -1264,16 +1638,17 @@ def cmd_accept(args):
     check_state_identity(state, task, ws, sroot)
     # A02-lite (#83 M1): acceptance refuses while a dispatch is in flight.
     # The journal's dispatch_open entries (fsync'd before spawn, #73/A1) are
-    # the live-writer signal: an open entry younger than the delegate
-    # ceiling (timeout + 120s) means a worker may be mutating the tree RIGHT
+    # the live-writer signal: an open entry younger than the derived runner
+    # breaker (timeout_stack.runner_breaker_s, #108) means a worker may be
+    # mutating the tree RIGHT
     # NOW — accepting mid-write certifies a tree that is still changing.
     # Older open entries are orphans (advisory per #73), not live writers.
     # The residual race (dispatch finishing between this check and the
     # state write below) is M1-proper's transactional-store territory; this
     # closes the reproduction: accept during a live writer.
     _open = _journal_open(sroot)
-    _ceiling = (state.get("budget", {}).get("timeout_s",
-                                            DEFAULT_BUDGET["timeout_s"]) + 120)
+    _ceiling = _timeout_stack().runner_breaker_s(
+        state.get("budget", {}).get("timeout_s", DEFAULT_BUDGET["timeout_s"]))
     _live = sorted(
         did for did, e in _open.items()
         if (_t := _ts_to_epoch(e.get("at"))) is not None
@@ -1287,6 +1662,24 @@ def cmd_accept(args):
             "live_dispatch_ids": _live,
             "hint": "wait for the dispatch to finish (status shows it), or "
                     "journal --ack <id> if it is a confirmed orphan",
+        }, 1))
+    # TOOL-033: a detached payload outlived its dispatch budget — its journal
+    # pair is closed, but the payload may still be mutating the tree. Same
+    # refuse-unless-explicit-override pattern as --allow-zero-dispatch.
+    _detached = sorted(str(d.get("dispatch_id"))
+                       for d in state.get("dispatches", [])
+                       if d.get("detached"))
+    if _detached and not getattr(args, "allow_detached_payload", False):
+        raise SystemExit(_emit({
+            "accepted": False,
+            "reason": "detached_payload_in_flight: a dispatch's payload is "
+                      "running detached; the tree may be mutating under this "
+                      "acceptance",
+            "detached_dispatch_ids": _detached,
+            "hint": "confirm the detached payload has finished (status lists "
+                    "it under detached_dispatch_ids), then re-run accept "
+                    "with --allow-detached-payload as a reviewed decision "
+                    "(counted on state)",
         }, 1))
     rp = _receipt_path(sroot, task["task_id"])
     if not rp.is_file():
@@ -1322,7 +1715,17 @@ def cmd_accept(args):
             "receipt_dispatch_seq": seq,
             "current_dispatches": len(state["dispatches"]),
         }, 1))
-    current = tree_signature(ws)
+    try:
+        current = _measure_with_deadline(
+            lambda: tree_signature(ws), MEASUREMENT_BUDGET_S, "tree_signature")
+    except MeasurementTimeout as e:
+        raise SystemExit(_emit({
+            "accepted": False,
+            "reason": f"measurement_timeout: {e.what} exceeded the "
+                      f"measurement budget ({MEASUREMENT_BUDGET_S}s); "
+                      f"refusing rather than certifying an unmeasured tree "
+                      f"(#109: acceptance paths fail closed)",
+        }, 1))
     if current != receipt["tree_sig"]:
         # #17: the green receipt no longer describes this tree.
         raise SystemExit(_emit({
@@ -1354,6 +1757,9 @@ def cmd_accept(args):
     if getattr(args, "allow_zero_dispatch", False):
         state["allow_zero_dispatch_count"] = int(
             state.get("allow_zero_dispatch_count", 0)) + 1
+    if getattr(args, "allow_detached_payload", False):
+        state["allow_detached_payload_count"] = int(
+            state.get("allow_detached_payload_count", 0)) + 1
     _write_json_atomic(_state_path(sroot), state)
     return _emit({"accepted": True, "task_id": task["task_id"],
                   "receipt": receipt})
@@ -1564,12 +1970,16 @@ def cmd_status(args):
     seconds_since = (round(now - last_epoch) if last_epoch is not None else None)
 
     open_dispatches = _journal_open(sroot)
-    ceiling = timeout_s + 120
+    # #108: the orphan ceiling is the derived runner breaker — the same
+    # derivation the dispatch path enforces, never a re-derived literal.
+    ceiling = _timeout_stack().runner_breaker_s(timeout_s)
     orphans = sorted(
         did for did, e in open_dispatches.items()
         if (started := _ts_to_epoch(e.get("at"))) is not None
         and now - started > ceiling
     )
+
+    progress, progress_degraded = _payload_progress(sroot, open_dispatches)
 
     last_receipt = None
     task_id = state.get("task_id")
@@ -1588,6 +1998,10 @@ def cmd_status(args):
         "failure_count": len(state.get("failures", [])),
         "reinit_count": state.get("reinit_count", 0),
         "last_dispatch": (state.get("dispatches") or [{}])[-1].get("at"),
+        # TOOL-035: the last dispatch's kill evidence is visible without
+        # opening state.json by hand.
+        "last_kill_evidence": (state.get("dispatches") or [{}])[-1].get(
+            "kill_evidence"),
         "last_activity_at": (time.strftime("%Y-%m-%dT%H:%M:%S",
                                            time.localtime(last_epoch))
                              if last_epoch is not None else None),
@@ -1597,6 +2011,9 @@ def cmd_status(args):
         "stall_suspected": bool(last_epoch and now - last_epoch > stall_after),
         "open_journal_ids": sorted(open_dispatches),
         "orphaned_dispatch_ids": orphans,
+        "detached_dispatch_ids": sorted(
+            str(d.get("dispatch_id")) for d in state.get("dispatches", [])
+            if d.get("detached")),
         "journal_tail_corrupt": _journal_tail_corrupt(sroot),
         "journal_events": len(entries),
         # C3 (#73): a zero-dispatch or nondiscriminating green must be visible
@@ -1609,9 +2026,89 @@ def cmd_status(args):
         },
         # Back-compat: status used to dump the raw state; tests and leaders
         # read those keys directly, so keep them at top level.
+        # #105/#109: payload-emitted progress for open dispatches. Monitor
+        # path: degradation is reported, never refused on, never killed on.
+        "payload_progress": progress,
+        "measurement_degraded": progress_degraded,
+        "degraded_components": (["payload_progress"]
+                                if progress_degraded else []),
         **state,
     }
     return _emit(out)
+
+
+def cmd_timeouts(args):
+    """#108: the one place every timeout knob is discoverable, and the
+    preflight that refuses an inverted stack (exit 1 with named
+    violations). After the derivation rule, no task-file input can invert
+    the stack; the remaining vectors are constants drift (tripwired in
+    load_task) and delegate config (probed here)."""
+    task = load_task(args.task)
+    stack = _timeout_stack()
+    timeout_s = task["budget"]["timeout_s"]
+    delegate_py = resolve_delegate(args.delegate)
+    try:
+        r = subprocess.run([sys.executable, delegate_py,
+                            "--print-timeout-knobs"],
+                           capture_output=True, text=True, timeout=15)
+        knobs = json.loads(r.stdout) if r.stdout.strip() else {}
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as e:
+        knobs = {"knobs_valid": False, "error": f"knobs probe failed: {e}"}
+    grace = knobs.get("default_kill_grace_seconds")
+    if isinstance(grace, bool) or not isinstance(grace, (int, float)):
+        grace = stack.KILL_GRACE_MAX_S
+    violations = stack.validate_stack(stack.stack_layers(timeout_s, grace))
+    # A legal config edit must not invert the stack either: also check the
+    # worst grace the delegate's own validation permits.
+    violations += stack.validate_stack(
+        stack.stack_layers(timeout_s, stack.KILL_GRACE_MAX_S))
+    if not knobs.get("knobs_valid", False):
+        violations.append("delegate_config_invalid: "
+                          + str(knobs.get("error", "unknown")))
+    # TOOL-035/036 composition: with stall_guard enabled the ladder may add
+    # worst_case_added_s past the wall-clock deadline. The +120 breaker alone
+    # does not cover the +150 worst case; the guarantee lives in the breaker's
+    # termination-REQUEST window (+120 + TERMINATION_REQUEST_WAIT_S), shown
+    # here as its own layer (timeout_stack.py docstring, Ruling 2026-09-26).
+    sg = knobs.get("stall_guard")
+    sg = sg if isinstance(sg, dict) else {}
+    sg_added = sg.get("worst_case_added_s")
+    if isinstance(sg_added, bool) or not isinstance(sg_added, (int, float)):
+        sg_added = 0.0
+    layers = stack.stack_layers(timeout_s, grace)
+    if sg.get("enabled"):
+        layers.insert(2, ("stall_guard_ladder", "ladder",
+                          float(timeout_s) + sg_added))
+        composed = (float(timeout_s) + sg_added + stack.KILL_GRACE_MAX_S
+                    + stack.DELEGATE_OVERHEAD_S)
+        window = stack.runner_breaker_s(timeout_s) + TERMINATION_REQUEST_WAIT_S
+        if composed + stack.MIN_REPORT_MARGIN_S > window:
+            violations.append(
+                "stall_guard_stack_exceeds_request_window: worst case "
+                f"{composed:.0f}s + {stack.MIN_REPORT_MARGIN_S:.0f}s report "
+                f"margin exceeds breaker + request window {window:.0f}s")
+    layers.insert(-1, ("runner_request_window", "request_window",
+                       stack.runner_breaker_s(timeout_s)
+                       + TERMINATION_REQUEST_WAIT_S))
+    return _emit({
+        "task_id": task["task_id"],
+        "budget": task["budget"],
+        "layers": [{"layer": n, "kind": k, "seconds": s}
+                   for n, k, s in layers],
+        "constants": {
+            "DELEGATE_OVERHEAD_S": stack.DELEGATE_OVERHEAD_S,
+            "KILL_GRACE_MAX_S": stack.KILL_GRACE_MAX_S,
+            "MIN_REPORT_MARGIN_S": stack.MIN_REPORT_MARGIN_S,
+            "RUNNER_BREAKER_MARGIN_S": stack.RUNNER_BREAKER_MARGIN_S,
+            "PILOT_BREAKER_MARGIN_S": stack.PILOT_BREAKER_MARGIN_S,
+            "DEFAULT_VERIFY_TIMEOUT_S": stack.DEFAULT_VERIFY_TIMEOUT_S,
+        },
+        "delegate": delegate_py,
+        "delegate_knobs": knobs,
+        "stall_guard": sg,
+        "coherent": not violations,
+        "violations": violations,
+    }, 0 if not violations else 1)
 
 
 def cmd_journal(args):
@@ -1669,6 +2166,10 @@ def main(argv=None):
                            help="accept a zero-dispatch nondiscriminating "
                                 "green receipt as a reviewed decision "
                                 "(counted on state)")
+            p.add_argument("--allow-detached-payload", action="store_true",
+                           help="accept while a detached payload may still be "
+                                "running, as a reviewed decision (counted on "
+                                "state)")
     # A6 (#73): resolve orphaned opens without re-reporting them forever.
     p = sub.add_parser("journal")
     p.add_argument("--workspace", required=True)
@@ -1676,13 +2177,17 @@ def main(argv=None):
     p.add_argument("--ack", action="append", default=None,
                    help="acknowledge a resolved dispatch_id so it stops "
                         "re-reporting as orphaned")
+    # #108: timeout-stack discovery + inversion preflight.
+    p = sub.add_parser("timeouts")
+    p.add_argument("--task", required=True)
+    p.add_argument("--delegate", default=None)
     args = parser.parse_args(argv)
     if args.cmd == "journal":
         return cmd_journal(args)
     return {
         "lane": cmd_lane, "init": cmd_init, "dispatch": cmd_dispatch,
         "verify": cmd_verify, "accept": cmd_accept, "record": cmd_record,
-        "status": cmd_status,
+        "status": cmd_status, "timeouts": cmd_timeouts,
     }[args.cmd](args)
 
 
