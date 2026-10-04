@@ -706,7 +706,7 @@ def resolve_delegate(explicit):
 
 
 def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None,
-                 resume_from=None):
+                 resume_from=None, child_home=None):
     """One worker attempt through the delegate wrapper. Returns the envelope.
 
     A5 (#73): instead of one blocking subprocess.run, poll the child so a
@@ -719,7 +719,9 @@ def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None,
     Opt-in resume-handoff (owner directive 2026-09-30): when resume_from
     carries a prior dispatch's child_session_id, the delegate is invoked
     with --resume-from so the worker continues its own session — context
-    survives the dispatch caps. Nothing changes when it is None."""
+    survives the dispatch caps. When child_home is set, the delegate reuses
+    that isolated home so the session store persists across dispatches.
+    Nothing changes when either is None."""
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False,
                                      encoding="utf-8") as tf:
         tf.write(prompt)
@@ -730,6 +732,8 @@ def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None,
                "--task-file", task_file, "--timeout", str(timeout_s)]
         if resume_from:
             cmd += ["--resume-from", resume_from]
+        if child_home:
+            cmd += ["--child-home", child_home]
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 text=True)
     except OSError:
@@ -1010,6 +1014,7 @@ def cmd_dispatch(args):
     # the dispatch caps. Every task without the flag is unchanged.
     resume_from = None
     if task.get("resume"):
+        child_home = os.path.join(sroot, "child-home")
         try:
             journal_path = os.path.join(sroot, "journal.jsonl")
             with open(journal_path, encoding="utf-8") as jf:
@@ -1026,7 +1031,8 @@ def cmd_dispatch(args):
             resume_from = None
     envelope = run_delegate(delegate_py, agent, ws, task["prompt"],
                             state["budget"]["timeout_s"],
-                            on_heartbeat=_heartbeat, resume_from=resume_from)
+                            on_heartbeat=_heartbeat, resume_from=resume_from,
+                            child_home=child_home)
     wall = time.monotonic() - t0
     envelope_status = envelope.get("status")
     state["dispatches"].append({
