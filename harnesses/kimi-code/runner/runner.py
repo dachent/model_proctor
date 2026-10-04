@@ -1024,7 +1024,8 @@ def cmd_dispatch(args):
                     except json.JSONDecodeError:
                         continue
                     if (rec.get("event") == "dispatch_finished"
-                            and rec.get("child_session_id")):
+                            and rec.get("child_session_id")
+                            and rec.get("task_id") == state["task_id"]):
                         resume_from = rec["child_session_id"]
                         break
         except OSError:
