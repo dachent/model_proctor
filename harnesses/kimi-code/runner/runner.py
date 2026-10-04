@@ -1025,7 +1025,8 @@ def cmd_dispatch(args):
                         continue
                     if (rec.get("event") == "dispatch_finished"
                             and rec.get("child_session_id")
-                            and rec.get("task_id") == state["task_id"]):
+                            and rec.get("task_id") == state["task_id"]
+                            and rec.get("child_home") == child_home):
                         resume_from = rec["child_session_id"]
                         break
         except OSError:
@@ -1063,6 +1064,7 @@ def cmd_dispatch(args):
         "duration_seconds": round(envelope.get("duration_seconds") or wall, 3),
         "heartbeats": heartbeat_count[0],
         "child_session_id": envelope.get("child_session_id"),
+        "child_home": envelope.get("child_home"),
     })
     cls, rec = classify_and_recommend(state, state["lane"])
     return _emit({
