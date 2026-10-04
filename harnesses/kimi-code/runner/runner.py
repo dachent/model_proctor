@@ -705,7 +705,8 @@ def resolve_delegate(explicit):
         "error": "delegate.py not found; pass --delegate or set DELEGATE_PATH"}, 3))
 
 
-def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None):
+def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None,
+                 resume_from=None):
     """One worker attempt through the delegate wrapper. Returns the envelope.
 
     A5 (#73): instead of one blocking subprocess.run, poll the child so a
@@ -713,7 +714,12 @@ def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None):
     `status` can then tell alive-but-slow from dead within one heartbeat
     instead of one full timeout. The kill semantics are unchanged: past
     timeout + 120s grace the child is killed and a timeout envelope returned
-    (the delegate enforces the same ceiling on its side)."""
+    (the delegate enforces the same ceiling on its side).
+
+    Opt-in resume-handoff (owner directive 2026-09-30): when resume_from
+    carries a prior dispatch's child_session_id, the delegate is invoked
+    with --resume-from so the worker continues its own session — context
+    survives the dispatch caps. Nothing changes when it is None."""
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False,
                                      encoding="utf-8") as tf:
         tf.write(prompt)
@@ -722,6 +728,8 @@ def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None):
     try:
         cmd = [sys.executable, delegate_py, "--agent", agent, "--workspace", str(ws),
                "--task-file", task_file, "--timeout", str(timeout_s)]
+        if resume_from:
+            cmd += ["--resume-from", resume_from]
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 text=True)
     except OSError:
@@ -996,9 +1004,29 @@ def cmd_dispatch(args):
         })
 
     t0 = time.monotonic()
+    # Opt-in resume-handoff (owner directive 2026-09-30): a task file that
+    # declares "resume": true makes dispatch #2+ continue the prior child
+    # session (its recorded child_session_id), so worker context survives
+    # the dispatch caps. Every task without the flag is unchanged.
+    resume_from = None
+    if task.get("resume"):
+        try:
+            journal_path = os.path.join(sroot, "journal.jsonl")
+            with open(journal_path, encoding="utf-8") as jf:
+                for line in reversed(jf.readlines()[-5000:]):
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if (rec.get("event") == "dispatch_finished"
+                            and rec.get("child_session_id")):
+                        resume_from = rec["child_session_id"]
+                        break
+        except OSError:
+            resume_from = None
     envelope = run_delegate(delegate_py, agent, ws, task["prompt"],
                             state["budget"]["timeout_s"],
-                            on_heartbeat=_heartbeat)
+                            on_heartbeat=_heartbeat, resume_from=resume_from)
     wall = time.monotonic() - t0
     envelope_status = envelope.get("status")
     state["dispatches"].append({
