@@ -26,6 +26,10 @@ FAKE_WORKER = ROOT / "runner" / "tests" / "fake_worker.py"
 EXTRACT_LOG = REPO_ROOT / "scripts" / "extract_log.py"
 PRICING = REPO_ROOT / "evals" / "pricing.yaml"
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import hermetic_scratch  # noqa: E402  (#115: keep dispatch scratch in temp)
+hermetic_scratch.install()
+
 BUGGY = 'def sum_to_n(n):\n    return sum(range(1, n))\n'
 FIXED = 'def sum_to_n(n):\n    return sum(range(1, n + 1))\n'
 CHECK = (
@@ -270,6 +274,33 @@ class SmokeTest(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertTrue(out["passed"])
         self.assertEqual(out["verifier_restored"], [])
+
+    # ── S8: dispatch scratch lives under the structured root (#115) ─────
+    def test_s8_dispatch_scratch_under_root(self):
+        ws = make_workspace(self.tmp)
+        task = make_task(self.tmp, features={
+            "bounded": True, "known_location": True, "objective_acceptance": True})
+        root = Path(self.tmp) / "scratch"
+        recorded = Path(self.tmp) / "taskfile-path.txt"
+        env = {"MODEL_PROCTOR_SCRATCH": str(root),
+               "FAKE_WORKER_RECORD_TASKFILE": str(recorded)}
+        rc, out = run_runner("init", "--workspace", ws, "--task", task,
+                             env_extra=env)
+        self.assertEqual(rc, 0, out)
+        rc, out = run_runner("dispatch", "--workspace", ws, "--task", task,
+                             "--delegate", str(FAKE_WORKER), env_extra=env)
+        self.assertEqual(rc, 0, out)
+
+        # The prompt file went under the root (not the system %TEMP%), and it
+        # is gone once the dispatch ends.
+        task_file = Path(recorded.read_text(encoding="utf-8"))
+        self.assertEqual(task_file.parent, root / "taskfiles")
+        self.assertFalse(task_file.exists())
+
+        # The dispatch reports what its start-of-run sweep did.
+        sweep = out["scratch_sweep"]
+        self.assertEqual(sweep["root"], str(root))
+        self.assertEqual(sweep["errors"], [])
 
 
 def importlib_import(path):

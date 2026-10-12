@@ -20,7 +20,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -269,17 +268,35 @@ def check_contracts(summary):
     return fails
 
 
-def sweep_orphan_homes(max_age_s=3600):
-    """Delete orphaned delegate-kimi-home-* temp dirs (crash leftovers)."""
-    removed = 0
-    for p in Path(tempfile.gettempdir()).glob("delegate-kimi-home-*"):
-        try:
-            if time.time() - p.stat().st_mtime > max_age_s:
-                shutil.rmtree(p, ignore_errors=True)
-                removed += 1
-        except OSError:
-            continue
-    return removed
+_SCRATCH = None
+
+
+def _scratch_module():
+    """runner.py — the one authority for the scratch root and its sweep
+    (#115). Dual layout like _timeout_stack: pilot.py and runner.py are
+    siblings in a flat install (C:\\Tools\\model-proctor) and in a repo
+    checkout (harnesses/kimi-code/runner)."""
+    global _SCRATCH
+    if _SCRATCH is None:
+        import importlib.util
+        cand = Path(__file__).resolve().parent / "runner.py"
+        spec = importlib.util.spec_from_file_location("runner", str(cand))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _SCRATCH = mod
+    return _SCRATCH
+
+
+def sweep_orphan_homes(max_age_s=None):
+    """Remove scratch artifacts left by crashed dispatches (#115).
+
+    Delegates to runner.sweep_orphan_homes — the sweep's safety rules (never
+    the current dispatch's home, never one the current task's dispatches
+    reference) live in one place. Returns the number removed, which is what
+    callers print."""
+    sweep = _scratch_module().sweep_orphan_homes
+    result = sweep() if max_age_s is None else sweep(max_age_s=max_age_s)
+    return len(result["removed"])
 
 
 def run_case(case, out_root, dry_run, lane_override=None, max_dispatches=None,
@@ -471,11 +488,11 @@ def main():
     # TOOL-013: isolation lives at the delegate chokepoint (per-dispatch seeded
     # KIMI_CODE_HOME). A process-level os.environ set here cannot cross the
     # delegate's environment allowlist — verified inert on 2026-08-25 — so the
-    # pilot only sweeps orphaned homes and cleans up per-dispatch ones after
-    # metering (see run_case).
+    # pilot only sweeps orphaned scratch (see sweep_orphan_homes) and cleans up
+    # per-dispatch homes after metering (see run_case).
     swept = sweep_orphan_homes()
     if swept:
-        print(f"swept {swept} orphaned delegate-kimi-home dir(s)", flush=True)
+        print(f"swept {swept} orphaned dispatch scratch dir(s)", flush=True)
 
     summaries = []
     for cid in ids:

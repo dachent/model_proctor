@@ -171,7 +171,7 @@ what the ledger accumulates for free.
   surface (payloads copied out of the agent-writable workspace at init; tampered inputs are
   restored and flagged at verify time), stagnation detection with failure-class switching, and an
   append-only metered task ledger. Runner state lives **outside** the workspace
-  (`.runner-state/` sibling). Smoke suite S1–S7: `python -m unittest discover -s harnesses/kimi-code/runner/tests -v`.
+  (`.runner-state/` sibling). Smoke suite S1–S8: `python -m unittest discover -s harnesses/kimi-code/runner/tests -v`.
   Acceptance additionally refuses a receipt flagged `tamper_detected` and one written before a
   later dispatch; verification pins the verifier argv at init and rejects `-m` module shadowing;
   `init` refuses to silently re-baseline an initialized workspace. See **Deterministic refusals**
@@ -180,7 +180,9 @@ what the ledger accumulates for free.
 - `harnesses/kimi-code/delegate/` — a lean Windows-native subprocess wrapper (`delegate.py`) that runs external CLI
   workers with a stable envelope contract: exit codes, truncation flags, captured child session
   ids, and per-dispatch isolated+seeded `KIMI_CODE_HOME` homes (`child_home` in the envelope;
-  callers meter from it, then delete it). 90 tests.
+  callers meter from it, then delete it). Run dirs and homes live under one structured dispatch
+  scratch root (`C:\Dev\scratch\model-proctor`, override `MODEL_PROCTOR_SCRATCH`) rather than the
+  system `%TEMP%`, so a caller can sweep one dispatch's state by id. 90 tests.
 - `scripts/extract_log.py` — deterministic session-log fact extractor with a **coverage manifest**
   (bytes in, records parsed, records dropped). LLMs interpret extractions; they never scan raw
   volume. Verifier-class: hash-frozen per goal. 5 tests.
@@ -196,7 +198,7 @@ what the ledger accumulates for free.
 Python 3.10+, standard library only, everywhere.
 
 ```bash
-python -m unittest discover -s harnesses/kimi-code/runner/tests -v    # live path smoke suite (S1–S7)
+python -m unittest discover -s harnesses/kimi-code/runner/tests -v    # live path smoke suite (S1–S8)
 python -m unittest discover -s harnesses/kimi-code/delegate/tests -v
 python -m unittest discover -s harnesses/codex/delegate/tests -v
 python -m unittest discover -s scripts/tests -v

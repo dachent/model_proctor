@@ -18,6 +18,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]          # harnesses/kimi-code
 RUNNER = ROOT / "runner" / "runner.py"
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import hermetic_scratch  # noqa: E402  (#115: keep dispatch scratch in temp)
+hermetic_scratch.install()
+
 FIXED = 'def sum_to_n(n):\n    return sum(range(1, n + 1))\n'
 CHECK = (
     'import sys, os\n'

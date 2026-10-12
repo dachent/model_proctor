@@ -419,27 +419,30 @@ def assert_envelope_schema(testcase, result):
 # ---------------------------------------------------------------------------
 
 class DelegateTestBase(unittest.TestCase):
-    """Base class with temp dirs, default config, and run-dir cleanup."""
+    """Base class with temp dirs, a hermetic scratch root, and cleanup."""
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="delegate-test-")
         self.workspace = tempfile.mkdtemp(prefix="delegate-ws-", dir=self.tmpdir)
         self.fixture_dir = tempfile.mkdtemp(prefix="delegate-fix-")
+        # #115: run dirs and isolated homes live under the structured scratch
+        # root, so the suite pins it to its own tree — a test must never write
+        # into (or sweep) the operator's real C:\Dev\scratch\model-proctor.
+        self.scratch = os.path.join(self.tmpdir, "scratch")
+        self._old_scratch = os.environ.get("MODEL_PROCTOR_SCRATCH")
+        os.environ["MODEL_PROCTOR_SCRATCH"] = self.scratch
         self.echo_script = self._script("echo_stdin", _ECHO_STDIN)
         self.config_path = self._config({
             "test-agent": make_agent(self.echo_script),
         })
 
     def tearDown(self):
+        if self._old_scratch is None:
+            os.environ.pop("MODEL_PROCTOR_SCRATCH", None)
+        else:
+            os.environ["MODEL_PROCTOR_SCRATCH"] = self._old_scratch
         shutil.rmtree(self.tmpdir, ignore_errors=True)
         shutil.rmtree(self.fixture_dir, ignore_errors=True)
-        # Clean up delegate-* run dirs created during the test run.
-        for pattern in ("delegate-*",):
-            for d in glob.glob(os.path.join(tempfile.gettempdir(), pattern)):
-                try:
-                    shutil.rmtree(d, ignore_errors=True)
-                except Exception:
-                    pass
 
     def _script(self, name, content):
         return make_fixture_script(self.fixture_dir, name, content)
@@ -1274,6 +1277,11 @@ class TestLifecycle(DelegateTestBase):
                 task = "hello"
                 task_file = None
                 timeout = None
+                # The real argparse namespace always carries these; a stub that
+                # omits them made the failure path an AttributeError instead of
+                # the forced OSError this test is about.
+                child_home = None
+                dispatch_id = None
             os.environ["DELEGATE_CONFIG"] = self.config_path
             result, exit_code = delegate.run_delegate(FakeArgs())
             self.assertEqual(result["status"], "internal_error")
@@ -1477,14 +1485,12 @@ class TestHomeIsolation(DelegateTestBase):
             os.environ.pop("DELEGATE_NO_HOME_ISOLATION", None)
         else:
             os.environ["DELEGATE_NO_HOME_ISOLATION"] = self._old_noiso
-        for d in glob.glob(os.path.join(tempfile.gettempdir(),
-                                        "delegate-kimi-home-*")):
-            shutil.rmtree(d, ignore_errors=True)
         super().tearDown()
 
-    def _run_home(self, agent_name="home-agent"):
+    def _run_home(self, agent_name="home-agent", extra_argv=()):
         cfg = self._config({agent_name: make_agent(self.home_script)})
-        out, err, rc = self._run(agent_name, task="hi", config=cfg)
+        out, err, rc = self._run(agent_name, task="hi", config=cfg,
+                                 extra_argv=extra_argv)
         return self._assert_result(out, err, rc, "completed", 0)
 
     def test_isolated_seeded_home(self):
@@ -1495,11 +1501,33 @@ class TestHomeIsolation(DelegateTestBase):
         self.assertEqual(result["stdout"].strip(), child_home)
         self.assertNotEqual(os.path.normcase(child_home),
                             os.path.normcase(self.src_home))
+        # #115: under the structured scratch root, never the system %TEMP%
+        # (the suite's own root is hermetic; see TestScratchRoot for the
+        # no-%TEMP%-writes assertion).
         self.assertTrue(child_home.startswith(
-            os.path.join(tempfile.gettempdir(), "delegate-kimi-home-")))
+            os.path.join(self.scratch, "homes", "delegate-kimi-home-")))
         # Seeded with config + credentials (an empty home fails auth).
         self.assertTrue(os.path.isfile(os.path.join(child_home, "config.toml")))
         self.assertTrue(os.path.isdir(os.path.join(child_home, "credentials")))
+
+    def test_home_is_named_for_the_dispatch_id(self):
+        """#115: with a dispatch id the home path is deterministic, so a
+        caller can match a home to its dispatch and sweep it by id."""
+        result = self._run_home(extra_argv=["--dispatch-id", "d-115"])
+        self.assertEqual(result["child_home"],
+                         os.path.join(self.scratch, "homes", "d-115"))
+        self.assertEqual(result["run_dir"],
+                         os.path.join(self.scratch, "runs", "d-115"))
+
+    def test_dispatch_id_cannot_escape_the_scratch_root(self):
+        """A dispatch id becomes a path component; a traversal attempt must
+        not write outside the root."""
+        result = self._run_home(extra_argv=["--dispatch-id", "..\\..\\evil"])
+        child_home = result["child_home"]
+        self.assertTrue(child_home.startswith(
+            os.path.join(self.scratch, "homes", "delegate-kimi-home-")),
+            child_home)
+        self.assertFalse(os.path.exists(os.path.join(self.tmpdir, "evil")))
 
     def test_isolation_opt_out(self):
         os.environ["DELEGATE_NO_HOME_ISOLATION"] = "1"
@@ -1508,6 +1536,52 @@ class TestHomeIsolation(DelegateTestBase):
         # No injection, and KIMI_CODE_HOME is not in the agent's allowlist,
         # so the child sees nothing (environment isolation governs inheritance).
         self.assertEqual(result["stdout"].strip(), "")
+
+
+class TestScratchRoot(DelegateTestBase):
+    """#115: run dirs and homes live under one structured root, and nothing
+    this wrapper creates lands in the system %TEMP% any more."""
+
+    _TEMP_PATTERNS = ("delegate-*", "delegate-kimi-home-*")
+
+    def _temp_snapshot(self):
+        found = set()
+        for pattern in self._TEMP_PATTERNS:
+            found.update(glob.glob(os.path.join(tempfile.gettempdir(), pattern)))
+        return found
+
+    def test_run_dir_under_scratch_root(self):
+        out, err, rc = self._run("test-agent", task="hello")
+        result = self._assert_result(out, err, rc, "completed", 0)
+        self.assertTrue(result["run_dir"].startswith(
+            os.path.join(self.scratch, "runs", "delegate-")), result["run_dir"])
+        self.assertTrue(os.path.isdir(result["run_dir"]))
+
+    def test_nothing_lands_in_system_temp(self):
+        before = self._temp_snapshot()
+        out, err, rc = self._run("test-agent", task="hello")
+        self._assert_result(out, err, rc, "completed", 0)
+        self.assertEqual(self._temp_snapshot() - before, set())
+
+    def test_scratch_root_env_override(self):
+        self.assertEqual(delegate.scratch_root(), self.scratch)
+        os.environ.pop("MODEL_PROCTOR_SCRATCH")
+        self.assertEqual(delegate.scratch_root(), delegate._DEFAULT_SCRATCH_ROOT)
+
+    def test_default_root_is_the_policy_path(self):
+        """The default is workstation policy, not the system temp dir."""
+        if not _IS_WINDOWS:
+            self.skipTest("the scratch-root default is Windows workstation policy")
+        self.assertEqual(delegate._DEFAULT_SCRATCH_ROOT,
+                         r"C:\Dev\scratch\model-proctor")
+
+    def test_unusable_dispatch_id_falls_back_to_mkdtemp(self):
+        for bad in ("", "..", ".", "a/b", "a\\b", "x" * 65):
+            path = delegate.scratch_dir("homes", "delegate-kimi-home-", bad)
+            self.assertTrue(path.startswith(
+                os.path.join(self.scratch, "homes", "delegate-kimi-home-")),
+                f"{bad!r} -> {path}")
+            shutil.rmtree(path, ignore_errors=True)
 
 
 class TestStallGuardLifecycle(DelegateTestBase):

@@ -14,6 +14,8 @@ Env knobs:
                         envelope when not emitting)
   FAKE_WORKER_KILL_EVIDENCE  JSON string; attached to the envelope as
                         kill_evidence (TOOL-035 propagation tests)
+  FAKE_WORKER_RECORD_TASKFILE  absolute path to write the --task-file path the
+                        runner passed in (#115 scratch-root tests)
 """
 
 import argparse
@@ -36,6 +38,10 @@ def main():
     # the fake never wedges, so accept and ignore.
     parser.add_argument("--terminate-request-file", default=None)
     args = parser.parse_args()
+
+    record_path = os.environ.get("FAKE_WORKER_RECORD_TASKFILE")
+    if record_path:
+        Path(record_path).write_text(args.task_file, encoding="utf-8")
 
     write_rel = os.environ.get("FAKE_WORKER_WRITE")
     if write_rel:
