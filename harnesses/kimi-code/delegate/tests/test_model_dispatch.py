@@ -7,6 +7,7 @@ config (never a cached copy), refuses production-pattern prompts, refuses
 nested/--write misuse, and injects the PROCTOR_CHILD marker. Every test
 drives the real CLI with fixture configs — no model calls.
 """
+import atexit
 import json
 import os
 import shutil
@@ -21,6 +22,12 @@ sys.path.insert(0, str(_DELEGATE_DIR))
 import delegate  # noqa: E402
 
 DELEGATE_PY = _DELEGATE_DIR / "delegate.py"
+
+# #115: a dispatch creates its run dir and isolated home under the structured
+# scratch root, so this module pins it to its own tree — a test must never
+# write into (or sweep) the operator's real C:\Dev\scratch\model-proctor.
+_SCRATCH_ROOT = tempfile.mkdtemp(prefix="delegate-scratch-")
+atexit.register(shutil.rmtree, _SCRATCH_ROOT, ignore_errors=True)
 
 # Child that echoes its first argv token (the interpolated model id), the
 # task (last argv), and the PROCTOR_CHILD marker — proving all three
@@ -90,6 +97,7 @@ def run_cli(argv, config=None, home=None, extra_env=None):
     env.pop("DELEGATE_CONFIG", None)
     env.pop("KIMI_CODE_HOME", None)
     env.pop("PROCTOR_CHILD", None)
+    env["MODEL_PROCTOR_SCRATCH"] = _SCRATCH_ROOT
     if config:
         env["DELEGATE_CONFIG"] = config
     if home:

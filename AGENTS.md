@@ -30,7 +30,11 @@ never through the harness root.
   receipts and a config-surface manifest, stagnation switching, append-only task
   records. State, receipts, and sealed verifier payloads live OUTSIDE the workspace
   (`<ws_parent>/.runner-state/<ws>-<hash>/`, override with `--state-dir`, which now
-  refuses a path inside the workspace; TOOL-014/017). Designs out the frozen
+  refuses a path inside the workspace; TOOL-014/017). Dispatch scratch — run dirs,
+  isolated homes, the prompt task file — lives under one structured root
+  (`C:\Dev\scratch\model-proctor`, override `MODEL_PROCTOR_SCRATCH`) as
+  `<root>/{runs,homes}/<dispatch-id>`, and every dispatch start sweeps what no live
+  dispatch can still be using (#115). Designs out the frozen
   cascade's trust-boundary defects (#17–#20) rather than patching them.
   Acceptance gate (TOOL-015/016/018): a receipt flagged `tamper_detected` is refused
   rather than annotated; receipts carry `dispatch_seq` and `verifier_argv`, so one
@@ -55,9 +59,9 @@ never through the harness root.
   `MEASUREMENT_BUDGET_S` (120s) and fail closed on expiry. Production-runner tasks (TOOL-019) are barred from `flash` absent
   an explicit `lane`, and require fresh `preflight_receipts`. `harnesses/kimi-code/runner/pilot.py` drives
   the loop against real workers and appends an evidence row.
-  Tests in `harnesses/kimi-code/runner/tests/`: S1–S7 + git-root cases, `test_production_guard.py`,
+  Tests in `harnesses/kimi-code/runner/tests/`: S1–S8 + git-root cases, `test_production_guard.py`,
   `test_acceptance_gate.py`, `test_tree_signature.py`, `test_verifier_integrity.py`,
-  `test_state_boundary.py`.
+  `test_state_boundary.py`, `test_scratch_root.py`.
   The boundary is **tamper-evident against a non-adversarial worker**, not sealed
   against a hostile one — residuals tracked in #40.
 - `harnesses/kimi-code/replay/` — regression replay corpus for the monitoring redesign

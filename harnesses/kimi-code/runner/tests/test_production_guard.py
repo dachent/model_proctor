@@ -20,6 +20,10 @@ ROOT = Path(__file__).resolve().parents[2]
 RUNNER = ROOT / "runner" / "runner.py"
 FAKE_WORKER = ROOT / "runner" / "tests" / "fake_worker.py"
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import hermetic_scratch  # noqa: E402  (#115: keep dispatch scratch in temp)
+hermetic_scratch.install()
+
 PROD_PROMPT = (
     "TASK: Execute the weekly production run per docs/RUNBOOK.md via "
     "pwsh scripts/run_week.ps1 -WeekTag 20260825. Do not improvise."

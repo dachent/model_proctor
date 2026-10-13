@@ -141,7 +141,7 @@ def main():
     out_root.mkdir(parents=True, exist_ok=True)
     swept = pilot.sweep_orphan_homes()
     if swept:
-        print(f"swept {swept} orphaned delegate-kimi-home dir(s)", flush=True)
+        print(f"swept {swept} orphaned dispatch scratch dir(s)", flush=True)
 
     rows = []
     for cid in args.cases.split(","):

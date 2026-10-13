@@ -21,6 +21,12 @@ workspace (default <ws_parent>/.runner-state/<ws>-<hash>, override with
 from the sealed copy are restored and the receipt flags the tamper
 (restore-and-flag, ATIF class) while added/removed surface files reject.
 
+Dispatch scratch (#115): the run dir, the isolated home, and the prompt task
+file live under ONE structured root — <root>/{runs,homes}/<dispatch-id> and
+<root>/taskfiles/<uuid>.txt, default C:\Dev\scratch\model-proctor, override
+MODEL_PROCTOR_SCRATCH — never the system %TEMP%. Each dispatch start sweeps
+what no live dispatch can still be using (see sweep_orphan_homes).
+
 Acceptance gate (TOOL-015/016/018). The gate consumes what verify records:
   - a receipt flagged tamper_detected is refused, not merely annotated;
   - a receipt is bound to the dispatch count it was written at, so
@@ -954,10 +960,25 @@ def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None,
         "MP_WRAPPER_GRACE_S", _timeout_stack().RUNNER_BREAKER_MARGIN_S))
     request_wait = float(os.environ.get("MP_TERMINATION_REQUEST_WAIT_S",
                                         TERMINATION_REQUEST_WAIT_S))
-    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False,
-                                     encoding="utf-8") as tf:
-        tf.write(prompt)
-        task_file = tf.name
+    # #115: the prompt file goes under the structured scratch root, uuid-named,
+    # so a hard-killed runner leaves an identifiable leftover under the one
+    # swept root instead of a tmp*.txt in the system %TEMP%. The finally block
+    # below removes it on every path this process survives; the sweep is what
+    # catches the paths it does not.
+    task_files_dir = scratch_root() / TASKFILES_DIRNAME
+    try:
+        task_files_dir.mkdir(parents=True, exist_ok=True)
+        task_file = str(task_files_dir / f"{uuid.uuid4().hex}.txt")
+        with open(task_file, "w", encoding="utf-8") as tf:
+            tf.write(prompt)
+    except OSError as e:
+        raise SystemExit(_emit({
+            "error": "scratch_root_unwritable",
+            "detail": f"cannot write the prompt task file under the scratch "
+                      f"root: {e}",
+            "scratch_root": str(scratch_root()),
+            "hint": f"set {SCRATCH_ROOT_ENV} to a writable directory",
+        }, 4))
     deadline = time.monotonic() + timeout_s + wrapper_grace
     try:
         cmd = [sys.executable, delegate_py, "--agent", agent, "--workspace", str(ws),
@@ -1041,6 +1062,114 @@ def run_delegate(delegate_py, agent, ws, prompt, timeout_s, on_heartbeat=None,
         return {"status": "internal_error", "error": "unparseable delegate envelope",
                 "stdout_tail": (out or "")[-500:], "agent": agent,
                 "kill_authority": "none"}
+
+
+# ── scratch root and the orphan sweep (#115) ────────────────────────────
+
+# The delegate writes every per-dispatch artifact under ONE structured root —
+# <root>/runs/<dispatch-id>, <root>/homes/<dispatch-id> — instead of the
+# system %TEMP% (delegate.py resolves the same env var; the wrapper cannot
+# import this module, so both resolve it identically). A temp path carries no
+# dispatch identity: runner dispatches left 110 delegate-* run dirs and 114
+# delegate-kimi-home-* homes (~450 MB) behind on the operator's workstation,
+# because only pilot.py ever swept temp, and only for a glob it happened to
+# know. Here the id is in the name, so one dispatch's state can be found,
+# referenced, and removed as a unit.
+SCRATCH_ROOT_ENV = "MODEL_PROCTOR_SCRATCH"
+_DEFAULT_SCRATCH_ROOT = (r"C:\Dev\scratch\model-proctor" if os.name == "nt"
+                         else os.path.join(tempfile.gettempdir(),
+                                           "model-proctor-scratch"))
+RUNS_DIRNAME = "runs"
+HOMES_DIRNAME = "homes"
+TASKFILES_DIRNAME = "taskfiles"
+
+# Age past which a scratch artifact is a crash leftover, not live state. Long
+# by design: a home is a metering source (the wire logs the leader records
+# cost from) and, on the resume path, the session store a later dispatch
+# continues — so nothing goes on a short guess.
+DEFAULT_SCRATCH_MAX_AGE_S = 14 * 24 * 3600
+
+
+def scratch_root():
+    """The structured scratch root shared with the delegate (#115)."""
+    return Path(os.environ.get(SCRATCH_ROOT_ENV) or _DEFAULT_SCRATCH_ROOT)
+
+
+def sweep_orphan_homes(max_age_s=DEFAULT_SCRATCH_MAX_AGE_S, keep=(),
+                       finished=(), root=None):
+    """Remove scratch artifacts no live dispatch can still be using (#115).
+
+    Best-effort by construction: every failure is reported in "errors" and the
+    sweep keeps going, because a dispatch must never be blocked by
+    housekeeping.
+
+    What is NEVER removed:
+      - any path in ``keep`` — the current dispatch's home, plus every home
+        the current task's dispatches reference (the leader's metering
+        sources, and the resume-handoff's session store for the task);
+      - anything younger than ``max_age_s``, unless its dispatch id is in
+        ``finished`` (a dispatch THIS state dir already recorded as finished
+        for a different task: nothing can still be continuing it).
+
+    ``runs/<dispatch-id>`` holds the captured child logs, so it is swept on
+    age alone — the 14-day window is the archival grace the delegate's README
+    asks the caller to give that evidence.
+
+    Returns {"root", "removed", "kept", "errors"}: names, not paths, so the
+    caller can print the result without leaking the operator's layout twice.
+    """
+    root = Path(root) if root is not None else scratch_root()
+    keep_paths = {os.path.normcase(os.path.abspath(str(p))) for p in keep if p}
+    finished_ids = {str(d) for d in finished if d}
+    removed, kept, errors = [], [], []
+    for kind in (HOMES_DIRNAME, TASKFILES_DIRNAME, RUNS_DIRNAME):
+        base = root / kind
+        try:
+            entries = sorted(base.iterdir())
+        except FileNotFoundError:
+            continue  # nothing has been dispatched under this root yet
+        except OSError as e:
+            errors.append(f"{base}: {e}")
+            continue
+        for entry in entries:
+            try:
+                if os.path.normcase(os.path.abspath(str(entry))) in keep_paths:
+                    kept.append(entry.name)
+                    continue
+                old = time.time() - entry.stat().st_mtime > max_age_s
+                if not old and not (kind == HOMES_DIRNAME
+                                    and entry.name in finished_ids):
+                    kept.append(entry.name)
+                    continue
+                if entry.is_dir():
+                    shutil.rmtree(entry)
+                else:
+                    entry.unlink()
+                removed.append(entry.name)
+            except FileNotFoundError:
+                continue  # a concurrent sweep got there first: it is gone
+            except OSError as e:
+                errors.append(f"{entry.name}: {e}")
+    return {"root": str(root), "removed": removed, "kept": kept,
+            "errors": errors}
+
+
+def _sweep_scratch(sroot, state, dispatch_id):
+    """#115: the dispatch-start housekeeping call. Never fatal."""
+    keep = [str(scratch_root() / HOMES_DIRNAME / dispatch_id)]
+    for d in state.get("dispatches", []):
+        if d.get("child_home"):
+            keep.append(d["child_home"])
+    finished = set()
+    for e in _journal_entries(sroot):
+        if (e.get("event") == "dispatch_finished" and e.get("dispatch_id")
+                and e.get("task_id") != state.get("task_id")):
+            finished.add(e["dispatch_id"])
+    try:
+        return sweep_orphan_homes(keep=keep, finished=finished)
+    except Exception as e:  # noqa: BLE001 - housekeeping never blocks a dispatch
+        return {"root": str(scratch_root()), "removed": [], "kept": [],
+                "errors": [f"sweep_failed: {type(e).__name__}: {e}"]}
 
 
 # ── commands ────────────────────────────────────────────────────────────
@@ -1204,6 +1333,12 @@ def cmd_dispatch(args):
     # A1 (#73): a dispatch_id minted per dispatch; open and finished repeat it,
     # so concurrent runners sharing a state dir stay unambiguous.
     dispatch_id = str(uuid.uuid4())
+    # #115: housekeeping at dispatch start, while this dispatch's own scratch
+    # dir does not exist yet — homes that are still referenced (this task's
+    # dispatches, whose wire logs the leader meters from) and anything young
+    # enough to belong to a live dispatch are kept; see sweep_orphan_homes.
+    # Best-effort: the result is reported, never fatal.
+    scratch_sweep = _sweep_scratch(sroot, state, dispatch_id)
     # Production-runner guard, enforced again at dispatch (defense in depth —
     # the task file may have changed since init).
     preflight_ages = None
@@ -1421,6 +1556,8 @@ def cmd_dispatch(args):
         "failure_class": cls, "recommendation": rec,
         # A6 (#73): advisory only — see the sweep comment above.
         "journal_orphans": [o["orphaned_dispatch_id"] for o in orphans],
+        # #115: what the dispatch-start housekeeping did (advisory).
+        "scratch_sweep": scratch_sweep,
         "dispatch_id": dispatch_id,
     })
 

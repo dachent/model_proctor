@@ -874,12 +874,69 @@ def build_child_environment(agent):
 
 
 # ---------------------------------------------------------------------------
+# Structured scratch root (#115)
+# ---------------------------------------------------------------------------
+
+# Everything this wrapper creates per dispatch (run directory, isolated home)
+# lives under ONE structured root instead of the system %TEMP%: a temp path
+# carries no dispatch identity, so nothing but pilot.py could ever sweep it and
+# the operator's workstation had piled up 110 delegate-* run dirs and 114
+# delegate-kimi-home-* homes (~450 MB). Under the root the layout is
+# <root>/runs/<dispatch-id> and <root>/homes/<dispatch-id>, so a caller can
+# find, reference, and remove one dispatch's state by id (runner.py owns that
+# sweep; it resolves the same root). The default is workstation policy; the
+# POSIX fallback only keeps the module usable off Windows.
+SCRATCH_ROOT_ENV = "MODEL_PROCTOR_SCRATCH"
+_DEFAULT_SCRATCH_ROOT = (r"C:\Dev\scratch\model-proctor" if _IS_WINDOWS
+                         else os.path.join(tempfile.gettempdir(),
+                                           "model-proctor-scratch"))
+RUNS_DIRNAME = "runs"
+HOMES_DIRNAME = "homes"
+
+# A dispatch id becomes a path component under the root, so a caller-supplied
+# value may not escape it.
+_DISPATCH_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+
+def scratch_root():
+    """The structured scratch root for per-dispatch state (#115)."""
+    return os.environ.get(SCRATCH_ROOT_ENV) or _DEFAULT_SCRATCH_ROOT
+
+
+def _safe_dispatch_id(dispatch_id):
+    """Return dispatch_id when it is usable as one path component, else None."""
+    if (dispatch_id and dispatch_id not in (".", "..")
+            and _DISPATCH_ID_RE.match(dispatch_id)):
+        return dispatch_id
+    return None
+
+
+def scratch_dir(kind, prefix, dispatch_id=None):
+    """Create and return a per-dispatch directory under the scratch root.
+
+    With a dispatch id the path is deterministic — <root>/<kind>/<dispatch-id>
+    — so a caller can reference and sweep exactly this dispatch's state. With
+    no (or an unusable) id it is a fresh mkdtemp under <root>/<kind>; the
+    historical prefixes are kept so pre-#115 leftovers stay recognizable.
+    """
+    base = os.path.join(scratch_root(), kind)
+    os.makedirs(base, exist_ok=True)
+    safe_id = _safe_dispatch_id(dispatch_id)
+    if safe_id:
+        path = os.path.join(base, safe_id)
+        os.makedirs(path, exist_ok=True)
+        return path
+    return tempfile.mkdtemp(prefix=prefix, dir=base)
+
+
+# ---------------------------------------------------------------------------
 # Run directory and ACL hardening
 # ---------------------------------------------------------------------------
 
-def create_run_dir():
-    """Create a temporary run directory and harden ACLs. Returns (run_dir_path, acl_warning_bool)."""
-    run_dir = tempfile.mkdtemp(prefix="delegate-")
+def create_run_dir(dispatch_id=None):
+    """Create this dispatch's run directory under the scratch root and harden
+    its ACLs. Returns (run_dir_path, acl_warning_bool)."""
+    run_dir = scratch_dir(RUNS_DIRNAME, "delegate-", dispatch_id)
     acl_warning = False
     if _IS_WINDOWS:
         try:
@@ -912,7 +969,7 @@ _HOME_SEED_FILES = ("config.toml", "device_id", "region")
 _HOME_SEED_DIRS = ("credentials",)
 
 
-def create_isolated_home(path=None):
+def create_isolated_home(path=None, dispatch_id=None):
     """Create an isolated KIMI_CODE_HOME. Returns the path, or None
     when isolation is disabled (DELEGATE_NO_HOME_ISOLATION=1).
 
@@ -924,8 +981,9 @@ def create_isolated_home(path=None):
 
     Lifecycle: the CALLER owns the home after the run. Wire logs for cost
     metering live under <home>/sessions/, so delegate never deletes it;
-    callers remove it after metering (see runner/pilot.py) and orphaned
-    delegate-kimi-home-* dirs are swept by the caller side.
+    callers remove it after metering (see runner/pilot.py), and a home this
+    wrapper created sits at <scratch root>/homes/<dispatch-id> (#115) so the
+    caller can match it to its dispatch and sweep it by age.
 
     Resume-handoff (owner directive 2026-09-30): when ``path`` is given, that
     existing home is REUSED as-is (no re-seed) so the child sessions persist
@@ -941,7 +999,7 @@ def create_isolated_home(path=None):
         if any(os.scandir(home)):
             return home  # existing home: reuse, keep its session store
     else:
-        home = tempfile.mkdtemp(prefix="delegate-kimi-home-")
+        home = scratch_dir(HOMES_DIRNAME, "delegate-kimi-home-", dispatch_id)
     for name in _HOME_SEED_FILES:
         s = os.path.join(src, name)
         if os.path.isfile(s):
@@ -1534,7 +1592,8 @@ def _run_delegate_inner(args, start_time, agent_name):
     child_env = build_child_environment(agent)
     # Per-dispatch isolated KIMI_CODE_HOME (TOOL-013). Injected directly by the
     # parent — the agent allowlist governs inheritance, not wrapper invariants.
-    child_home = create_isolated_home(args.child_home)
+    child_home = create_isolated_home(args.child_home,
+                                      getattr(args, "dispatch_id", None))
     if child_home is not None:
         child_env["KIMI_CODE_HOME"] = child_home
     # #96 (QC E4): the nesting marker is INJECTED, never inherited — the
@@ -1553,7 +1612,7 @@ def _run_delegate_inner(args, start_time, agent_name):
         child_env["DELEGATE_DISPATCH_ID"] = args.dispatch_id
 
     # Create run directory
-    run_dir, acl_warning = create_run_dir()
+    run_dir, acl_warning = create_run_dir(getattr(args, "dispatch_id", None))
 
     # TOOL-035 (#106): observation channel for the stall-guard ladder. The
     # heartbeat path is TOOL-034's DELEGATE_HEARTBEAT_PATH (injected above
@@ -1929,7 +1988,9 @@ def main():
                         help="Reuse an existing isolated home (the resume-handoff: sessions persist across dispatches)")
     parser.add_argument("--dispatch-id", dest="dispatch_id", default=None,
                         help="Runner-minted dispatch id (#105); injected into "
-                             "the child environment for heartbeat correlation")
+                             "the child environment for heartbeat correlation, "
+                             "and used to name this dispatch's scratch dirs "
+                             "(#115)")
     parser.add_argument("--heartbeat-file", dest="heartbeat_file", default=None,
                         help="Path the payload appends progress heartbeats to "
                              "(#105); injected as DELEGATE_HEARTBEAT_PATH")

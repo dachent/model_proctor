@@ -21,6 +21,10 @@ FAKE_DELEGATE = Path(__file__).resolve().parent / "fake_delegate_termreq.py"
 sys.path.insert(0, str(RUNNER_DIR))
 import runner  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import hermetic_scratch  # noqa: E402  (#115: keep dispatch scratch in temp)
+hermetic_scratch.install()
+
 # Fast clocks for the test: budget timeout 1s, wrapper grace 2s, request wait 3s.
 ENV_FAST = {"MP_WRAPPER_GRACE_S": "2", "MP_TERMINATION_REQUEST_WAIT_S": "3"}
 

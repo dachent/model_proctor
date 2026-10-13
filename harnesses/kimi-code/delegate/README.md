@@ -22,10 +22,10 @@ Output is exactly one JSON object on stdout followed by a newline. Nothing else 
 ## CLI interface
 
 ```
-python delegate.py --agent <name> --workspace <path> (--task <text> | --task-file <path>) [--timeout <seconds>] [--resume-from <session_id>]
+python delegate.py --agent <name> --workspace <path> (--task <text> | --task-file <path>) [--timeout <seconds>] [--resume-from <session_id>] [--dispatch-id <id>] [--heartbeat-file <path>] [--child-home <path>] [--terminate-request-file <path>]
 ```
 
-Exactly one of `--task` / `--task-file` is required. `--help` prints help text and exits 0 (no JSON envelope).
+Exactly one of `--task` / `--task-file` is required. `--dispatch-id` names this dispatch's scratch directories under the dispatch scratch root; `--heartbeat-file` / `--terminate-request-file` are the runner's payload-progress and termination-request channels (forwarded verbatim, inert for a caller that omits them). `--help` prints help text and exits 0 (no JSON envelope).
 
 ## Configuration
 
@@ -82,7 +82,7 @@ No other state is required.
   "agent": "name",
   "child_exit_code": 0,
   "child_session_id": "session_9f3ab2c1-… or null",
-  "child_home": "C:/.../delegate-kimi-home-… or null",
+  "child_home": "C:/Dev/scratch/model-proctor/homes/<dispatch-id> or null",
   "child_pid": 12345,
   "duration_seconds": 12.345,
   "stdout": "bounded tail",
@@ -206,7 +206,7 @@ Environment values are never logged or serialized. Environment names are validat
 
 ### Run directory
 
-Each invocation creates a temporary run directory (`delegate-*` under the system temp root). On Windows, ACLs are hardened via `icacls /inheritance:r /grant:r "<USERDOMAIN>\<user>:(OI)(CI)F"`, removing inherited permissions and granting full control only to the current user. If `icacls` fails (nonzero exit code or exception), an `acl_warning` flag is set but the run continues.
+Each invocation creates a per-dispatch run directory under the **dispatch scratch root** (`C:\Dev\scratch\model-proctor`, override with the `MODEL_PROCTOR_SCRATCH` environment variable) — `runs\<dispatch-id>` when the caller forwards `--dispatch-id`, else a fresh `delegate-*` directory under `<root>\runs`. Nothing this wrapper creates is written to the system `%TEMP%`. On Windows, ACLs are hardened via `icacls /inheritance:r /grant:r "<USERDOMAIN>\<user>:(OI)(CI)F"`, removing inherited permissions and granting full control only to the current user. If `icacls` fails (nonzero exit code or exception), an `acl_warning` flag is set but the run continues.
 
 Only child stdout/stderr are written to the run directory (`stdout.log`, `stderr.log`). Disk log size is bounded by `max_log_bytes` (default 64 MiB); the pipe is still drained past this bound to prevent deadlock, but the log file stops growing. The wrapper never writes task text, command arrays, config, or environment names/values to disk.
 
@@ -260,9 +260,9 @@ Each CLI worker may keep its own state outside the wrapper's control. In particu
 
 Kimi Code CLI auto-registers every CWD it runs in as a workspace under the active `KIMI_CODE_HOME` — without isolation, every dispatched task pollutes the user's real `~/.kimi-code` (phantom workspaces, session-index bloat; observed 2026-08-25 after ~130 pilot dispatches).
 
-To prevent that, every dispatch gets a **per-dispatch isolated, seeded home**: `delegate` creates `delegate-kimi-home-*` in the temp dir, seeds it with `config.toml`, `device_id`, `region`, and `credentials/` from the operator's home (an empty home fails auth — verified), and injects it into the child environment directly (parent-injected invariants do not go through the agent's environment allowlist). The envelope's `child_home` field reports the path.
+To prevent that, every dispatch gets a **per-dispatch isolated, seeded home**: `delegate` creates `homes\<dispatch-id>` (or `delegate-kimi-home-*` when no `--dispatch-id` was forwarded) under the dispatch scratch root — never the system `%TEMP%` — seeds it with `config.toml`, `device_id`, `region`, and `credentials/` from the operator's home (an empty home fails auth — verified), and injects it into the child environment directly (parent-injected invariants do not go through the agent's environment allowlist). The envelope's `child_home` field reports the path.
 
-**Lifecycle:** the caller owns the home after the run. Wire logs for cost metering live under `<child_home>/sessions/`, so `delegate` never deletes it — callers (e.g. `runner/pilot.py`) meter, then delete, and sweep orphaned `delegate-kimi-home-*` dirs. Set `DELEGATE_NO_HOME_ISOLATION=1` to disable (required for `--resume-from`, which needs the prior session's home).
+**Lifecycle:** the caller owns the home after the run. Wire logs for cost metering live under `<child_home>/sessions/`, so `delegate` never deletes it — callers (e.g. `runner/pilot.py`) meter, then delete it. Because the home sits under the structured root named for its dispatch, `runner.py` can sweep stale homes by age at dispatch start without guessing at a `%TEMP%` glob (#115). Set `DELEGATE_NO_HOME_ISOLATION=1` to disable (required for `--resume-from`, which needs the prior session's home).
 
 ## Tests
 

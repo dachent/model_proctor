@@ -26,6 +26,10 @@ EXAMPLE_CONFIG = ROOT / "delegate" / "agents.example.json"
 sys.path.insert(0, str(REPO_ROOT / "core"))
 import timeout_stack as ts  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import hermetic_scratch  # noqa: E402  (#115: keep dispatch scratch in temp)
+hermetic_scratch.install()
+
 
 def run_runner(*argv, env_extra=None, timeout=120):
     env = dict(os.environ)
