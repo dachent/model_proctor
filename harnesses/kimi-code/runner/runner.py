@@ -95,6 +95,14 @@ LANES = ("flash", "glm", "k3")
 # successor): glm-5p3 404'd (not deployed) earlier on 2026-08-28 and went live
 # later that day (direct probe dispatch OK); the glm-5p2 alias was re-added to
 # kimi's config and serves, so it remains a rollback option.
+# 2026-10-26 roster rotation (owner-directed): flash lane -> deepseek-v4p1-flash-1017
+# (the dated 2026-10-17 snapshot; the undated deepseek-v4p1-flash is the 2026-09-10
+# one) and k3 lane -> ember-1. Both are UNMEASURED arms: the flash lane's
+# $0.0096/hidden-pass belongs to the retired glm-5p3-flash, and the k3 lane's
+# marathon hypothesis to the retired kimi-k3; neither carries over. The roster *ids*
+# are deliberately NOT renamed — they are the dispatch interface the lane table and
+# the README roster key on, and `glm-flash-worker` is the lane's worker, not a
+# claim about its model.
 DEFAULT_AGENT_MAP = {
     "flash": "glm-flash-worker",
     "glm": "glm-worker",

@@ -30,6 +30,10 @@ ROSTER = Path(r"C:/Tools/model-proctor/agents.json")
 # Verified against the live page 2026-09-09 (standard tier).
 GLM_5P3_FLASH = {"input": 0.15, "cached_input": 0.03, "output": 0.50}
 DEEPSEEK_V4_PRO = {"input": 1.32, "cached_input": 0.044, "output": 3.96}
+# The live lanes after the 2026-10-26 rotation. Read from the live catalog
+# (`firectl serverless list`) that day rather than from the docs page.
+DEEPSEEK_V4P1_FLASH_1017 = {"input": 0.30, "cached_input": 0.006, "output": 1.20}
+EMBER_1 = {"input": 3.00, "cached_input": 0.30, "output": 15.00}
 
 
 class FlashFastTiers(unittest.TestCase):
@@ -38,6 +42,13 @@ class FlashFastTiers(unittest.TestCase):
 
     def test_deepseek_v4_pro_standard_tier(self):
         self.assertEqual(PRICING["fireworks/deepseek-v4-pro"], DEEPSEEK_V4_PRO)
+
+    def test_deepseek_v4p1_flash_1017_standard_tier(self):
+        self.assertEqual(PRICING["fireworks/deepseek-v4p1-flash-1017"],
+                         DEEPSEEK_V4P1_FLASH_1017)
+
+    def test_ember_1_standard_tier(self):
+        self.assertEqual(PRICING["fireworks/ember-1"], EMBER_1)
 
     def test_flash_tier_is_cheaper_than_its_base_model(self):
         # The class of the 2026-08-28 error: a flash model priced above its base.
