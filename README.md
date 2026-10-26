@@ -28,12 +28,13 @@ conversion is tracked in [#96](../../issues/96). The short version:
 | Leader-context protection | **Unmeasured** — the one economic experiment still unopened |
 
 Decision (2026-09-10, owner): **the gated path is the default for substantial work** —
-flash (`glm-5p3-flash`) first, escalating to `glm-5p3` then `kimi-k3` on recorded
-stagnation. The STOP rulings were correct for the corpus they measured and do not govern
-long agentic work (see the break-even below). The conversion's surviving deliverables are
-the **catalog** (`delegate.py --model <id>`, live-validated; `catalog.py`) for consults
-and one-shots, the defect fixes, and truthful metering — with the runner's lane table,
-stagnation switching, budgets and gates **retained as live policy**.
+flash (`deepseek-v4p1-flash-1017` since the 2026-10-26 rotation) first, escalating to
+`glm-5p3` then `ember-1` on recorded stagnation. The STOP rulings were correct for the
+corpus they measured and do not govern long agentic work (see the break-even below). The
+conversion's surviving deliverables are the **catalog** (`delegate.py --model <id>`,
+live-validated; `catalog.py`) for consults and one-shots, the defect fixes, and truthful
+metering — with the runner's lane table, stagnation switching, budgets and gates **retained
+as live policy**.
 
 ## The routing break-even: when does cheap-first-with-escalation pay?
 
@@ -102,15 +103,22 @@ The cheap tier alone does not hold the required quality on substantial work — 
 fixed-cheap is not a real alternative for it. The question is what flash-first with
 verification gates and escalation **saves against a fixed strong model that completes
 everything**, with the gate guaranteeing the same end quality (whatever flash cannot do,
-the strong tier redoes). Both comparators, measured (phase3 + #91):
+the strong tier redoes). Both comparators, measured (phase3 + #91) — **on the pre-2026-10-26
+arms**: the flash arm is the retired glm-5p3-flash and the k3 comparator the retired kimi-k3.
+The rotation's successors (deepseek-v4p1-flash-1017, ember-1) are unmeasured, so the ratios
+and thresholds below are the starting point, not their evidence:
 
 | Comparator | Rate per unit | Price ratio b/s | Flash must first-pass |
 |---|---:|---:|---:|
 | **glm-5p3** | $0.0739 | 0.122 (8.2x) | **> 12.2%** of units |
 | **kimi-k3** | $0.153 | 0.059 (17.0x) | **> 5.9%** of units |
 
-(flash = glm-5p3-flash, b ≈ $0.009/unit, measured $0.0084–0.0093; whole-unit redo on
-escalation — the gate catching failure partway through a unit improves these further.)
+(flash = the retired glm-5p3-flash, b ≈ $0.009/unit, measured $0.0084–0.0093; whole-unit
+redo on escalation — the gate catching failure partway through a unit improves these
+further. deepseek-v4p1-flash-1017's b is unmeasured and must be re-derived from a metered
+run, not scaled: its standard row is $0.30/$0.006/$1.20 per 1M against glm-5p3-flash's
+$0.15/$0.03/$0.50 — 2.0x input, 0.2x cached input, 2.4x output. ember-1 carries kimi-k3's
+row exactly, so the k3 comparator's price ratio moves only through the flash arm's b.)
 
 **Break-even task size: X\* = 0, unconditionally, against both.** With c ≈ 0 and planning
 a wash, flash-first + escalation is cheaper from the first unit at any task size, unless
@@ -233,7 +241,7 @@ regenerate it first from `harnesses/kimi-code/delegate/agents.example.json` (see
 ```bash
 python C:/Tools/model-proctor/catalog.py                # live models + prices
 python C:/Tools/model-proctor/delegate.py \
-    --model fireworks/glm-5p3-flash \
+    --model fireworks/deepseek-v4p1-flash-1017 \
     --workspace <ws> \
     --task-file <path>          # or --task "<text>"; --write to grant write
 ```
@@ -481,7 +489,7 @@ fix is honestly labeled [CODE] / [POLICY] / [RESIDUAL]).
 - [Magnitude](https://magnitude.dev/) — the routing behavior this project set out to reproduce with
   open models; see Phase 0 for what is confirmed vs. inferred about it.
 
-## Model lineup (measured, 2026-08-25 — replaces the frozen design's assumed ladder)
+## Model lineup (measured 2026-08-25; roster rotated 2026-08-28 and 2026-10-26)
 
 The frozen cascade's role ladder (K3 plans → GLM orchestrates → Flash executes → Pro/advisors
 escalate) was a **cost hypothesis**. The pre-registered fixed-arm grids (issues #27/#29/#30,
@@ -490,23 +498,40 @@ tasks the arms are quality-indistinguishable, so cost decides.
 
 | Role | Model | Basis |
 |---|---|---|
-| Default worker (bounded/substantial) | GLM-5.3 Flash (`glm-flash-worker`) | Roster swap 2026-08-28; **re-measured 2026-09-09** (PREREG-v3-rotation, #91): 29/30 hidden on v3 (one flake, `q15_lru_ttl`), **$0.0096/hidden-pass** — the cheapest measured arm; retired `deepseek-v4-flash-0731` was 30/30 at $0.012 |
+| Default worker (bounded/substantial) | DeepSeek V4.1 Flash 1017 (`glm-flash-worker`) | Roster swap **2026-10-26** (owner-directed): `glm-5p3-flash` → `deepseek-v4p1-flash-1017`. The new arm is **unmeasured**; the predecessor's 29/30 hidden on v3 at $0.0096/hidden-pass (#91) is the baseline it has to beat |
 | Cheap second / fallback | GPT-OSS-120B (`gpt-oss-worker`) | 29/30 hidden on v3 (one flake), $0.014/hidden-pass at corrected prices |
 | Substantial second (equal quality, faster wall) | GLM-5.3 (`glm-worker`) | Moved to 5.3 on 2026-08-28; **re-measured 2026-09-09** (#91): **30/30 hidden on v3, $0.074/hidden-pass** — cheaper than predecessor GLM-5.2 (30/30, $0.097) at equal quality |
-| Marathon / open-ended | Kimi K3 (`k3-worker`) | **Hypothesis only — see Open gaps below** |
+| Marathon / open-ended | Ember-1 (`k3-worker`) | Roster swap **2026-10-26** (owner-directed): `kimi-k3` → `ember-1`, which carries kimi-k3's price row exactly. **Hypothesis only — see Open gaps below**; the retired kimi-k3's marathon basis was never measured either |
 | Cheap scout (vision, misc.) | Kimi K2.7 (`k27-scout`) | Carried from the frozen roster; live |
 | Advisors (read-only, closed triggers) | Codex CLI / Claude CLI | Flat-rate; trigger set in issue #8 — **not yet wired into the runner** (see Open gaps) |
+
+Roster ids are pinned and re-probed at experiment time, and they name the *lane's worker*
+rather than its model. The 2026-10-26 rotation kept `glm-flash-worker` and `k3-worker` on
+purpose: renaming a roster id is an interface change, not part of a model swap, so it is a
+separate decision. (The 2026-08-28 rotation did rename `ds-flash-worker` →
+`glm-flash-worker` in #73.) Read the model column, not the id, for what a lane runs.
 
 Catalog note: Fireworks moves models to dated snapshot ids — the undated
 `deepseek-v4-flash` alias 404s while `deepseek-v4-flash-0731` was the live deployment
 (probed 2026-08-25, see #23). On 2026-08-28 kimi's synced fireworks roster dropped
 `deepseek-v4-flash-0731` and `glm-5p2` and gained `glm-5p3` / `glm-5p3-flash`; the flash
-lane moved to `glm-5p3-flash` and the glm lane to `glm-5p3`. Roster ids are pinned and
-re-probed at experiment time. Live-probe status 2026-08-28: `glm-5p3-flash` dispatches
-end-to-end (real worker run accepted); undated `glm-5p3` returned `404 Model not found,
-inaccessible, and/or not deployed` in the morning but went live the same day (direct
-re-probe OK — final serving probe 2026-08-28); `glm-5p2` still serves (alias re-added
-to kimi's config) and remains the recorded rollback for the glm lane.
+lane moved to `glm-5p3-flash` and the glm lane to `glm-5p3`. Live-probe status 2026-08-28:
+`glm-5p3-flash` dispatches end-to-end (real worker run accepted); undated `glm-5p3` returned
+`404 Model not found, inaccessible, and/or not deployed` in the morning but went live the
+same day (direct re-probe OK — final serving probe 2026-08-28); `glm-5p2` still serves
+(alias re-added to kimi's config) and remains the recorded rollback for the glm lane.
+
+On 2026-10-26 the flash lane moved `glm-5p3-flash` → `deepseek-v4p1-flash-1017` (the dated
+2026-10-17 successor of the undated `deepseek-v4p1-flash`, which is the 2026-09-10
+snapshot) and the k3 lane `kimi-k3` → `ember-1`. Both new ids are live and priced on
+Fireworks — standard tier, read from the live catalog (`firectl serverless list`) on
+2026-10-26: $0.30/$0.006/$1.20 and $3.00/$0.30/$15.00 per 1M. **Neither has been probed
+end-to-end from a dispatch, and neither has been measured on the v3 corpus** — treat the
+rotation as unconfirmed until both happen. Both ids resolve in kimi's config, which is
+necessary but not sufficient — config presence is not serving (the 2026-08-28 `glm-5p3`
+404 above is the precedent). `ember-1` was already there; the dated 1017 alias arrived with
+the 2026-10-26 catalog refresh, which also added the spot routers and the remaining
+serverless models.
 
 ---
 
@@ -542,6 +567,16 @@ reproduced acceptance defects were fixed with regression evidence (A03/A04, A07,
 PRs #88/#93/#94/#95). Consequence: conversion to catalog-dispatched subagents (#96) — see the
 status update at the top of this README and `policy/FINDINGS-2026-09-09.md` for the findings,
 conclusions, and plan.
+
+**2026-10-26.** The roster rotated again (owner-directed): flash lane `glm-5p3-flash` →
+`deepseek-v4p1-flash-1017`, k3 lane `kimi-k3` → `ember-1`. This is a *roster* change, not a
+measurement — both new arms are unmeasured, so every economics figure above still belongs to the
+arms they replaced (glm-5p3-flash's $0.0096/hidden-pass, the 8.2x/17.0x ratios), and the
+break-even section says so explicitly. Re-measurement is a separate, pre-registered unit of work
+(#91 is the template). Both new ids resolve in kimi's config — the dated 1017 alias landed with
+the same day's Fireworks catalog sync (19 → 27 fireworks entries, which also brought in the spot
+routers and the remaining serverless models), and the 1017 endpoint answers a 1-token probe
+(HTTP 200) — but neither has been dispatched through the wrapper end-to-end.
 
 The trust boundary is sealed for the live path (TOOL-013/014, issue #31/#33): isolated per-dispatch
 `KIMI_CODE_HOME`, runner state and verifier payloads outside the agent-writable workspace,

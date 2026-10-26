@@ -1,6 +1,6 @@
 ---
 name: model-proctor
-description: Task-owning worker policy with deterministic acceptance and evidence-driven escalation (model_proctor) — run substantial work through the gated path (runner.py init/dispatch/verify/accept; flash-first with escalation to glm-5p3 then kimi-k3 on recorded stagnation), or start a one-shot subagent with any model from the live harness catalog (delegate.py --model). Use for substantial coding tasks. Do NOT use for trivial tasks — execute those directly. Requires the model-proctor install (scripts/install.py).
+description: Task-owning worker policy with deterministic acceptance and evidence-driven escalation (model_proctor) — run substantial work through the gated path (runner.py init/dispatch/verify/accept; flash-first with escalation to glm-5p3 then ember-1 on recorded stagnation), or start a one-shot subagent with any model from the live harness catalog (delegate.py --model). Use for substantial coding tasks. Do NOT use for trivial tasks — execute those directly. Requires the model-proctor install (scripts/install.py).
 ---
 
 # Model Proctor Policy
@@ -8,7 +8,7 @@ description: Task-owning worker policy with deterministic acceptance and evidenc
 The proctor assigns the exam, watches the clock, and grades it objectively — the model never
 marks its own work. You are the leader. Two surfaces, one doctrine (#96, the 2026-09-09/10
 findings): **the gated path** for substantial work (`C:/Tools/model-proctor/runner.py`
-init/dispatch/verify/accept — flash-first, escalating to glm-5p3 then kimi-k3 on recorded
+init/dispatch/verify/accept — flash-first, escalating to glm-5p3 then ember-1 on recorded
 stagnation), and **thin dispatch** for consults and one-shots
 (`C:/Tools/model-proctor/delegate.py --model <id>`). Prompts do not enforce; the tools
 enforce. Deterministic evidence outranks every model, including you. Governance: #16, #91,
@@ -57,9 +57,11 @@ that something was. It also carries `baseline_tree` and `verifier_nondiscriminat
 
 ## Lane table (live routing policy — flash-first with evidence-driven escalation)
 
-Bounded/spec-complete tasks start on `flash` (glm-5p3-flash, the cheapest measured arm:
-$0.0096/hidden-pass, #91). The escalation ladder is **evidence-driven, not start-time
-guesswork** — a lane changes only on recorded stagnation (see Failure classes below).
+Bounded/spec-complete tasks start on `flash` (`deepseek-v4p1-flash-1017` since the
+2026-10-26 rotation). That arm is **unmeasured**: the $0.0096/hidden-pass figure belongs to
+the retired glm-5p3-flash (#91) and does not carry over. The escalation ladder is
+**evidence-driven, not start-time guesswork** — a lane changes only on recorded stagnation
+(see Failure classes below).
 
 | Task shape | Lane |
 |---|---|
@@ -72,20 +74,21 @@ Why flash-first is right even though benchmarks showed "one fixed worker wins": 
 rulings were measured on ~30-second bounded tasks where every tier was quality-tied — the
 regime where routing cannot help by construction. On substantial work the comparison that
 matters is **quality-matched** (keep strong-tier completion, reduce cost): flash-first
-plus gates plus escalation is cheaper than fixed-strong at ANY task size (8x vs glm-5p3,
-17x vs kimi-k3; savings ≈ q − b/s of the comparator's cost — 78–91% at benchmark
-reliability), because the gate guarantees whatever flash cannot do gets redone at the
-strong tier. See README "The routing break-even". Escalation is what earns its keep.
+plus gates plus escalation is cheaper than fixed-strong at ANY task size (8.2x vs glm-5p3,
+17.0x vs kimi-k3 — both measured on the retired glm-5p3-flash arm, so the new arm's ratio
+is unmeasured until re-run; savings ≈ q − b/s of the comparator's cost — 78–91% at
+benchmark reliability), because the gate guarantees whatever flash cannot do gets redone at
+the strong tier. See README "The routing break-even". Escalation is what earns its keep.
 
-Decomposition itself is the hard problem? Optionally consult K3 for a task breakdown first —
-that is a planning consult, not a mandatory planner tax.
+Decomposition itself is the hard problem? Optionally consult the `k3` lane (ember-1) for a
+task breakdown first — that is a planning consult, not a mandatory planner tax.
 
 ## Start a subagent with a model (consults and one-shots)
 
 ```bash
 python C:/Tools/model-proctor/catalog.py                  # what's live + what it costs
 python C:/Tools/model-proctor/delegate.py \
-    --model fireworks/glm-5p3-flash \
+    --model fireworks/deepseek-v4p1-flash-1017 \
     --workspace <ws> \
     --task "<task text>"          # or --task-file <path> (preferred: no
                                   # control-plane files in the worker's tree)

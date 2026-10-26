@@ -1,10 +1,15 @@
 # Fireworks Serverless pricing (USD per 1M tokens), standard tier.
 # Source: https://docs.fireworks.ai/serverless/pricing (verified 2026-08-25 against
 # the live page; earlier table from the 2026-08-23 review; standard tier re-verified
-# 2026-09-09, see the dated notes per row). Used by evals/meter.py
-# and runner/runner.py to price wire.jsonl usage records.
+# 2026-09-09, see the dated notes per row; the 2026-10-26 rows were read from the
+# live catalog — `firectl serverless list` — not from the docs page). Used by
+# evals/meter.py and runner/runner.py to price wire.jsonl usage records.
 # Fields: input, cached_input, output.
 fireworks/kimi-k3:        { input: 3.00,  cached_input: 0.30,  output: 15.00 }
+# 2026-10-26 roster rotation (owner-directed): the k3 lane moved kimi-k3 -> ember-1.
+# Standard tier, read from the live catalog 2026-10-26; it carries kimi-k3's row.
+# kimi-k3's row stays for metering historical runs.
+fireworks/ember-1:        { input: 3.00,  cached_input: 0.30,  output: 15.00 }
 fireworks/kimi-k2p7-code: { input: 0.95,  cached_input: 0.19,  output: 4.00 }
 # 2026-09-09 recheck (#83 TOOL-030 M3): standard DeepSeek V4 Pro (0813) is
 # 1.32/0.044/3.96; the 2026-08-25 row matched no current tier. Repriced.
@@ -14,9 +19,13 @@ fireworks/deepseek-v4-pro:  { input: 1.32, cached_input: 0.044, output: 3.96 }
 # 2026-08-28 roster: kimi's synced fireworks roster dropped deepseek-v4-flash-0731
 # and glm-5p2. Flash lane -> glm-5p3-flash (dispatch-verified); glm lane -> glm-5p3
 # (404 in the morning, serving landed later the same day — re-probed OK and moved).
-# Retired ids' rows stay for metering historical runs.
+# 2026-10-26 roster rotation (owner-directed): the flash lane moved glm-5p3-flash ->
+# deepseek-v4p1-flash-1017, the dated 2026-10-17 successor snapshot of the undated
+# deepseek-v4p1-flash (2026-09-10). Standard tier, read from the live catalog
+# 2026-10-26. Retired ids' rows stay for metering historical runs.
 fireworks/deepseek-v4-flash: { input: 0.22, cached_input: 0.007, output: 0.66 }
 fireworks/deepseek-v4-flash-0731: { input: 0.22, cached_input: 0.007, output: 0.66 }
+fireworks/deepseek-v4p1-flash-1017: { input: 0.30, cached_input: 0.006, output: 1.20 }
 fireworks/glm-5p2:        { input: 1.40,  cached_input: 0.14,  output: 4.40 }
 # GLM 5.3 / GLM 5.3 Flash verified against the live page 2026-09-09.
 # Correction (#83 TOOL-030 M3 — Flash/Fast confusion): the 2026-08-28 entry for
