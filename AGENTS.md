@@ -24,7 +24,10 @@ never through the harness root.
   automatic router, or acceptance authority.
 - `scripts/` — `extract_log.py` (deterministic wire.jsonl fact extractor + coverage
   manifest; verifier-class, hash-frozen per goal), tests in `scripts/tests/`,
-  `install.py`.
+  `install.py` (flat install to `C:\Tools\model-proctor`; writes
+  `install-manifest.json` there and refuses — exit 3, `--force` to override — to
+  overwrite any installed file that differs from both the repo source and its
+  recorded hash, so uncommitted local work is never destroyed silently).
 - `harnesses/kimi-code/runner/` — the MVP-001 thin control plane (`runner.py`): frozen task-start lane
   selection, delegate-wrapper dispatch, leader-side verification with tree-bound
   receipts and a config-surface manifest, stagnation switching, append-only task
