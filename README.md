@@ -190,10 +190,11 @@ what the ledger accumulates for free.
   ids, and per-dispatch isolated+seeded `KIMI_CODE_HOME` homes (`child_home` in the envelope;
   callers meter from it, then delete it). Run dirs and homes live under one structured dispatch
   scratch root (`C:\Dev\scratch\model-proctor`, override `MODEL_PROCTOR_SCRATCH`) rather than the
-  system `%TEMP%`, so a caller can sweep one dispatch's state by id. 90 tests.
+  system `%TEMP%`, so a caller can sweep one dispatch's state by id. Tests live in
+  `harnesses/kimi-code/delegate/tests/`.
 - `scripts/extract_log.py` — deterministic session-log fact extractor with a **coverage manifest**
   (bytes in, records parsed, records dropped). LLMs interpret extractions; they never scan raw
-  volume. Verifier-class: hash-frozen per goal. 5 tests.
+  volume. Verifier-class: hash-frozen per goal. Tests live in `scripts/tests/`.
 - `policy/` — design/governance specs, including preserved predecessor specs (see Provenance below).
 - `evals/` — the benchmark harness: v1 (20 cases + 2 showcase, killed the dynamic design), v2 and
   v3 quality sets (10 each, naive-solution-proven to discriminate requirement fidelity), the
@@ -353,8 +354,10 @@ The first implementation was a **dynamic** router (`harnesses/kimi-code/skill/mu
 with pre-registered predictions of **≥2–3× cost reduction** vs K3-alone.
 
 `evals/` is the harness built to test that: 20 pre-registered cases (tune/holdout split fixed before
-any runs), deterministic fixtures, machine-checkable acceptance **plus hidden tests**, blinded
-scoring (`report.py` never reveals which config is the router until the key is read), and a
+any runs), deterministic fixtures, machine-checkable acceptance **plus hidden tests**, a blinded
+scorecard (its tables key on blind letters, but `report.py` prints the blinding key itself in a
+`## Blinding` section at the top — the mapping is disclosed in the same document, so blinding only
+resists reading the tables by config name), and a
 simple-case guardrail (the router must not regress trivial tasks).
 
 **What the benchmark actually showed** — and this is why honest instrumentation matters:
@@ -498,18 +501,27 @@ tasks the arms are quality-indistinguishable, so cost decides.
 
 | Role | Model | Basis |
 |---|---|---|
-| Default worker (bounded/substantial) | DeepSeek V4.1 Flash 1017 (`glm-flash-worker`) | Roster swap **2026-10-26** (owner-directed): `glm-5p3-flash` → `deepseek-v4p1-flash-1017`. The new arm is **unmeasured**; the predecessor's 29/30 hidden on v3 at $0.0096/hidden-pass (#91) is the baseline it has to beat |
+| Default worker (bounded/substantial) | DeepSeek V4.1 Flash 1017 (`marathon-worker`) | Roster swap **2026-10-26** (owner-directed): `glm-5p3-flash` → `deepseek-v4p1-flash-1017`. The new arm is **unmeasured**; the predecessor's 29/30 hidden on v3 at $0.0096/hidden-pass (#91) is the baseline it has to beat |
 | Cheap second / fallback | GPT-OSS-120B (`gpt-oss-worker`) | 29/30 hidden on v3 (one flake), $0.014/hidden-pass at corrected prices |
-| Substantial second (equal quality, faster wall) | GLM-5.3 (`glm-worker`) | Moved to 5.3 on 2026-08-28; **re-measured 2026-09-09** (#91): **30/30 hidden on v3, $0.074/hidden-pass** — cheaper than predecessor GLM-5.2 (30/30, $0.097) at equal quality |
-| Marathon / open-ended | Ember-1 (`k3-worker`) | Roster swap **2026-10-26** (owner-directed): `kimi-k3` → `ember-1`, which carries kimi-k3's price row exactly. **Hypothesis only — see Open gaps below**; the retired kimi-k3's marathon basis was never measured either |
+| Substantial second (equal quality, faster wall) | GLM-5.3 (`substantial-worker`) | Moved to 5.3 on 2026-08-28; **re-measured 2026-09-09** (#91): **30/30 hidden on v3, $0.074/hidden-pass** — cheaper than predecessor GLM-5.2 (30/30, $0.097) at equal quality |
+| Marathon / open-ended | Ember-1 (`expert-worker`) | Roster swap **2026-10-26** (owner-directed): `kimi-k3` → `ember-1`, which carries kimi-k3's price row exactly. **Hypothesis only — see Open gaps below**; the retired kimi-k3's marathon basis was never measured either |
 | Cheap scout (vision, misc.) | Kimi K2.7 (`k27-scout`) | Carried from the frozen roster; live |
 | Advisors (read-only, closed triggers) | Codex CLI / Claude CLI | Flat-rate; trigger set in issue #8 — **not yet wired into the runner** (see Open gaps) |
 
-Roster ids are pinned and re-probed at experiment time, and they name the *lane's worker*
-rather than its model. The 2026-10-26 rotation kept `glm-flash-worker` and `k3-worker` on
-purpose: renaming a roster id is an interface change, not part of a model swap, so it is a
-separate decision. (The 2026-08-28 rotation did rename `ds-flash-worker` →
-`glm-flash-worker` in #73.) Read the model column, not the id, for what a lane runs.
+Seat ids name the **role the owner buys, not the model sitting in it**, and they were renamed to
+role names on **2026-10-26** (owner-directed — its own decision, taken separately from the model
+rotation above): `glm-flash-worker` → `marathon-worker` (the cheap seat you can afford to run
+long), `glm-worker` → `substantial-worker` (the engineering middle), `k3-worker` →
+`expert-worker` (the most capable). Renaming a roster id is an interface change, not part of a
+model swap, which is exactly why it took a separate decision. (The 2026-08-28 rotation had
+renamed `ds-flash-worker` → `glm-flash-worker` in #73.) Ids are re-probed at experiment time;
+read the model column, not the id, for what a lane runs.
+
+Swapping a lane's model is a runbook, not an improvisation: see
+[`docs/model-rotation-runbook.md`](docs/model-rotation-runbook.md) for the phased procedure
+(probe before bind, the ACL grant before editing `agents.json`, the metering gate on the
+`record` row rather than `status`), its per-step gates, and the seven failure modes each
+guardrail exists to catch.
 
 Catalog note: Fireworks moves models to dated snapshot ids — the undated
 `deepseek-v4-flash` alias 404s while `deepseek-v4-flash-0731` was the live deployment

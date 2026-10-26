@@ -137,7 +137,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cases", required=True, help="comma-separated case ids")
     ap.add_argument("--reps", type=int, default=3)
-    ap.add_argument("--agent", default="glm-flash-worker")
+    # 2026-10-26 seat rename (owner-directed): this arm dispatched as
+    # `glm-flash-worker`. The default is the LIVE roster id; recorded rows in
+    # evals/*.jsonl predate the rename, carry the old id, and are immutable.
+    ap.add_argument("--agent", default="marathon-worker")
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--log", required=True, help="JSONL to append rows to")
     ap.add_argument("--timeout", type=int, default=600)

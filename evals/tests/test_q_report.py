@@ -38,7 +38,7 @@ LEDGER_REPAIR = {"task_id": "t3", "lane": "flash", "dispatches": 2,
 LEDGER_FAIL = {"task_id": "t4", "lane": "flash", "dispatches": 3,
                "accepted": False, "failures": 3}
 PILOT_FIRST = {"task_id": "q1", "arm": "flash", "accepted": True,
-               "attempts": [{"agent": "glm-flash-worker"}]}
+               "attempts": [{"agent": "marathon-worker"}]}
 PILOT_SWITCHED = {"task_id": "q2", "arm": "flash", "accepted": True,
                   "attempts": [{}, {}], "switched_to": "glm"}
 PILOT_ERROR = {"task_id": "q3", "arm": "flash", "accepted": False,
