@@ -2,7 +2,7 @@
 
 PREREG-model-mode E-ship (sealed 1be1f3c). Arm S-model dispatches via the
 Phase-1 path (delegate.py --model fireworks/glm-5p3-flash); arm S-plain via
-the roster path (delegate.py --agent glm-flash-worker). 6 reps per case per
+the roster path (delegate.py --agent marathon-worker). 6 reps per case per
 arm = 120 runs, alternating arms per rep. Prompt via external --task-file
 in BOTH arms. Graded identically (pristine checks). Wire-metered, corrected
 pricing, A13 unknown-never-zero.
@@ -20,7 +20,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PRICING = REPO_ROOT / "evals" / "pricing.yaml"
 DELEGATE = r"C:\Tools\model-proctor\delegate.py"
 MODEL = "fireworks/glm-5p3-flash"
-AGENT = "glm-flash-worker"
+# 2026-10-26 seat rename (owner-directed): this arm dispatched as
+# `glm-flash-worker`. The id here is the LIVE roster id, so the driver keeps
+# running; every recorded row in evals/*.jsonl predates the rename and carries
+# the old id. Those rows are immutable evidence and are not retconned.
+AGENT = "marathon-worker"
 
 
 def _import(path, name):

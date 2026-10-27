@@ -56,6 +56,11 @@ Commands:
   verify   --workspace ws --task task.json           leader-side acceptance check
   accept   --workspace ws --task task.json           refuse unless receipt fresh+green
   record   --workspace ws --task task.json [--wire wire.jsonl ...] [--pricing pricing.yaml]
+                                                     (--wire is required when
+                                                     --pricing asks to meter a
+                                                     dispatched task; with no
+                                                     --pricing the row is a
+                                                     flat-rate record)
   status   --workspace ws                            print runner state
   timeouts --task task.json [--delegate path]        report the timeout stack;
                                                      refuse an inverted one
@@ -99,14 +104,21 @@ LANES = ("flash", "glm", "k3")
 # (the dated 2026-10-17 snapshot; the undated deepseek-v4p1-flash is the 2026-09-10
 # one) and k3 lane -> ember-1. Both are UNMEASURED arms: the flash lane's
 # $0.0096/hidden-pass belongs to the retired glm-5p3-flash, and the k3 lane's
-# marathon hypothesis to the retired kimi-k3; neither carries over. The roster *ids*
-# are deliberately NOT renamed — they are the dispatch interface the lane table and
-# the README roster key on, and `glm-flash-worker` is the lane's worker, not a
-# claim about its model.
+# marathon hypothesis to the retired kimi-k3; neither carries over.
+# 2026-10-26 seat rename (owner-directed, same day, its own decision): the ids
+# WERE renamed to role names — flash -> marathon-worker, glm ->
+# substantial-worker, k3 -> expert-worker (was glm-flash-worker / glm-worker /
+# k3-worker). A seat id now names the ROLE the owner buys, not the model sitting
+# in it: the flash seat is the cheap one you can afford to run long, the glm seat
+# is the engineering middle, the k3 seat is the most capable. Read the model in
+# the README roster, never the id. This supersedes the earlier same-day comment
+# that said the ids were deliberately not renamed. A rename is still an
+# interface change: the installed agents.json must carry the same keys (runbook
+# Phase 5), and a missed rename fails loudly — dispatch refuses an unknown seat.
 DEFAULT_AGENT_MAP = {
-    "flash": "glm-flash-worker",
-    "glm": "glm-worker",
-    "k3": "k3-worker",
+    "flash": "marathon-worker",
+    "glm": "substantial-worker",
+    "k3": "expert-worker",
 }
 
 # Files that can change what verification means without touching scope (#18).
@@ -693,6 +705,20 @@ def _journal_append(root, rec):
         f.flush()
         os.fsync(f.fileno())
     return rec
+
+
+def _refuse(sroot, action, obj, code=1):
+    """Journal every verify/accept/dispatch refusal. Refusal rates are today
+    unmeasurable (denominator zero) because refusals are stdout-only. Fail-open:
+    a journal write failure must never mask the refusal."""
+    try:
+        _journal_append(sroot, {"event": "decision", "action": action,
+                                "reason": (obj.get("reason") or obj.get("error")
+                                           or obj.get("rejected")),
+                                "exit": code})
+    except OSError:
+        pass
+    raise SystemExit(_emit(obj, code))
 
 
 def _journal_entries(root):
@@ -1290,8 +1316,9 @@ def cmd_dispatch(args):
     if state["accepted"]:
         raise SystemExit(_emit({"error": "task already accepted"}, 1))
     if len(state["dispatches"]) >= state["budget"]["max_dispatches"]:
-        raise SystemExit(_emit({"error": "dispatch budget exhausted",
-                                "dispatches": len(state["dispatches"])}, 1))
+        _refuse(sroot, "dispatch", {
+            "error": "dispatch budget exhausted",
+            "dispatches": len(state["dispatches"])})
     # Provider-failure circuit breaker (#75, folded into M1): three trailing
     # failures with the same provider:<status> fingerprint means the provider
     # is down for this lane — burning more dispatch budget into the same
@@ -1310,7 +1337,7 @@ def cmd_dispatch(args):
         if (len(recent) == 3
                 and all(f.get("kind") == "provider_or_tool" for f in recent)
                 and len({f.get("fingerprint") for f in recent}) == 1):
-            raise SystemExit(_emit({
+            _refuse(sroot, "dispatch", {
                 "error": "provider_circuit_open",
                 "fingerprint": recent[-1]["fingerprint"],
                 "consecutive_failures": 3,
@@ -1318,7 +1345,7 @@ def cmd_dispatch(args):
                         "switch lane/provider, or re-run dispatch with "
                         "--reset-provider-gate as a reviewed decision "
                         "(counted on state)",
-            }, 1))
+            })
     # A6 (#73): orphan surfacing is ADVISORY — fields in the JSON output only.
     # Neither dispatch nor status refuses on orphans: blocking would wedge
     # every legal dispatch after any crash. Age beyond the derived runner
@@ -1352,13 +1379,13 @@ def cmd_dispatch(args):
     preflight_ages = None
     is_prod, matched = production_guard(task)
     if is_prod and state["lane"] == "flash" and not state.get("lane_override"):
-        raise SystemExit(_emit({
+        _refuse(sroot, "dispatch", {
             "error": "flash_lane_forbidden_production_runner",
             "detail": "state lane is flash for a production-runner task and no "
                       "explicit `lane` override was recorded at init; set an "
                       "explicit `lane` in the task file and re-init.",
             "matched_patterns": matched,
-        }, 1))
+        })
     if is_prod:
         # Leader-side preflight mandate: the deterministic probe (doctor /
         # battery / dry-run) must have RUN before a worker is spent — discovery
@@ -1369,13 +1396,13 @@ def cmd_dispatch(args):
             raise SystemExit(_emit({"error": "preflight_receipts must be a list of file paths"}, 3))
         missing = [p for p in receipts if not Path(str(p)).expanduser().is_file()]
         if not receipts or missing:
-            raise SystemExit(_emit({
+            _refuse(sroot, "dispatch", {
                 "error": "preflight_receipt_required",
                 "missing": missing,
                 "hint": "run the orchestrator's own preflight (doctor/battery/"
                         "dry-run) and list the resulting log/report paths in "
                         "the task file's `preflight_receipts` array",
-            }, 1))
+            })
         # Existence alone is satisfied by `touch`. These receipts are authored
         # by the leader — the trusted party here — so hashing them would
         # defend against nobody. What existence cannot catch is LAST WEEK's
@@ -1386,7 +1413,7 @@ def cmd_dispatch(args):
                 for q in receipts}
         stale = sorted(k for k, v in ages.items() if v > max_age)
         if stale:
-            raise SystemExit(_emit({
+            _refuse(sroot, "dispatch", {
                 "error": "preflight_receipt_stale",
                 "stale": stale,
                 "ages_seconds": ages,
@@ -1394,7 +1421,7 @@ def cmd_dispatch(args):
                 "hint": "re-run the preflight; these receipts predate the "
                         "allowed window (override with "
                         "budget.max_preflight_age_s)",
-            }, 1))
+            })
         preflight_ages = ages
     agent_map = dict(DEFAULT_AGENT_MAP)
     if args.agent_map:
@@ -1591,7 +1618,7 @@ def cmd_verify(args):
             "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         }
         _write_json_atomic(_receipt_path(sroot, task["task_id"]), receipt)
-        return _emit(receipt, 1)
+        _refuse(sroot, "verify", receipt)
 
 
 def _cmd_verify_impl(args):
@@ -1632,7 +1659,7 @@ def _cmd_verify_impl(args):
                    "added": added, "removed": removed,
                    "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
         _write_json_atomic(_receipt_path(sroot, task["task_id"]), receipt)
-        return _emit(receipt, 1)
+        _refuse(sroot, "verify", receipt)
 
     # TOOL-014: restore any MODIFIED verification input from the sealed copy
     # (reset modified inputs before testing) and flag the tamper on the receipt.
@@ -1652,7 +1679,7 @@ def _cmd_verify_impl(args):
                    "task_file_argv": task["verifier"].get("argv"),
                    "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
         _write_json_atomic(_receipt_path(sroot, task["task_id"]), receipt)
-        return _emit(receipt, 1)
+        _refuse(sroot, "verify", receipt)
 
     # B4: a pinned argv is still worthless if the module it names can be
     # resolved out of the workspace instead.
@@ -1665,7 +1692,7 @@ def _cmd_verify_impl(args):
                              "imports via -m; the workspace is sys.path[0]",
                    "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
         _write_json_atomic(_receipt_path(sroot, task["task_id"]), receipt)
-        return _emit(receipt, 1)
+        _refuse(sroot, "verify", receipt)
 
     argv = [sys.executable if a == "{python}" else a for a in task["verifier"]["argv"]]
     # A05 (#83 M2 slice): the verifier runs in a sanitized environment. An
@@ -1703,13 +1730,14 @@ def _cmd_verify_impl(args):
             "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         }
         _write_json_atomic(_receipt_path(sroot, task["task_id"]), receipt)
-        return _emit({"error": "verifier_timeout",
-                      "detail": "the verifier exceeded the task's timeout "
-                                "budget; this refusal replaces any earlier "
-                                "receipt, so acceptance is blocked until a "
-                                "verify completes",
-                      "verify_timeout_s": verify_timeout_s,
-                      "receipt": receipt}, 1)
+        _refuse(sroot, "verify", {
+            "error": "verifier_timeout",
+            "detail": "the verifier exceeded the task's timeout "
+                      "budget; this refusal replaces any earlier "
+                      "receipt, so acceptance is blocked until a "
+                      "verify completes",
+            "verify_timeout_s": verify_timeout_s,
+            "receipt": receipt})
     except OSError as exc:
         # A01 companion: the verifier could not launch at all (missing
         # interpreter/binary) — same refused-receipt contract.
@@ -1725,9 +1753,10 @@ def _cmd_verify_impl(args):
             "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         }
         _write_json_atomic(_receipt_path(sroot, task["task_id"]), receipt)
-        return _emit({"error": "verifier_launch_failed",
-                      "launch_error": type(exc).__name__,
-                      "receipt": receipt}, 1)
+        _refuse(sroot, "verify", {
+            "error": "verifier_launch_failed",
+            "launch_error": type(exc).__name__,
+            "receipt": receipt})
     passed = r.returncode == 0
     receipt = {
         "task_id": task["task_id"],
@@ -1762,6 +1791,9 @@ def _cmd_verify_impl(args):
         cls, rec = classify_and_recommend(state, state["lane"])
         receipt["failure_class"] = cls
         receipt["recommendation"] = rec
+        # The red receipt carries no rejection class, so name the refusal here
+        # rather than journaling reason: null for the commonest verify outcome.
+        _refuse(sroot, "verify", {"reason": "verifier_failed", **receipt})
     elif state["failures"]:
         # A06 (#83 M1): a green verify clears the failure history. The
         # zcode projection already had this semantics ("a pass clears the
@@ -1772,7 +1804,7 @@ def _cmd_verify_impl(args):
         # verification is the definition of "the task progressed".
         state["failures"] = []
         _write_json_atomic(_state_path(sroot), state)
-    return _emit(receipt, 0 if passed else 1)
+    return _emit(receipt, 0)
 
 
 def cmd_accept(args):
@@ -1799,7 +1831,7 @@ def cmd_accept(args):
         if (_t := _ts_to_epoch(e.get("at"))) is not None
         and time.time() - _t <= _ceiling)
     if _live:
-        raise SystemExit(_emit({
+        _refuse(sroot, "accept", {
             "accepted": False,
             "reason": "dispatch_in_flight: a dispatch is currently open for "
                       "this task's journal; the tree may be mutating under "
@@ -1807,7 +1839,7 @@ def cmd_accept(args):
             "live_dispatch_ids": _live,
             "hint": "wait for the dispatch to finish (status shows it), or "
                     "journal --ack <id> if it is a confirmed orphan",
-        }, 1))
+        })
     # TOOL-033: a detached payload outlived its dispatch budget — its journal
     # pair is closed, but the payload may still be mutating the tree. Same
     # refuse-unless-explicit-override pattern as --allow-zero-dispatch.
@@ -1815,7 +1847,7 @@ def cmd_accept(args):
                        for d in state.get("dispatches", [])
                        if d.get("detached"))
     if _detached and not getattr(args, "allow_detached_payload", False):
-        raise SystemExit(_emit({
+        _refuse(sroot, "accept", {
             "accepted": False,
             "reason": "detached_payload_in_flight: a dispatch's payload is "
                       "running detached; the tree may be mutating under this "
@@ -1825,14 +1857,16 @@ def cmd_accept(args):
                     "it under detached_dispatch_ids), then re-run accept "
                     "with --allow-detached-payload as a reviewed decision "
                     "(counted on state)",
-        }, 1))
+        })
     rp = _receipt_path(sroot, task["task_id"])
     if not rp.is_file():
-        raise SystemExit(_emit({"accepted": False, "reason": "no receipt; run verify"}, 1))
+        _refuse(sroot, "accept",
+                {"accepted": False, "reason": "no receipt; run verify"})
     receipt = _load_json(rp, "receipt")
     if not receipt.get("passed"):
-        raise SystemExit(_emit({"accepted": False, "reason": "receipt not green",
-                                "receipt": receipt}, 1))
+        _refuse(sroot, "accept", {"accepted": False,
+                                  "reason": "receipt not green",
+                                  "receipt": receipt})
     # Restore-and-flag (TOOL-014) had no consumer: a receipt carrying
     # tamper_detected was accepted silently, which makes the whole ATIF design
     # decorative at the only point where it matters. A tampered verification
@@ -1840,13 +1874,13 @@ def cmd_accept(args):
     # restore already made the files match the seal, so re-verifying yields a
     # clean receipt.
     if receipt.get("tamper_detected"):
-        raise SystemExit(_emit({
+        _refuse(sroot, "accept", {
             "accepted": False,
             "reason": "tamper_detected: verification inputs were restored at "
                       "verify; re-verify on the restored tree before accepting",
             "verifier_restored": receipt.get("verifier_restored", []),
             "receipt": receipt,
-        }, 1))
+        })
     # A dispatch after a green verify left the receipt untouched, so
     # verify -> dispatch -> accept was gated by tree_sig alone. When the second
     # dispatch changes no bytes the signature does not move and the FIRST
@@ -1854,31 +1888,31 @@ def cmd_accept(args):
     # defect. The receipt must describe the current dispatch count.
     seq = receipt.get("dispatch_seq")
     if seq is not None and seq != len(state["dispatches"]):
-        raise SystemExit(_emit({
+        _refuse(sroot, "accept", {
             "accepted": False,
             "reason": "stale_receipt: dispatches occurred after verification",
             "receipt_dispatch_seq": seq,
             "current_dispatches": len(state["dispatches"]),
-        }, 1))
+        })
     try:
         current = _measure_with_deadline(
             lambda: tree_signature(ws), MEASUREMENT_BUDGET_S, "tree_signature")
     except MeasurementTimeout as e:
-        raise SystemExit(_emit({
+        _refuse(sroot, "accept", {
             "accepted": False,
             "reason": f"measurement_timeout: {e.what} exceeded the "
                       f"measurement budget ({MEASUREMENT_BUDGET_S}s); "
                       f"refusing rather than certifying an unmeasured tree "
                       f"(#109: acceptance paths fail closed)",
-        }, 1))
+        })
     if current != receipt["tree_sig"]:
         # #17: the green receipt no longer describes this tree.
-        raise SystemExit(_emit({
+        _refuse(sroot, "accept", {
             "accepted": False,
             "reason": "stale_receipt: tree mutated after verification",
             "receipt_tree_sig": receipt["tree_sig"],
             "current_tree_sig": current,
-        }, 1))
+        })
     # A3 (#73): evidence must GATE, not just echo. Visibility at record time
     # was the status quo and the S4 zero-dispatch acceptance shipped anyway.
     # A receipt with dispatch_seq == 0 that is also nondiscriminating cannot
@@ -1888,7 +1922,7 @@ def cmd_accept(args):
     if (receipt.get("dispatch_seq") == 0
             and receipt.get("verifier_nondiscriminating")
             and not getattr(args, "allow_zero_dispatch", False)):
-        raise SystemExit(_emit({
+        _refuse(sroot, "accept", {
             "accepted": False,
             "reason": "zero_dispatch_nondiscriminating_receipt: the verifier "
                       "went green on the unmodified init tree with zero "
@@ -1896,9 +1930,17 @@ def cmd_accept(args):
                       "Re-run with --allow-zero-dispatch if that is a "
                       "reviewed decision (counted on state).",
             "receipt": receipt,
-        }, 1))
+        })
     state["accepted"] = True
     state["accepted_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    # Acceptance provenance: state["accepted"] was a bare bool, so the evidence
+    # acceptance consumed became unidentifiable as soon as the receipt rotated.
+    # Record which receipt was read, its hash, and whether worker evidence
+    # existed at all. A zero-dispatch accept is legal by design, so this is
+    # recorded, never enforced.
+    state["receipt_path"] = str(rp)
+    state["receipt_sha256"] = _sha256_file(rp)
+    state["accepted_with_dispatch"] = len(state["dispatches"]) > 0
     if getattr(args, "allow_zero_dispatch", False):
         state["allow_zero_dispatch_count"] = int(
             state.get("allow_zero_dispatch_count", 0)) + 1
@@ -2022,6 +2064,24 @@ def cmd_record(args):
     sroot = _state_root(ws, args.state_dir)
     state = _load_state(sroot)
     check_state_identity(state, task, ws, sroot)
+    # A13's "an unobserved call is never $0" guard lived inside `if args.wire:`,
+    # so a task asked to meter (--pricing given) but handed no usage trail wrote
+    # a row the guard could never see. `--pricing` is the request to meter, so
+    # that combination fails closed here. A dispatched task with NEITHER flag is
+    # a flat-rate or unspecified record (the Codex bridge dispatches a
+    # subscription worker with no per-token usage) and stays legal: $0 there is
+    # the truth, not cost-blindness. A wire that carries no usage.record still
+    # records usage_unknown rather than $0.
+    if state["dispatches"] and not args.wire and args.pricing:
+        raise SystemExit(_emit({
+            "error": "wire_required_for_dispatched_task",
+            "detail": "you passed --pricing but no --wire; the task has "
+                      "dispatches and no usage trail to price, so the row "
+                      "would claim a cost it never measured (A13). Pass the "
+                      "dispatches' wire.jsonl; a wire holding no usage.record "
+                      "records usage_unknown instead of $0.",
+            "dispatches": len(state["dispatches"]),
+        }, 1))
     row = {
         "task_id": task["task_id"],
         "lane": state["lane"],

@@ -117,7 +117,7 @@ class DispatchJournalTest(unittest.TestCase):
         self.assertEqual([e["event"] for e in lines],
                          ["dispatch_open", "dispatch_finished"])
         self.assertEqual(lines[0]["dispatch_seq"], 0)
-        self.assertEqual(lines[0]["agent"], "glm-flash-worker")
+        self.assertEqual(lines[0]["agent"], "marathon-worker")
         # A1: open and finished repeat the same minted dispatch_id.
         self.assertEqual(lines[0]["dispatch_id"], lines[1]["dispatch_id"])
         self.assertEqual(out["dispatch_id"], lines[0]["dispatch_id"])
@@ -134,7 +134,7 @@ class DispatchJournalTest(unittest.TestCase):
             json.dumps({"journal_seq": 0, "event": "dispatch_open",
                         "task_id": "t1", "dispatch_id": "crash-id-1",
                         "dispatch_seq": 0,
-                        "agent": "glm-worker", "timeout_s": 60,
+                        "agent": "substantial-worker", "timeout_s": 60,
                         "runner_pid": 999999, "at": started}) + "\n",
             encoding="utf-8")
 
@@ -161,7 +161,7 @@ class DispatchJournalTest(unittest.TestCase):
         (sdir / "journal.jsonl").write_text(
             json.dumps({"journal_seq": 0, "event": "dispatch_open",
                         "task_id": "t1", "dispatch_id": "crash-id-1",
-                        "dispatch_seq": 0, "agent": "glm-worker",
+                        "dispatch_seq": 0, "agent": "substantial-worker",
                         "timeout_s": 60, "runner_pid": 999999,
                         "at": started}) + "\n",
             encoding="utf-8")
@@ -336,7 +336,7 @@ class DispatchJournalTest(unittest.TestCase):
         (sdir / "journal.jsonl").write_text(
             json.dumps({"journal_seq": 0, "event": "dispatch_open",
                         "task_id": "t1", "dispatch_id": "live-1",
-                        "dispatch_seq": 0, "agent": "glm-worker",
+                        "dispatch_seq": 0, "agent": "substantial-worker",
                         "timeout_s": 60, "runner_pid": 999999,
                         "at": started}) + "\n",
             encoding="utf-8")

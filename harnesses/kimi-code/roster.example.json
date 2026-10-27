@@ -1,15 +1,15 @@
 {
   "contract": 1,
-  "_comment": "lane -> agent name in delegate's agents.json. Kimi keeps its own internal lane ids (flash/glm/k3); this maps them to contract roles.",
+  "_comment": "lane -> agent name in delegate's agents.json. Kimi keeps its own internal lane ids (flash/glm/k3); this maps them to contract roles. 2026-10-26 (owner-directed): the seat ids ARE role names now — cheap->marathon-worker, substantial->substantial-worker, marathon->expert-worker. NOTE the collision this creates: the ladder ROLE `marathon` maps to the k3 lane, whose seat is `expert-worker`, while the seat id `marathon-worker` belongs to the FLASH lane. Ladder roles are a separate vocabulary and are due their own rename — never read a seat id as a role.",
   "ladder": [
     "cheap",
     "substantial",
     "marathon"
   ],
   "lanes": {
-    "cheap": "ds-flash-worker",
-    "substantial": "glm-worker",
-    "marathon": "k3-worker"
+    "cheap": "marathon-worker",
+    "substantial": "substantial-worker",
+    "marathon": "expert-worker"
   },
   "internal_lane_ids": {
     "cheap": "flash",

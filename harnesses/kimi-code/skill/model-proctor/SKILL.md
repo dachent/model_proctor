@@ -44,10 +44,14 @@ runner restores any tampered verification input from the sealed copy and flags i
    Accept also refuses when the receipt carries `tamper_detected` (a sealed verification
    input was altered and the runner restored it) and when any dispatch happened after the
    receipt was written. Both clear by re-running `verify` — never by re-running `accept`.
-7. **Record**: `python C:/Tools/model-proctor/runner.py record --workspace <w> --task task.json [--wire
-   <wire.jsonl> --pricing C:/Tools/model-proctor/pricing.yaml]` — appends the append-only task
-   record. Use the **installed** pricing table, not a relative `evals/` path. Malformed or
-   missing usage meters as **unknown, never $0** (`usage_unknown` on the row).
+7. **Record**: `python C:/Tools/model-proctor/runner.py record --workspace <w> --task task.json --wire
+   <wire.jsonl> --pricing C:/Tools/model-proctor/pricing.yaml` — appends the append-only task
+   record. `--pricing` is the request to meter: on a task with dispatches but no `--wire` it is
+   refused, because there is no usage trail to price and the row would claim a cost it never
+   measured. A dispatched task recorded with **neither** flag is a flat-rate record (a
+   subscription worker has no per-token usage) and stays legal. Use the **installed** pricing
+   table, not a relative `evals/` path. Malformed or missing usage meters as **unknown, never
+   $0** (`usage_unknown` on the row).
 
 The receipt records the tree signature, the dispatch count it was written at (`dispatch_seq`), and
 the `verifier_argv` that produced it — so a green receipt states *what* was verified, not merely
@@ -159,7 +163,8 @@ asked to resume a dead trajectory, restart from the evidence packet instead.
 ### Resuming after a gap (mandated first step — #73/A2)
 
 The FIRST action on any resume — new morning, reopened machine, post-crash — is
-`python C:/Tools/model-proctor/runner.py status --workspace <w> --task task.json`:
+`python C:/Tools/model-proctor/runner.py status --workspace <w>` (`status` takes no
+`--task`; it reports from the runner-state root the workspace resolves to):
 
 - `stall_suspected: true` (silence beyond `max(2x timeout_s, 1h)`) and any
   `orphaned_dispatch_ids` are **stop-and-investigate** signals. The 2026-08-28 overnight

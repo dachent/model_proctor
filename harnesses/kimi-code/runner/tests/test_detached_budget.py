@@ -147,7 +147,7 @@ class DetachedBudgetTest(unittest.TestCase):
         ws, task, sdir = self._setup_ready()
         state_path = sdir / "state.json"
         state = json.loads(state_path.read_text(encoding="utf-8"))
-        state["dispatches"] = [{"agent": "glm-flash-worker",
+        state["dispatches"] = [{"agent": "marathon-worker",
                                 "status": "completed",
                                 "duration_seconds": 1.0,
                                 "at": "2026-09-25T00:00:00"}]

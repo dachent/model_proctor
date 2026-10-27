@@ -248,7 +248,7 @@ class DispatchScratchTest(unittest.TestCase):
         state_path = self.state_dir / "state.json"
         state = json.loads(state_path.read_text(encoding="utf-8"))
         state["dispatches"].append({
-            "agent": "glm-flash-worker", "status": "completed",
+            "agent": "marathon-worker", "status": "completed",
             "dispatch_id": "prior-dispatch", "detached": False,
             "child_home": str(referenced), "child_session_id": "s-1",
         })
