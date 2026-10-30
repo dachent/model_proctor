@@ -1931,6 +1931,32 @@ def cmd_accept(args):
                       "reviewed decision (counted on state).",
             "receipt": receipt,
         })
+    # T2 (escalation audit 2026-10-29): the gate above only fires at
+    # dispatch_seq == 0, so a nondiscriminating green WITH a dispatch sailed
+    # through accept — audit S1-g, "the single cleanest trigger in the
+    # session": verify returned passed:true AND verifier_nondiscriminating:true
+    # at dispatch_seq 1 and empty/absent worker evidence was accepted anyway.
+    # A dispatch does not make a nondiscriminating verifier discriminating: the
+    # receipt still cannot tell done from undone, at ANY dispatch count. Same
+    # refuse-unless-explicit-override pattern, with its own counted override so
+    # --allow-zero-dispatch keeps its narrow meaning.
+    if receipt.get("verifier_nondiscriminating") and not (
+            getattr(args, "allow_nondiscriminating", False)
+            or (receipt.get("dispatch_seq") == 0
+                and getattr(args, "allow_zero_dispatch", False))):
+        _refuse(sroot, "accept", {
+            "accepted": False,
+            "reason": "nondiscriminating_receipt: the verifier went green on a "
+                      "tree it cannot distinguish from the init tree "
+                      "(verifier_nondiscriminating: true) at dispatch_seq "
+                      f"{receipt.get('dispatch_seq')}; worker dispatches do not "
+                      "make a nondiscriminating verifier discriminating. "
+                      "Re-run verify against a verifier that fails on the "
+                      "undone tree, or re-run accept with "
+                      "--allow-nondiscriminating as a reviewed decision "
+                      "(counted on state).",
+            "receipt": receipt,
+        })
     state["accepted"] = True
     state["accepted_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     # Acceptance provenance: state["accepted"] was a bare bool, so the evidence
@@ -1944,6 +1970,9 @@ def cmd_accept(args):
     if getattr(args, "allow_zero_dispatch", False):
         state["allow_zero_dispatch_count"] = int(
             state.get("allow_zero_dispatch_count", 0)) + 1
+    if getattr(args, "allow_nondiscriminating", False):
+        state["allow_nondiscriminating_count"] = int(
+            state.get("allow_nondiscriminating_count", 0)) + 1
     if getattr(args, "allow_detached_payload", False):
         state["allow_detached_payload_count"] = int(
             state.get("allow_detached_payload_count", 0)) + 1
@@ -2371,6 +2400,14 @@ def main(argv=None):
                            help="accept a zero-dispatch nondiscriminating "
                                 "green receipt as a reviewed decision "
                                 "(counted on state)")
+            # T2 (escalation audit 2026-10-29): the same reviewed-decision
+            # override for a nondiscriminating green receipt at ANY dispatch
+            # count; counted on state.
+            p.add_argument("--allow-nondiscriminating", action="store_true",
+                           help="accept a nondiscriminating green receipt "
+                                "(verifier_nondiscriminating: true) at any "
+                                "dispatch_seq as a reviewed decision (counted "
+                                "on state)")
             p.add_argument("--allow-detached-payload", action="store_true",
                            help="accept while a detached payload may still be "
                                 "running, as a reviewed decision (counted on "
