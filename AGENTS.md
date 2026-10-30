@@ -67,6 +67,26 @@ never through the harness root.
   `test_state_boundary.py`, `test_scratch_root.py`.
   The boundary is **tamper-evident against a non-adversarial worker**, not sealed
   against a hostile one — residuals tracked in #40.
+- `harnesses/kimi-code/wirewatch/` — Layer 1 of the escalation redesign (2026-10-29):
+  `evaluator.py` parses session wires through `scripts/extract_log.py` (never a second
+  parser), joins an optional runner journal, and writes `escalations.jsonl` +
+  `summary.json`; exit 1 on any stop-severity finding. `--out` must lie outside the
+  workspace and outside every input wire's session dir (TOOL-014). Triggers and thresholds
+  live in `core/wire_triggers.py`; the regression is `tests/test_smoke_sessions.py` over
+  frozen reduced wires in `tests/fixtures/wire/` (regenerate with
+  `tests/fixtures/gen_fixtures.py`; durability doctrine — the live `C:\` wires are not a
+  dependency). Unmeasurable triggers are reported by name, never silently passed.
+- `harnesses/kimi-code/loop/` — the unified session controller loop's seed
+  (2026-10-30): `loop_spec.py` (`LoopSpec` + byte-stable `render_prompt`),
+  `template.md` (v1 prompt body), `loopctl.py` (`bind` / `verify` / `job0` /
+  `advancement` / `clear` / `notify` / `status`), tests, and
+  `harnesses/kimi-code/hooks/proctor_advancement_gate.ps1` (host `PreToolUse`
+  gate, matcher `Agent`: refuses a subagent spawn while a stop is unresolved or
+  Job-0 output is stale). One cron, five jobs in fixed order, escalation as
+  Job 0 — never a second cron. Thresholds bind `core/wire_triggers.DEFAULTS`.
+  The drift guard is accident detection only; the toast is best-effort and the
+  durable channel is on-disk plus re-delivery. Design and limits:
+  `docs/unified-loop.md`.
 - `harnesses/kimi-code/replay/` — regression replay corpus for the monitoring redesign
   (TOOL-039, #110): recorded incident signatures (`corpus/`, regenerate with `gen_corpus.py`)
   replayed on a simulated clock against the kill predicate — the reference oracle
@@ -88,7 +108,17 @@ never through the harness root.
 - Wrapper tests: `python -m unittest discover -s harnesses/kimi-code/delegate/tests -v`
 - Codex catalog delegate tests: `python -m unittest discover -s harnesses/codex/delegate/tests -v`
 - Extractor tests: `python -m unittest discover -s scripts/tests -v`
+- Escalation evaluator (wirewatch): `python -m unittest discover -s harnesses/kimi-code/wirewatch/tests -v`;
+  run it with `python harnesses/kimi-code/wirewatch/evaluator.py <wire.jsonl...> [--journal <journal>] --out <dir>`
+  (exit 1 on any stop-severity finding; the extractor's freeze manifest is
+  `scripts/extract_log.freeze.json` and its test fails until a change is re-reviewed)
 - Runner smoke suite (MVP-001): `python -m unittest discover -s harnesses/kimi-code/runner/tests -v`
+- Unified loop: `python -m unittest discover -s harnesses/kimi-code/loop/tests -v`;
+  bind a session with `python harnesses/kimi-code/loop/loopctl.py bind --spec <spec.json>
+  --workspace <proctored workspace>` (prints the exact CronCreate arguments), run Job 0 with
+  `... loopctl.py job0 --state-dir <state>`, and read `docs/unified-loop.md` before registering
+  the `PreToolUse` advancement gate (that edit is a decision-seat step) — the hook blocks
+  subagent spawns while a stop is unresolved or Job-0 output is stale
 - Replay corpus (TOOL-039): `python -m unittest discover -s harnesses/kimi-code/replay/tests -v`
 - Contract parity (core vs Kimi, exhaustive lane table): `python -m unittest discover -s core/tests -v`
 - ZCode harness: `python -m unittest discover -s harnesses/zcode/tests -v`
@@ -127,6 +157,12 @@ never through the harness root.
   margin constants and derived ceilings (delegate ceiling, runner breaker,
   pilot breaker) plus `validate_stack`. Harnesses import it; nothing
   re-derives a timeout margin.
+- `core/wire_triggers.py` — the escalation triggers (T2/T5/T6/T8/T9/T10/T14),
+  pure and stdlib-only over `extract_log` facts plus an optional runner journal.
+  A frozen `Thresholds` dataclass holds every constant (stagnation counts bind
+  `core/decisions.py`, never re-derive it). `evaluate(facts, journal, cfg)` is
+  per wire; `evaluate_session(facts_list, ...)` carries the cross-wire triggers
+  (T8's branch generations are a repository fact, not an agent fact).
 - `harnesses/zcode/` — the ZCode harness. ZCode owns subagent dispatch, so the proctor
   gates it in front of the `Agent` tool rather than owning it. Native shims contain no
   policy: every constant arrives in `lane.json` from the core.

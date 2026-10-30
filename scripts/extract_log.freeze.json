@@ -1,0 +1,21 @@
+{
+  "sha256": "cd71178411e9830a7768c35e36f431373805c4062c132fe7fa3da4d20f4fabc8",
+  "path": "scripts/extract_log.py",
+  "trust_class": "verifier-class",
+  "freeze_note": "Extractor code is verifier-class: hash-frozen per goal; changes force re-review (policy/leader-context-and-worker-integrity.md F1). scripts/tests/test_extract_log_freeze.py fails whenever the hash below disagrees with the file, so an edit cannot slip through unreviewed.",
+  "reviews": [
+    {
+      "date": "2026-08-13",
+      "sha256_before": null,
+      "sha256_after": "c1b180725779789d54092cb842433af90d4ec1a6d98e6d7b285d63d2739ac6df",
+      "review": "first freeze: tool calls, mutations, gh/git commands, text lengths, usage counts, coverage manifest"
+    },
+    {
+      "date": "2026-10-29",
+      "sha256_before": "c1b180725779789d54092cb842433af90d4ec1a6d98e6d7b285d63d2739ac6df",
+      "sha256_after": "cd71178411e9830a7768c35e36f431373805c4062c132fe7fa3da4d20f4fabc8",
+      "review": "forced re-review for the escalation redesign (review/task-implement-escalation.md step 2). Added: tool.call tool_call_id + full command; tool.results with exit_code/is_error/output tail; assistant text digests + excerpts; owner prompt/steer digests with system-envelope flagging; turn start/end records; task start/end records; llm.request model aliases; 19 top-level event types observed in live wires (agent.message.appended, agent.turn.*, subagent.*, prompt.*, file_history.*, changeNotifier.snapshot, context.undone, token_counting.rebased, turn.step.interrupted, turn.step.retrying, tower_mode.enter) that the 2026-08-14/27 enumeration had not seen. Existing fact keys are unchanged; the extension is additive.",
+      "reviewed_against": "3 live session wires (65f71599, 6a97dd66, bbad08a0): records_unrecognized 0 on all three after the refresh"
+    }
+  ]
+}
