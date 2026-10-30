@@ -1,0 +1,4 @@
+{"agent": "glm-flash-worker", "at": "2026-10-28T23:00:00", "dispatch_id": "d-0", "dispatch_seq": 0, "event": "dispatch_open", "journal_seq": 0, "runner_pid": 1, "task_id": "fsn-ticket-684", "timeout_s": 1800}
+{"agent": "glm-flash-worker", "at": "2026-10-28T23:00:00", "dispatch_id": "d-1", "dispatch_seq": 1, "event": "dispatch_open", "journal_seq": 1, "runner_pid": 1, "task_id": "fsn-ticket-684", "timeout_s": 1800}
+{"agent": "glm-flash-worker", "at": "2026-10-28T23:00:00", "dispatch_id": "d-2", "dispatch_seq": 2, "event": "dispatch_open", "journal_seq": 2, "runner_pid": 1, "task_id": "fsn-ticket-684", "timeout_s": 1800}
+{"agent": "glm-flash-worker", "at": "2026-10-28T23:00:00", "dispatch_id": "d-3", "dispatch_seq": 3, "event": "dispatch_open", "journal_seq": 3, "runner_pid": 1, "task_id": "fsn-ticket-684", "timeout_s": 1800}
