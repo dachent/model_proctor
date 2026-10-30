@@ -183,5 +183,119 @@ class ExtractLogTestCase(unittest.TestCase):
             self.assertEqual(a.read_bytes(), b.read_bytes())
 
 
+class ExtractLogExtensionTestCase(ExtractLogTestCase):
+    """The 2026-10-29 fields: results, digests, owner text, turns, tasks,
+    aliases — the facts the escalation triggers are allowed to read."""
+
+    EXTENDED_WIRE = [
+        {"type": "metadata", "protocol_version": "1.4", "time": 1000},
+        {"type": "agent.turn.started", "turnId": 0, "time": 1100},
+        {"type": "turn.prompt", "input": [{"type": "text", "text": "Fix it."}],
+         "time": 1101},
+        {"type": "turn.prompt",
+         "input": [{"type": "text",
+                    "text": '<notification id="task:x"><Title>done'}],
+         "time": 1102},
+        {"type": "turn.steer",
+         "origin": {"kind": "user"},
+         "input": [{"type": "text", "text": "Why did you stop?"}],
+         "time": 1103},
+        {"type": "turn.steer",
+         "origin": {"kind": "agent"},
+         "input": [{"type": "text", "text": "agent chatter"}],
+         "time": 1104},
+        {"type": "task.started",
+         "info": {"taskId": "bash-1", "status": "running", "detached": True,
+                  "startedAt": 1200, "endedAt": None, "exitCode": None,
+                  "description": "poll"},
+         "time": 1200},
+        {"type": "task.terminated",
+         "info": {"taskId": "bash-1", "status": "completed",
+                  "startedAt": 1200, "endedAt": 1500, "exitCode": 0},
+         "time": 1500},
+        {"type": "llm.request", "model": "accounts/fireworks/x/flash",
+         "modelAlias": "fireworks/flash", "time": 1300},
+        _loop({"type": "content.part", "turnId": "0", "step": 1,
+               "part": {"type": "text", "text": "I will fix the test."}}, 1301),
+        _loop({"type": "tool.call", "turnId": "0", "step": 1, "name": "Bash",
+               "toolCallId": "c1",
+               "args": {"command": "pwsh -File bb.ps1 stop 1431"}}, 1302),
+        _loop({"type": "tool.result", "toolCallId": "c1",
+               "result": {"output": "bb: HTTP 404 on POST\n"
+                                     "Command failed with exit code: 1",
+                          "durationMs": 12}}, 1303),
+        _loop({"type": "tool.call", "turnId": "0", "step": 2, "name": "Bash",
+               "toolCallId": "c2", "args": {"command": "sleep 5"}}, 1304),
+        _loop({"type": "tool.result", "toolCallId": "c2",
+               "result": {"output": "ok", "durationMs": 5000}}, 1305),
+        {"type": "turn.ended", "turnId": 0, "durationMs": 900000,
+         "reason": "completed", "time": 1400},
+        {"type": "subagent.spawned", "time": 1401},
+        {"type": "file_history.tracked", "time": 1402},
+        {"type": "token_counting.rebased", "time": 1403},
+    ]
+
+    def test_tool_results_carry_exit_code_error_flag_and_tail(self):
+        wire = self.write_wire("wire.jsonl", self.EXTENDED_WIRE)
+        facts, _ = extract_log.extract_file(wire)
+        self.assertEqual(len(facts["tool_results"]), 2)
+        failed, ok = facts["tool_results"]
+        self.assertEqual(failed["name"], "Bash")
+        self.assertEqual(failed["command"], "pwsh -File bb.ps1 stop 1431")
+        self.assertEqual(failed["exit_code"], 1)
+        self.assertTrue(failed["is_error"] is False)  # wire says isError absent
+        self.assertIn("HTTP 404", failed["tail"])
+        self.assertIsNone(ok["exit_code"])
+        self.assertIn("ok", ok["tail"])
+
+    def test_tool_call_carries_command_and_call_id(self):
+        wire = self.write_wire("wire.jsonl", self.EXTENDED_WIRE)
+        facts, _ = extract_log.extract_file(wire)
+        self.assertEqual(facts["tool_calls"][0]["tool_call_id"], "c1")
+        self.assertEqual(facts["tool_calls"][0]["command"],
+                         "pwsh -File bb.ps1 stop 1431")
+
+    def test_text_digests_normalize_case_and_punctuation(self):
+        self.assertEqual(extract_log._text_digest("Why did you stop?"),
+                         extract_log._text_digest("why did you stop"))
+        self.assertNotEqual(extract_log._text_digest("fix ticket 675"),
+                            extract_log._text_digest("fix ticket 676"))
+
+    def test_owner_texts_flag_system_envelopes_and_drop_agent_steers(self):
+        wire = self.write_wire("wire.jsonl", self.EXTENDED_WIRE)
+        facts, _ = extract_log.extract_file(wire)
+        owners = [(o["source"], o["system"], o["excerpt"])
+                  for o in facts["owner_texts"]]
+        self.assertEqual(owners, [
+            ("turn.prompt", False, "Fix it."),
+            ("turn.prompt", True, '<notification id="task:x"><Title>done'),
+            ("turn.steer", False, "Why did you stop?"),
+        ])
+
+    def test_turns_and_tasks_join_both_halves(self):
+        wire = self.write_wire("wire.jsonl", self.EXTENDED_WIRE)
+        facts, _ = extract_log.extract_file(wire)
+        self.assertEqual(facts["turns"], [{
+            "turn": "0", "started_at": 1100, "ended_at": 1400,
+            "duration_ms": 900000, "reason": "completed"}])
+        self.assertEqual(facts["tasks"], [{
+            "task_id": "bash-1", "started_at": 1200, "ended_at": 1500,
+            "status": "completed", "exit_code": 0, "detached": True,
+            "description": "poll"}])
+
+    def test_model_alias_extracted(self):
+        wire = self.write_wire("wire.jsonl", self.EXTENDED_WIRE)
+        facts, _ = extract_log.extract_file(wire)
+        self.assertEqual(facts["model_aliases"], [{
+            "time": 1300, "model": "accounts/fireworks/x/flash",
+            "alias": "fireworks/flash"}])
+
+    def test_refreshed_top_level_types_are_recognized(self):
+        wire = self.write_wire("wire.jsonl", self.EXTENDED_WIRE)
+        _, coverage = extract_log.extract_file(wire)
+        self.assertEqual(coverage["records_unrecognized"], 0,
+                         coverage["unrecognized_types"])
+
+
 if __name__ == "__main__":
     unittest.main()
