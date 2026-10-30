@@ -29,6 +29,7 @@ jobs:
             "harnesses/kimi-code/runner/tests",
             "harnesses/kimi-code/replay/tests",
             "harnesses/kimi-code/wirewatch/tests",
+            "harnesses/kimi-code/loop/tests",
             "core/tests",
             "scripts/tests",
             "evals/tests",
