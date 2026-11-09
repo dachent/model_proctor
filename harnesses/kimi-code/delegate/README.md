@@ -42,6 +42,14 @@ it contains machine-local absolute paths. It is disposable: to recreate it, copy
 agent roster for the machine, then run `python scripts/install.py` to install and ACL-harden it.
 No other state is required.
 
+**One-off model overrides (`seat_override.py`):** the hardened roster is read-only for the user,
+so a leader cannot retarget a seat for one task — and must not try. `python seat_override.py
+--model hy4` copies the live roster to the scratch root, adds one distinctly named seat
+(`<seat>-override-<model-slug>`) synthesized from `model_dispatch_template`, and writes an
+agent map for the lane; it prints the `DELEGATE_CONFIG` and `--agent-map` values that
+`runner.py dispatch` needs, and the journal records the derived seat name so the evidence
+says what actually ran. See the installed skill's "Arguments" section.
+
 
 | Field | Description |
 |---|---|

@@ -115,6 +115,10 @@ LANES = ("flash", "glm", "k3")
 # that said the ids were deliberately not renamed. A rename is still an
 # interface change: the installed agents.json must carry the same keys (runbook
 # Phase 5), and a missed rename fails loudly — dispatch refuses an unknown seat.
+# 2026-10-30 model swap (owner-directed, k3 lane only): the model in expert-worker
+# became kimi-k3p1-pro (from ember-1). The seat id did not move — it is a role
+# name — and the arm is still UNMEASURED. Its price row is 2/3 of kimi-k3's on
+# every field, so it does not inherit kimi-k3's row (see evals/pricing.yaml).
 DEFAULT_AGENT_MAP = {
     "flash": "marathon-worker",
     "glm": "substantial-worker",

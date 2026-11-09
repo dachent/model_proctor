@@ -29,7 +29,8 @@ conversion is tracked in [#96](../../issues/96). The short version:
 
 Decision (2026-09-10, owner): **the gated path is the default for substantial work** —
 flash (`deepseek-v4p1-flash-1017` since the 2026-10-26 rotation) first, escalating to
-`glm-5p3` then `ember-1` on recorded stagnation. The STOP rulings were correct for the
+`glm-5p3` then `kimi-k3p1-pro` (the k3 seat since the 2026-10-30 swap) on recorded
+stagnation. The STOP rulings were correct for the
 corpus they measured and do not govern long agentic work (see the break-even below). The
 conversion's surviving deliverables are the **catalog** (`delegate.py --model <id>`,
 live-validated; `catalog.py`) for consults and one-shots, the defect fixes, and truthful
@@ -105,7 +106,8 @@ verification gates and escalation **saves against a fixed strong model that comp
 everything**, with the gate guaranteeing the same end quality (whatever flash cannot do,
 the strong tier redoes). Both comparators, measured (phase3 + #91) — **on the pre-2026-10-26
 arms**: the flash arm is the retired glm-5p3-flash and the k3 comparator the retired kimi-k3.
-The rotation's successors (deepseek-v4p1-flash-1017, ember-1) are unmeasured, so the ratios
+The rotation's successors (deepseek-v4p1-flash-1017, ember-1, and kimi-k3p1-pro as of the
+2026-10-30 swap) are unmeasured, so the ratios
 and thresholds below are the starting point, not their evidence:
 
 | Comparator | Rate per unit | Price ratio b/s | Flash must first-pass |
@@ -118,7 +120,11 @@ redo on escalation — the gate catching failure partway through a unit improves
 further. deepseek-v4p1-flash-1017's b is unmeasured and must be re-derived from a metered
 run, not scaled: its standard row is $0.30/$0.006/$1.20 per 1M against glm-5p3-flash's
 $0.15/$0.03/$0.50 — 2.0x input, 0.2x cached input, 2.4x output. ember-1 carries kimi-k3's
-row exactly, so the k3 comparator's price ratio moves only through the flash arm's b.)
+row exactly; the k3 seat has been `kimi-k3p1-pro` since 2026-10-30 and its row is 2/3 of
+kimi-k3's on all three fields, so a like-for-like token mix would put that comparator at
+≈$0.102/unit, b/s ≈ 0.088 (11.3x) and "flash must first-pass > 8.8%" — price-sheet
+arithmetic on an unmeasured arm, not a measurement. The measured kimi-k3 numbers above
+stand as measured.)
 
 **Break-even task size: X\* = 0, unconditionally, against both.** With c ≈ 0 and planning
 a wash, flash-first + escalation is cheaper from the first unit at any task size, unless
@@ -504,7 +510,7 @@ tasks the arms are quality-indistinguishable, so cost decides.
 | Default worker (bounded/substantial) | DeepSeek V4.1 Flash 1017 (`marathon-worker`) | Roster swap **2026-10-26** (owner-directed): `glm-5p3-flash` → `deepseek-v4p1-flash-1017`; **measured 2026-10-26** (PREREG-v3-rotation-2026-10-26, interleaved with glm-5p3): **30/30 hidden on v3, $0.0246/hidden-pass** — quality-clean, but ~2.6x the retired glm-5p3-flash's $0.0096 |
 | Cheap second / fallback | GPT-OSS-120B (`gpt-oss-worker`) | 29/30 hidden on v3 (one flake), $0.014/hidden-pass at corrected prices |
 | Substantial second (equal quality, faster wall) | GLM-5.3 (`substantial-worker`) | Moved to 5.3 on 2026-08-28; re-measured 2026-09-09 (#91: $0.074/hidden-pass) and again **2026-10-26** (interleaved with the new flash arm): **30/30 hidden on v3, $0.0547/hidden-pass** |
-| Marathon / open-ended | Ember-1 (`expert-worker`) | Roster swap **2026-10-26** (owner-directed): `kimi-k3` → `ember-1`, which carries kimi-k3's price row exactly. **Hypothesis only — see Open gaps below**; the retired kimi-k3's marathon basis was never measured either |
+| Marathon / open-ended | Kimi K3.1 Pro (`expert-worker`) | Model swap **2026-10-30** (owner-directed): `ember-1` → `kimi-k3p1-pro`. **UNMEASURED** — see Open gaps below; neither this id nor ember-1 was ever measured on a marathon-shaped corpus, and the retired kimi-k3's marathon basis was never measured either. Unlike ember-1 it does **not** inherit kimi-k3's price row: $2.00/$0.20/$10.00 vs $3.00/$0.30/$15.00 per 1M |
 | Cheap scout (vision, misc.) | Kimi K2.7 (`k27-scout`) | Carried from the frozen roster; live |
 | Advisors (read-only, closed triggers) | Codex CLI / Claude CLI | Flat-rate; trigger set in issue #8 — **not yet wired into the runner** (see Open gaps) |
 
@@ -544,6 +550,15 @@ necessary but not sufficient — config presence is not serving (the 2026-08-28 
 404 above is the precedent). `ember-1` was already there; the dated 1017 alias arrived with
 the 2026-10-26 catalog refresh, which also added the spot routers and the remaining
 serverless models.
+
+On 2026-10-30 the k3 lane moved once more: `ember-1` → `kimi-k3p1-pro` (owner-directed;
+the seat id `expert-worker` is a role name and did not move). Standard tier, from the
+live catalog that day: $2.00/$0.20/$10.00 per 1M — 2/3 of the `ember-1`/`kimi-k3` row on
+every field, and a different deployment, not an alias of kimi-k3. The alias resolves in
+kimi's config, which again is necessary but not sufficient: **this id has not been
+dispatched end-to-end through the wrapper**, and it is **UNMEASURED** on every corpus
+(the k3 lane's marathon role was never measured for kimi-k3 or ember-1 either). The
+`ember-1` row stays in `evals/pricing.yaml` for metering historical runs.
 
 ---
 
@@ -589,6 +604,13 @@ break-even section says so explicitly. Re-measurement is a separate, pre-registe
 the same day's Fireworks catalog sync (19 → 27 fireworks entries, which also brought in the spot
 routers and the remaining serverless models), and the 1017 endpoint answers a 1-token probe
 (HTTP 200) — but neither has been dispatched through the wrapper end-to-end.
+
+**2026-10-30 (k3 lane only).** The k3 lane then moved again, `ember-1` → `kimi-k3p1-pro`
+(owner-directed): same role-name seat (`expert-worker`), a different model and a different
+price row ($2.00/$0.20/$10.00, 2/3 of the kimi-k3/ember-1 row on every field). Nothing was
+measured, so all of the above stands unchanged — the swap replaces one unmeasured arm with
+another, and the flash lane, the `glm` lane and every number in this README are untouched.
+It also has not been dispatched end-to-end through the wrapper.
 
 The trust boundary is sealed for the live path (TOOL-013/014, issue #31/#33): isolated per-dispatch
 `KIMI_CODE_HOME`, runner state and verifier payloads outside the agent-writable workspace,

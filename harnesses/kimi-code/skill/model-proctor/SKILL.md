@@ -1,6 +1,6 @@
 ---
 name: model-proctor
-description: Task-owning worker policy with deterministic acceptance and evidence-driven escalation (model_proctor) — run substantial work through the gated path (runner.py init/dispatch/verify/accept; flash-first with escalation to glm-5p3 then ember-1 on recorded stagnation), or start a one-shot subagent with any model from the live harness catalog (delegate.py --model). Use for substantial coding tasks. Do NOT use for trivial tasks — execute those directly. Requires the model-proctor install (scripts/install.py).
+description: Task-owning worker policy with deterministic acceptance and evidence-driven escalation (model_proctor) — run substantial work through the gated path (runner.py init/dispatch/verify/accept; flash-first with escalation to glm-5p3 then kimi-k3p1-pro on recorded stagnation), optionally pinning the substantial seat to another model with the `use <model> substantial` argument, or start a one-shot subagent with any model from the live harness catalog (delegate.py --model). Use for substantial coding tasks. Do NOT use for trivial tasks — execute those directly. Requires the model-proctor install (scripts/install.py).
 ---
 
 # Model Proctor Policy
@@ -8,11 +8,62 @@ description: Task-owning worker policy with deterministic acceptance and evidenc
 The proctor assigns the exam, watches the clock, and grades it objectively — the model never
 marks its own work. You are the leader. Two surfaces, one doctrine (#96, the 2026-09-09/10
 findings): **the gated path** for substantial work (`C:/Tools/model-proctor/runner.py`
-init/dispatch/verify/accept — flash-first, escalating to glm-5p3 then ember-1 on recorded
+init/dispatch/verify/accept — flash-first, escalating to glm-5p3 then kimi-k3p1-pro on recorded
 stagnation), and **thin dispatch** for consults and one-shots
 (`C:/Tools/model-proctor/delegate.py --model <id>`). Prompts do not enforce; the tools
 enforce. Deterministic evidence outranks every model, including you. Governance: #16, #91,
 #96.
+
+## Arguments — `[use <model> <seat>]`
+
+`/model-proctor` takes at most one argument, `use <model> <seat>`. It picks **which model sits
+in a seat for this invocation** — it never changes a seat id, the roster file, the lane table,
+or any evidence.
+
+| Invocation | Effect |
+|---|---|
+| `/model-proctor` | no override: the `glm` lane's seat `substantial-worker` runs `fireworks/glm-5p3` |
+| `/model-proctor use glm-5p3 substantial` | explicit form of the default (same model — nothing is derived) |
+| `/model-proctor use hy4 substantial` | the substantial seat runs `openrouter/tencent/hy4` for this task |
+
+- **`<seat>`**: `substantial` (alias `substantial-worker`) is the only seat wired; it is the
+  `glm` lane. Any other seat: stop and say so — do not invent a mapping, because a
+  mis-mapped seat silently moves work to a different worker.
+- **`<model>`**: a shorthand — `glm-5p3` → `fireworks/glm-5p3` (the default), `hy4` →
+  `openrouter/tencent/hy4` — or a fully qualified id present in kimi's live config
+  (`python C:/Tools/model-proctor/catalog.py` lists them with prices). An unknown shorthand
+  is refused, never guessed: an id's provider is half of what it means.
+- **How it reaches the runner**: the seat→model binding lives in `agents.json` next to the
+  installed `delegate.py` — ACL-hardened, machine-local, and read-only for you, so a leader
+  cannot retarget a seat in place (that is a rotation, runbook Phase 4). Derive it instead:
+
+  ```bash
+  python C:/Tools/model-proctor/seat_override.py --model hy4
+  ```
+
+  It copies the live roster to the scratch root, adds one **distinctly named** seat for the
+  model (synthesized from the hardened `model_dispatch_template`), writes the agent map, and
+  prints `delegate_config`, `agent_map`, and the metering verdict as JSON. Then dispatch:
+
+  ```powershell
+  $env:DELEGATE_CONFIG = "<delegate_config from the helper>"
+  python C:/Tools/model-proctor/runner.py dispatch --workspace <w> --task task.json `
+      --agent-map "<agent_map from the helper>"
+  ```
+
+  The runner spawns `delegate.py --agent <that seat>` and inherits `DELEGATE_CONFIG`, so the
+  override reaches the dispatch. `override: false` means the seat already runs that model —
+  dispatch with no flags.
+
+- **The override must stay visible.** The derived seat name carries the model slug
+  (`substantial-worker-override-openrouter-tencent-hy4`) precisely because the runner journal
+  and the task record name the **seat**, not the model — reuse the live seat's name and the
+  record would claim glm-5p3 ran. Note the override in the task record.
+- **Per invocation only.** Never edit `agents.json`, never rename a seat, and re-derive (do not
+  reuse) a copy after any roster change. A model with no pricing row meters as
+  `usage_unknown`, never $0; the helper says which.
+- For a **one-shot consult** rather than the gated path, none of this is needed:
+  `delegate.py --model <id>` takes any live id directly.
 
 ## The gated path (substantial work — the default)
 
@@ -84,7 +135,7 @@ is unmeasured until re-run; savings ≈ q − b/s of the comparator's cost — 7
 benchmark reliability), because the gate guarantees whatever flash cannot do gets redone at
 the strong tier. See README "The routing break-even". Escalation is what earns its keep.
 
-Decomposition itself is the hard problem? Optionally consult the `k3` lane (ember-1) for a
+Decomposition itself is the hard problem? Optionally consult the `k3` lane (kimi-k3p1-pro) for a
 task breakdown first — that is a planning consult, not a mandatory planner tax.
 
 ## Start a subagent with a model (consults and one-shots)

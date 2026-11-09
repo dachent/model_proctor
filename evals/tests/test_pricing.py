@@ -34,6 +34,12 @@ DEEPSEEK_V4_PRO = {"input": 1.32, "cached_input": 0.044, "output": 3.96}
 # (`firectl serverless list`) that day rather than from the docs page.
 DEEPSEEK_V4P1_FLASH_1017 = {"input": 0.30, "cached_input": 0.006, "output": 1.20}
 EMBER_1 = {"input": 3.00, "cached_input": 0.30, "output": 15.00}
+# The k3 lane's model after the 2026-10-30 owner-directed swap (standard tier,
+# read from the live catalog that day).
+KIMI_K3P1_PRO = {"input": 2.00, "cached_input": 0.20, "output": 10.00}
+# OpenRouter, read from the public models API 2026-11-08 (the skill's
+# `use hy4 substantial` override meters against this row).
+OPENROUTER_HY4 = {"input": 0.417, "cached_input": 0.021, "output": 1.2505}
 
 
 class FlashFastTiers(unittest.TestCase):
@@ -49,6 +55,12 @@ class FlashFastTiers(unittest.TestCase):
 
     def test_ember_1_standard_tier(self):
         self.assertEqual(PRICING["fireworks/ember-1"], EMBER_1)
+
+    def test_kimi_k3p1_pro_standard_tier(self):
+        self.assertEqual(PRICING["fireworks/kimi-k3p1-pro"], KIMI_K3P1_PRO)
+
+    def test_openrouter_hy4_row(self):
+        self.assertEqual(PRICING["openrouter/tencent/hy4"], OPENROUTER_HY4)
 
     def test_flash_tier_is_cheaper_than_its_base_model(self):
         # The class of the 2026-08-28 error: a flash model priced above its base.
