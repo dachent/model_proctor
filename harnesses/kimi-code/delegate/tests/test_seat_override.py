@@ -25,6 +25,14 @@ sys.path.insert(0, str(_DELEGATE_DIR))
 
 LIVE_SUBSTANTIAL = "fireworks/glm-5p3"
 HY4 = "openrouter/tencent/hy4"
+K3P1 = "fireworks/kimi-k3p1-pro"
+
+# Live shape: openrouter's key is an environment variable, fireworks' is a
+# literal inside the config the child is seeded with (fake value here).
+DEFAULT_PROVIDERS = {
+    "fireworks": 'type = "openai"\napi_key = "fw_fixture_not_a_key"\n',
+    "openrouter": 'type = "openai"\napi_key_env = "OPENROUTER_API_KEY"\n',
+}
 
 
 def make_roster(tmp):
@@ -69,12 +77,22 @@ def make_roster(tmp):
     return str(path)
 
 
-def make_home(tmp, models):
-    home = Path(tmp) / "home"
+def make_home(tmp, models, providers=None, root="home"):
+    """Fixture kimi config: `[models."id"] provider = ...` + `[providers.*]` blocks.
+
+    The provider block is the credential declaration the tool derives from, so
+    the fixture mirrors the live shape: openrouter reads its key from the
+    environment, fireworks carries a literal (a fake value here).
+    """
+    providers = DEFAULT_PROVIDERS if providers is None else providers
+    home = Path(tmp) / root
     home.mkdir(parents=True)
-    (home / "config.toml").write_text(
-        "".join(f'[models."{m}"]\nprovider = "fireworks"\n' for m in models),
-        encoding="utf-8")
+    lines = []
+    for m in models:
+        lines.append(f'[models."{m}"]\nprovider = "{m.split("/", 1)[0]}"\n')
+    for name, body in providers.items():
+        lines.append(f"[providers.{name}]\n{body}")
+    (home / "config.toml").write_text("".join(lines), encoding="utf-8")
     return str(home)
 
 
@@ -82,18 +100,20 @@ class SeatOverrideCLI(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="seat-override-")
         self.roster = make_roster(self.tmp)
-        self.home = make_home(self.tmp, [LIVE_SUBSTANTIAL, HY4])
+        self.home = make_home(self.tmp, [LIVE_SUBSTANTIAL, HY4, K3P1])
         self.out = str(Path(self.tmp) / "seats")
         self.before = Path(self.roster).read_bytes()
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def _run(self, *extra, home=None):
+    def _run(self, *extra, home=None, unset=()):
         env = dict(os.environ)
         env["KIMI_CODE_HOME"] = home or self.home
         env["DELEGATE_CONFIG"] = self.roster
         env["MODEL_PROCTOR_SCRATCH"] = str(Path(self.tmp) / "scratch")
+        for name in unset:
+            env.pop(name, None)
         r = subprocess.run([sys.executable, str(TOOL), *extra],
                            capture_output=True, text=True, env=env, timeout=60)
         return r.returncode, r.stdout, r.stderr
@@ -131,6 +151,56 @@ class SeatOverrideCLI(unittest.TestCase):
         self.assertIn(LIVE_SUBSTANTIAL, derived["agents"]["substantial-worker"]["command"])
         self.assertEqual(json.loads(Path(data["agent_map"]).read_text(encoding="utf-8")),
                          {"glm": data["journal_agent"]})
+
+    def test_provider_declared_credential_reaches_the_seat_allowlist(self):
+        """The 2026-11-09 failure: a sanitized child env plus no allowlist entry
+        made every openrouter dispatch fail config.invalid on api_key_env."""
+        rc, out, err = self._run("--model", "hy4", "--out-dir", self.out)
+        self.assertEqual(rc, 0, err)
+        data = json.loads(out)
+        self.assertEqual(data["credential"]["env"], "OPENROUTER_API_KEY")
+        self.assertEqual(data["credential"]["hint"], "kvget openrouter-api-key")
+        derived = json.loads(Path(data["delegate_config"]).read_text(encoding="utf-8"))
+        alias = derived["agents"][data["journal_agent"]]
+        self.assertIn("OPENROUTER_API_KEY", alias["environment_allowlist"])
+        self.assertIn("HOME", alias["environment_allowlist"])  # template kept
+        self.assertIn("OPENROUTER_API_KEY", alias["required_environment"])
+        # the report carries the variable's NAME and never a value
+        self.assertEqual(sorted(data["credential"]),
+                         ["declared_by", "env", "hint", "in_current_environment"])
+
+    def test_literal_key_provider_gets_no_environment_entry(self):
+        """fireworks authenticates from a literal in the config the child is
+        seeded with, so its seat must not demand an environment variable."""
+        rc, out, err = self._run("--model", K3P1, "--out-dir", self.out)
+        self.assertEqual(rc, 0, err)
+        data = json.loads(out)
+        self.assertIsNone(data["credential"])
+        derived = json.loads(Path(data["delegate_config"]).read_text(encoding="utf-8"))
+        alias = derived["agents"][data["journal_agent"]]
+        self.assertEqual(alias["environment_allowlist"], ["HOME"])
+        self.assertEqual(alias["required_environment"], [])
+
+    def test_absent_credential_is_reported_but_not_fatal_at_generation(self):
+        rc, out, err = self._run("--model", "hy4", "--out-dir", self.out,
+                                 unset=("OPENROUTER_API_KEY",))
+        self.assertEqual(rc, 0, err)
+        data = json.loads(out)
+        self.assertFalse(data["credential"]["in_current_environment"])
+        self.assertEqual(data["credential"]["env"], "OPENROUTER_API_KEY")
+
+    def test_provider_without_a_declaration_adds_nothing(self):
+        home = make_home(str(Path(self.tmp) / "nodecl"),
+                         ["local/plain-model"],
+                         providers={"local": 'type = "openai"\n'})
+        rc, out, err = self._run("--model", "local/plain-model",
+                                 "--out-dir", self.out, home=home)
+        self.assertEqual(rc, 0, err)
+        data = json.loads(out)
+        self.assertIsNone(data["credential"])
+        derived = json.loads(Path(data["delegate_config"]).read_text(encoding="utf-8"))
+        self.assertEqual(derived["agents"][data["journal_agent"]]
+                         ["environment_allowlist"], ["HOME"])
 
     def test_derived_config_loads_through_the_delegate_validator(self):
         rc, out, err = self._run("--model", "hy4", "--out-dir", self.out)

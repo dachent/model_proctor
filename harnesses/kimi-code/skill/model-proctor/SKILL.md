@@ -43,17 +43,26 @@ or any evidence.
 
   It copies the live roster to the scratch root, adds one **distinctly named** seat for the
   model (synthesized from the hardened `model_dispatch_template`), writes the agent map, and
-  prints `delegate_config`, `agent_map`, and the metering verdict as JSON. Then dispatch:
+  prints `delegate_config`, `agent_map`, `credential`, and the metering verdict as JSON. Then
+  dispatch:
 
   ```powershell
+  # The child gets a sanitized environment, so a provider that reads its key from
+  # an env var needs it in THIS process only (the helper prints `credential.env`;
+  # openrouter -> OPENROUTER_API_KEY, resolved per workstation policy). Never put
+  # the value in a file, a task file, a prompt, or a transcript.
+  $env:OPENROUTER_API_KEY = (kvget openrouter-api-key)
   $env:DELEGATE_CONFIG = "<delegate_config from the helper>"
   python C:/Tools/model-proctor/runner.py dispatch --workspace <w> --task task.json `
       --agent-map "<agent_map from the helper>"
   ```
 
   The runner spawns `delegate.py --agent <that seat>` and inherits `DELEGATE_CONFIG`, so the
-  override reaches the dispatch. `override: false` means the seat already runs that model —
-  dispatch with no flags.
+  override reaches the dispatch. The seat is synthesized from the provider's own declaration:
+  a provider that authenticates via `api_key_env` gets that variable on its
+  `environment_allowlist` and `required_environment` (a missing key refuses by name rather than
+  failing inside the child as `config.invalid`); a provider holding a literal key needs
+  nothing. `override: false` means the seat already runs that model — dispatch with no flags.
 
 - **The override must stay visible.** The derived seat name carries the model slug
   (`substantial-worker-override-openrouter-tencent-hy4`) precisely because the runner journal

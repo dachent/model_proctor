@@ -26,6 +26,15 @@ The live roster and the live harness catalog are both read at invocation and
 never cached (#23: a synced copy of either is what desynced on 2026-08-28).
 Nothing here dispatches or spends tokens.
 
+The synthesized seat also carries whatever credential its provider declares. The
+delegate hands the child a sanitized environment (a Windows base set plus the
+seat's `environment_allowlist`), so a provider that reads its key from
+`api_key_env` cannot authenticate unless that variable is on the allowlist — the
+2026-11-09 `config.invalid: ... api_key_env ... not set` failure. The variable's
+NAME comes from the provider's own block in kimi's config, per model; a provider
+holding a literal key gets nothing added. The value is never read, written, or
+printed here — the caller exports it into the dispatch process's environment.
+
 Usage:
   python seat_override.py                                  # the default: no override
   python seat_override.py --model hy4                      # substantial -> hy4
@@ -59,6 +68,10 @@ SHORTHANDS = {
     "hy4": "openrouter/tencent/hy4",
 }
 DEFAULT_MODEL = "fireworks/glm-5p3"
+# How this workstation resolves a provider credential into the dispatch's
+# process environment. Names a sanctioned READ command only — never a value,
+# and never a place to store one.
+CREDENTIAL_HINTS = {"OPENROUTER_API_KEY": "kvget openrouter-api-key"}
 
 
 def _emit(payload, code=0):
@@ -101,6 +114,43 @@ def _priced(model_id):
         return load_pricing(str(path)).get(model_id)
     except OSError:
         return None
+
+
+def _block_field(text, header_re, field):
+    """First `field = "value"` inside the block opened by `header_re`."""
+    m = re.search(header_re + r"\n(.*?)(?=\n\[|\Z)", text, re.S | re.M)
+    if not m:
+        return None
+    f = re.search(r"^\s*" + field + r'\s*=\s*"([^"]*)"', m.group(1), re.M)
+    return f.group(1) if f else None
+
+
+def _provider_credential(model_id):
+    """(env_var, note) for the credential the model's provider reads.
+
+    Kimi's config declares, per provider, how it authenticates: `api_key_env =
+    "VAR"` means the key is taken from the child process environment, a literal
+    `api_key` means it is already inside the config the child is seeded with.
+    Only the first kind needs passing through, and which var that is belongs to
+    the provider's own declaration — never to a list kept here.
+
+    Header scan, not a TOML parse: stdlib on 3.10 has none, the same constraint
+    `delegate.live_harness_models` works under. An unreadable config returns a
+    note; a provider with no api_key_env (or none declared) returns (None, None)
+    and the seat is left exactly as the hardened template defines it.
+    """
+    path = delegate._harness_config_path()
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        return None, f"harness config unreadable: {path} ({e})"
+    provider = _block_field(
+        text, r'^\[models\."' + re.escape(model_id) + r'"\]', "provider")
+    if not provider:
+        return None, f"no provider declared for {model_id} in {path}"
+    env_var = _block_field(
+        text, r"^\[providers\." + re.escape(provider) + r"\]", "api_key_env")
+    return env_var, None
 
 
 def main(argv=None):
@@ -169,6 +219,19 @@ def main(argv=None):
     except delegate.ConfigError as e:
         return _refuse("config_error", detail=str(e))
 
+    # The ticket that failed: the template's allowlist carries no credential, and
+    # the child gets a sanitized environment, so a provider that reads its key
+    # from the environment cannot authenticate. The provider's own declaration
+    # says which variable that is; a provider holding a literal key needs none.
+    cred_env, cred_note = _provider_credential(model)
+    if cred_env:
+        allow = entry.setdefault("environment_allowlist", [])
+        if cred_env not in allow:
+            allow.append(cred_env)
+        required = entry.setdefault("required_environment", [])
+        if cred_env not in required:
+            required.append(cred_env)
+
     alias = f"{seat_id}-override-{_slug(model)}"
     derived = json.loads(json.dumps(source_cfg))
     derived["agents"][alias] = entry
@@ -197,6 +260,17 @@ def main(argv=None):
                        detail=str(e))
 
     price = _priced(model)
+    credential = None
+    if cred_env:
+        credential = {
+            "env": cred_env,
+            "declared_by": "the model's provider block in kimi's config",
+            "in_current_environment": bool(os.environ.get(cred_env)),
+            "hint": CREDENTIAL_HINTS.get(
+                cred_env,
+                "resolve it through the sanctioned credential path and export "
+                "it for the dispatch only"),
+        }
     return _emit({
         "ok": True,
         "override": True,
@@ -209,6 +283,8 @@ def main(argv=None):
         "delegate_config": str(config_path),
         "agent_map": str(map_path),
         "env": {"DELEGATE_CONFIG": str(config_path)},
+        "credential": credential,
+        "credential_note": cred_note,
         "dispatch_args": ["--agent-map", str(map_path)],
         "metering": ("priced" if price else
                      "unknown — no pricing row, so the record meters as "

@@ -48,7 +48,12 @@ so a leader cannot retarget a seat for one task — and must not try. `python se
 (`<seat>-override-<model-slug>`) synthesized from `model_dispatch_template`, and writes an
 agent map for the lane; it prints the `DELEGATE_CONFIG` and `--agent-map` values that
 `runner.py dispatch` needs, and the journal records the derived seat name so the evidence
-says what actually ran. See the installed skill's "Arguments" section.
+says what actually ran. The seat also carries the credential its provider declares: a provider
+whose `api_key_env` names a variable gets it on `environment_allowlist` and
+`required_environment` — the child environment is sanitized, so without it the dispatch fails
+`config.invalid` — while a provider with a literal `api_key` needs nothing. That variable's
+value must be in the dispatch process's environment only (per workstation policy), never in a
+file. See the installed skill's "Arguments" section.
 
 
 | Field | Description |
