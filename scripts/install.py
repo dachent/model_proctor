@@ -45,7 +45,7 @@ ICACLS = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
                       "System32", "icacls.exe")
 
 DELEGATE_FILES = ["delegate.py", "killauthority.py", "catalog.py",
-                  "agents.example.json", "README.md",
+                  "seat_override.py", "agents.example.json", "README.md",
                   "heartbeat.py", "stall_guard.py"]
 # (base, subdir, filename) copied flat into TOOL_DIR. The base is explicit
 # because runner/ lives under the harness while core/ and evals/ stay at the
@@ -61,8 +61,8 @@ RUNNER_FILES = [(KIMI, "runner", "runner.py"), (KIMI, "runner", "pilot.py"),
 SKILLS = ("model-proctor",)
 # Everything the installed SKILL.md tells a leader to invoke or pass.
 REQUIRED_AFTER_INSTALL = ["runner.py", "delegate.py", "killauthority.py", "catalog.py",
-                          "task_schema.py", "timeout_stack.py", "pricing.yaml",
-                          "heartbeat.py", "stall_guard.py"]
+                          "seat_override.py", "task_schema.py", "timeout_stack.py",
+                          "pricing.yaml", "heartbeat.py", "stall_guard.py"]
 MANIFEST_NAME = "install-manifest.json"
 # Distinct from 1 (incomplete install) so a caller can tell a refusal from a
 # failure without parsing stdout.
