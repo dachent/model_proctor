@@ -1799,8 +1799,7 @@ def _cmd_verify_impl(args):
         # rather than journaling reason: null for the commonest verify outcome.
         _refuse(sroot, "verify", {"reason": "verifier_failed", **receipt})
     elif state["failures"]:
-        # A06 (#83 M1): a green verify clears the failure history. The
-        # zcode projection already had this semantics ("a pass clears the
+        # A06 (#83 M1): a green verify clears the failure history ("a pass clears the
         # stagnation run") — without it here, failures from BEFORE a green
         # verify survived and counted toward a later stagnation switch,
         # ordering a lateral switch on a task that was actually progressing.
@@ -2101,8 +2100,8 @@ def cmd_record(args):
     # so a task asked to meter (--pricing given) but handed no usage trail wrote
     # a row the guard could never see. `--pricing` is the request to meter, so
     # that combination fails closed here. A dispatched task with NEITHER flag is
-    # a flat-rate or unspecified record (the Codex bridge dispatches a
-    # subscription worker with no per-token usage) and stays legal: $0 there is
+    # a flat-rate or unspecified record (a subscription worker is
+    # dispatched with no per-token usage) and stays legal: $0 there is
     # the truth, not cost-blindness. A wire that carries no usage.record still
     # records usage_unknown rather than $0.
     if state["dispatches"] and not args.wire and args.pricing:

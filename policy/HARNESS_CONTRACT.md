@@ -1,25 +1,20 @@
 # Harness contract v1
 
-What every model_proctor harness must decide the same way, and what each harness is
-free to decide for itself.
+What a model_proctor harness must decide, and what it is free to decide for itself.
+Kimi Code is the only harness; the contract stays explicit so the decisions stay
+testable pure functions rather than prose.
 
 `contract: 1`. The reference implementation is `core/decisions.py`. A harness declares
 the contract version it implements in its `roster.json`.
 
-## Why a contract rather than shared dispatch code
+## Why a contract and a decision core
 
-Harnesses differ in **architecture**, not merely in style:
+Kimi's `runner/` **owns** dispatch and spawns workers via `delegate/`; policy reaches the
+leader through `SKILL.md`, and the evidence boundary is state outside the workspace.
+The decisions behind dispatch are pure functions over data, kept once in
+`core/decisions.py` so the runner and its tests cannot drift apart.
 
-| | Kimi Code CLI | ZCode |
-|---|---|---|
-| Dispatch | `runner/` **owns** it, spawns workers via `delegate/` | the harness owns it; the proctor **gates** it in front of the `Agent` tool |
-| Policy delivery | `SKILL.md` | `AGENTS.md` |
-| Evidence boundary | state outside the workspace | that, plus a `PreToolUse` hook that holds in any permission mode |
-
-Dispatch code therefore cannot be shared. The decisions behind dispatch are pure
-functions over data, and those are shared, once, in `core/decisions.py`.
-
-## Shared — every harness uses `core/decisions.py`
+## The decision core: `core/decisions.py`
 
 ### Lane table
 
@@ -99,25 +94,13 @@ Rules:
 - The ladder defines the only legal lateral switch: one step, in order.
 - `harnesses/*/roster.json` is gitignored; `roster.example.json` is tracked.
 
-A harness with a different model mix — Codex — is a different `roster.json` and zero
-contract change.
+A different model mix is a different `roster.json` and zero contract change.
 
 ## Fail direction
 
-Declared per gate, because the two current harnesses are **opposite** and would
-otherwise both be "conformant" while disagreeing on whether a gate is a gate.
-
-| harness | fast path | acceptance |
-|---|---|---|
-| Kimi | fail **closed** (`raise SystemExit`) | closed |
-| ZCode | fail **open** (deadline, then allow) | **closed** — see below |
-
-ZCode's fail-open is bounded, not unconditional: a guard that cannot answer allows the
-tool call and records `GATE_FAILED_OPEN`, and `accept` refuses if any occurred between
-init and verify. The only irreversible act is acceptance; tool calls are reversible and
-the tree-bound receipt catches any change. So the irreversible boundary is guarded hard
-and the reversible path stays fast, rather than paying a stall on every tool call and
-letting one guard crash brick a session.
+Every gate fails **closed**: a guard that cannot answer refuses (`raise SystemExit` on
+the fast path; acceptance refuses). The only irreversible act is acceptance, and the
+tree-bound receipt catches any change, so there is no bounded-open path to defend.
 
 ## Verifier hygiene
 
@@ -128,29 +111,25 @@ the same second let CPython reuse a stale `.pyc`, and a **failing** verify then 
 
 ## Build-identity lock — SPECIFIED, NOT YET IMPLEMENTED
 
-Where a harness's enforcement path is reverse-engineered from a vendor bundle — ZCode's
-`hookSpecificOutput` contract is read out of `resources/glm/zcode.cjs`, and that reading
-was wrong once already, costing a working guard — the harness records the bundle's
-sha256. On mismatch, parity reports `UNVERIFIED`, never PASS: an offline suite stays
-green while the gate is dead.
+Where a harness's enforcement path is reverse-engineered from a vendor bundle rather than
+a documented contract, and that reading can be wrong without any test noticing, the
+harness should record the bundle's sha256; on mismatch parity reports `UNVERIFIED`, never
+PASS (an offline suite stays green while the gate is dead).
 
 **Status: specification only.** No harness records a bundle hash today and no
-`selftest` exists. It is written here so the requirement is not lost, and labelled
-rather than implied — a contract clause with no consumer is the failure mode #36
+`selftest` exists. It is written here, and labelled rather than implied, so the
+requirement is not lost: a contract clause with no consumer is the failure mode #36
 (`tamper_detected` detected-never-consumed) and #58 (a report-only field that "reads
-as protection and provides none") are about. `harnesses/zcode/tests/test_wire_shape.py`
-covers the adjacent risk — that the shape we emit is one ZCode accepts — but cannot
-detect that the vendor bundle changed underneath it. Tracked in #69.
+as protection and provides none") are about. Tracked in #69.
 
-## What a new harness must supply
+## What a harness must supply
 
 1. `roster.example.json` declaring `contract`, `ladder`, `lanes`.
 2. A control plane that calls `core/decisions.py` for every rule above.
 3. Any native shim it needs, containing **no policy** — every constant arrives from the
-   control plane. `harnesses/zcode/tests/test_zproctor.py::test_shim_holds_no_policy`
-   asserts this for ZCode; a new harness should assert the same.
+   control plane — and a test asserting exactly that.
 4. A wire-shape test against its harness's real hook/tool contract, with negative cases.
-5. A row in `core/tests/test_kimi_parity.py`-style parity coverage if the harness has
+5. Parity coverage in the style of `core/tests/test_kimi_parity.py` if the harness has
    its own lane implementation rather than calling the core directly.
 
 ## Rejected alternatives
@@ -165,12 +144,12 @@ JSON cases (`input -> expected decision`) plus a thin adapter per harness, run a
 cross-product. **This was the original design and it was built up to the point of
 failing.** Rejected because:
 
-- ZCode's enforced rules live in JavaScript. A Python adapter answering the budget and
-  stagnation cases would be a **third** implementation of those rules, inside the very
-  mechanism whose purpose is to prove there is one.
+- Where a harness's enforced rules live in another language, a Python adapter answering
+  the budget and stagnation cases would be a **third** implementation of those rules,
+  inside the very mechanism whose purpose is to prove there is one.
 - A `case in -> decision out` shape cannot represent side effects, sequences, filesystem
-  semantics, wire shape, or fail direction — so two harnesses could be 100% conformant
-  while disagreeing on whether a gate is a gate.
+  semantics, wire shape, or fail direction — so two implementations could be 100%
+  conformant while disagreeing on whether a gate is a gate.
 - The corpus was justified as a way to *discover* divergence. Discovery was never the
   bottleneck: reading both implementations found roughly eleven divergences in under an
   hour, and one drift had already occurred *inside a single harness* while a 51-test
@@ -182,13 +161,12 @@ lane truth table, and a wire-shape test.
 ### A shared library that every harness imports
 
 Rejected in the first draft on the grounds that "a shared Python module buys nothing if
-a future harness's adapter is not Python". That reasoning was **wrong**, and the
-correction is the current design: `zproctor_gate.mjs` is a Node shim that reads
-`lane.json` and `events.jsonl` written by Python. A shared core does not need to be
-*importable* — it needs to be **runnable or persistable**. Hermes and Codex can consume
-`core/decisions.py` the same way regardless of their implementation language.
+a future harness's adapter is not Python". That reasoning was **wrong**: a shared core
+does not need to be *importable* — it needs to be **runnable or persistable**. A native
+shim can read a lane file and an event log written by Python and consume the core's
+decisions the same way regardless of its implementation language.
 
-### No parity mechanism — let harnesses diverge deliberately
+### No parity mechanism — let implementations diverge deliberately
 
 Rejected. Parity is the research claim this repo exists to support; without a consumer
 it is an assertion. This repo's own bug record is precisely about mechanisms with no
@@ -220,14 +198,6 @@ The first draft put `"custom:fireworks/glm-5p2"` in a tracked `roster.json`. Rej
 (#63), so a tracked file in a public repo reverses that decision and creates a third
 source of truth alongside `DEFAULT_AGENT_MAP` and `agents.json`. Rosters carry **names**;
 model and argv binding stays machine-local.
-
-### Pure fail-closed for ZCode
-
-Rejected. It would cost the internal deadline on every `Write`/`Edit`/`Bash` and let a
-single guard crash brick a session, while buying nothing the acceptance gate does not
-already provide: acceptance is the only irreversible act, and tool calls are reversible
-because the tree-bound receipt catches any change. Hence bounded fail-open — see
-**Fail direction**.
 
 ### Renaming Kimi's internal lane ids in the harness work
 

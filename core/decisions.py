@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """Shared decision core: the rules every harness must agree on.
 
-model_proctor's harnesses differ in *architecture* — Kimi's runner owns dispatch and
-spawns workers through the delegate wrapper, while ZCode owns subagent dispatch itself
-and can only be gated in front of its `Agent` tool. Dispatch code cannot be shared.
-The decisions behind dispatch are pure functions over data, and those live here, once.
+Kimi's runner owns dispatch and spawns workers through the delegate wrapper. The
+decisions behind dispatch are pure functions over data, and those live here, once.
 
 Contract version 1. See policy/HARNESS_CONTRACT.md.
 

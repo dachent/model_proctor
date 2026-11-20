@@ -2,8 +2,7 @@
 """Kill-path registry and single kill authority (TOOL-036, issue #107).
 
 One component terminates a delegate-owned worker tree: the delegate that owns
-its Job Object and process handles. External actors (runner, evals,
-codex adapter) are read-only with respect to payloads they do not own: their
+its Job Object and process handles. External actors (runner, evals) are read-only with respect to payloads they do not own: their
 terminal action is a termination REQUEST plus a report, never a kill. Every
 payload death is attributed to exactly one authority via the envelope/journal
 key ``kill_authority``.
