@@ -14,7 +14,6 @@ plus a report, never a kill.
 | `delegate:interrupted` | Delegate authority terminated the tree on SIGINT/SIGTERM/KeyboardInterrupt. |
 | `delegate:runner_requested` | Delegate authority terminated the tree after the runner wrote the terminate-request file at the wrapper deadline. Envelope status is `interrupted`, exit 130. |
 | `unresolved_reported` | Runner requested; the delegate never confirmed within TERMINATION_REQUEST_WAIT_S. The runner did NOT kill anything; the wedged delegate and its tree remain the delegate's custody (operator action via `status`/orphan reporting). |
-| `codex:cleanup_kill` | Codex adapter killed its own direct child after a 1s grace (no Job Object custody). |
 | `eval:taskkill_tree_force` | Evals harness taskkill /T /F'd the kimi.exe tree it spawned itself. |
 
 Attribution records what the authority DID. For `allow_breakaway` agents it
@@ -30,9 +29,8 @@ comment in delegate.py).
 | Detached (WMI) dispatch kill | harnesses/kimi-code/delegate/delegate.py `_run_detached_dispatch` | authority | same KillAuthority sequence from the bootstrap pid (job=None) | envelope kill_authority |
 | Runner wrapper deadline | harnesses/kimi-code/runner/runner.py | external_readonly | writes request file, bounded wait, journals outcome | journal dispatch_termination_requested + dispatch_finished.kill_authority |
 | Kernel on delegate death | (OS) | authority (custody) | KILL_ON_JOB_CLOSE fires when the delegate's job handle closes for any reason | implicit; documented here |
-| Codex cleanup | harnesses/codex/delegate/delegate.py:96 | own_child_cleanup | proc.kill() on own direct child after 1s grace | envelope kill_authority |
 | Evals timeout | evals/run_eval.py:95-98 | own_child_cleanup | taskkill /T /F on own kimi.exe | result row kill_authority |
-| plain_arm / pilot / zproctor spawns | evals/plain_arm.py:63-67, runner/pilot.py:69-73, zcode/zproctor.py:41-53 | stdlib_implicit | stdlib timeout kills of own direct children | not attributed (no envelope surface) |
+| plain_arm / pilot spawns | evals/plain_arm.py:63-67, runner/pilot.py:69-73 | stdlib_implicit | stdlib timeout kills of own direct children | not attributed (no envelope surface) |
 | core/* | core/decisions.py, core/task_schema.py | policy_pure | none — pure functions | n/a |
 
 ## Residuals

@@ -24,16 +24,13 @@ jobs:
         run: |
           $suites = @(
             "harnesses/kimi-code/delegate/tests",
-            "harnesses/codex/delegate/tests",
-            "harnesses/codex/skill/model-proctor/tests",
             "harnesses/kimi-code/runner/tests",
             "harnesses/kimi-code/replay/tests",
             "harnesses/kimi-code/wirewatch/tests",
             "harnesses/kimi-code/loop/tests",
             "core/tests",
             "scripts/tests",
-            "evals/tests",
-            "harnesses/zcode/tests"
+            "evals/tests"
           )
           $failed = 0
           $current = [ordered]@{}

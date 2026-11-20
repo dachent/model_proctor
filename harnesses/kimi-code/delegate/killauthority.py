@@ -26,7 +26,6 @@ ATTRIBUTIONS = (
     "delegate:interrupted",
     "delegate:runner_requested",
     "unresolved_reported",       # runner requested; delegate never confirmed
-    "codex:cleanup_kill",        # codex adapter reaping its own direct child
     "eval:taskkill_tree_force",  # evals harness reaping its own kimi.exe tree
 )
 
@@ -99,23 +98,6 @@ KILL_SITES = [
         "expected": {},
         "note": "subprocess.run(timeout=timeout_s+300) at plain_arm.py:63-67; "
                 "implicit stdlib kill of the direct child only.",
-    },
-    {
-        "site": "codex adapter cleanup kill",
-        "file": "harnesses/codex/delegate/delegate.py",
-        "classification": "own_child_cleanup",
-        "expected": {"proc_kill": 1},
-        "note": "_cleanup (codex/delegate.py:96-114) kills only the adapter's "
-                "own direct child after a 1s grace; no Job Object, no tree "
-                "custody. Task 6 attributes it as codex:cleanup_kill.",
-    },
-    {
-        "site": "zcode verifier/git spawns",
-        "file": "harnesses/zcode/zproctor.py",
-        "classification": "stdlib_implicit",
-        "expected": {},
-        "note": "subprocess.run timeouts at zproctor.py:41-53,56-59; implicit "
-                "stdlib kills of verifier/git children only.",
     },
     {
         "site": "core decision modules",

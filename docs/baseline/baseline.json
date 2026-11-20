@@ -1,13 +1,42 @@
 {
-  "core/tests": {"ran": 36, "skipped": 0, "failed": 0},
-  "evals/tests": {"ran": 26, "skipped": 1, "failed": 0},
-  "harnesses/codex/delegate/tests": {"ran": 78, "skipped": 0, "failed": 0},
-  "harnesses/codex/skill/model-proctor/tests": {"ran": 9, "skipped": 0, "failed": 0},
-  "harnesses/kimi-code/delegate/tests": {"ran": 238, "skipped": 0, "failed": 0},
-  "harnesses/kimi-code/loop/tests": {"ran": 53, "skipped": 0, "failed": 0},
-  "harnesses/kimi-code/replay/tests": {"ran": 54, "skipped": 1, "failed": 0},
-  "harnesses/kimi-code/runner/tests": {"ran": 154, "skipped": 0, "failed": 0},
-  "harnesses/kimi-code/wirewatch/tests": {"ran": 15, "skipped": 0, "failed": 0},
-  "harnesses/zcode/tests": {"ran": 37, "skipped": 0, "failed": 0},
-  "scripts/tests": {"ran": 122, "skipped": 2, "failed": 0}
+  "core/tests": {
+    "failed": 0,
+    "ran": 36,
+    "skipped": 0
+  },
+  "evals/tests": {
+    "failed": 0,
+    "ran": 26,
+    "skipped": 1
+  },
+  "harnesses/kimi-code/delegate/tests": {
+    "failed": 0,
+    "ran": 238,
+    "skipped": 0
+  },
+  "harnesses/kimi-code/loop/tests": {
+    "failed": 0,
+    "ran": 53,
+    "skipped": 0
+  },
+  "harnesses/kimi-code/replay/tests": {
+    "failed": 0,
+    "ran": 54,
+    "skipped": 1
+  },
+  "harnesses/kimi-code/runner/tests": {
+    "failed": 0,
+    "ran": 154,
+    "skipped": 0
+  },
+  "harnesses/kimi-code/wirewatch/tests": {
+    "failed": 0,
+    "ran": 15,
+    "skipped": 0
+  },
+  "scripts/tests": {
+    "failed": 0,
+    "ran": 122,
+    "skipped": 2
+  }
 }

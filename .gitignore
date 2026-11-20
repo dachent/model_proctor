@@ -3,6 +3,5 @@ harnesses/kimi-code/cascade/tests/tmp/
 __pycache__/
 *.pyc
 .mimosa/
-.zcode/
 harnesses/kimi-code/delegate/agents.json
 harnesses/*/roster.json
