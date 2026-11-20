@@ -1,0 +1,22 @@
+name: baseline-run (temporary)
+
+on:
+  push:
+    branches: [ci/baseline-run]
+
+jobs:
+  baseline:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Run every suite and record counts
+        shell: pwsh
+        run: python .github/baseline_probe.py baseline-out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: baseline
+          path: baseline-out/
