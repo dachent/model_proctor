@@ -19,6 +19,7 @@ re-introduces the comfortable version fails:
 Run: python -m unittest discover -s harnesses/kimi-code/loop/tests -v
 """
 
+import importlib.util
 import json
 import os
 import re
@@ -507,6 +508,64 @@ class HookTestCase(_StateCase):
                               "session_id": self.spec.session_id,
                               "tool_input": {"command": "echo hi"}})
         self.assertEqual(run.returncode, 0, run.stderr)
+
+    def _hook_env(self, **extra):
+        env = dict(os.environ)
+        for k in ("KIMI_HOOKS_OFF", "MODEL_PROCTOR_ADVANCEMENT_GATE",
+                  "MODEL_PROCTOR_LOOPCTL"):
+            env.pop(k, None)
+        env["MODEL_PROCTOR_LOOP_ROOT"] = str(self.tmp)
+        env["MODEL_PROCTOR_PYTHON"] = sys.executable
+        env.update(extra)
+        return env
+
+    def _run_hook_at(self, hook, env):
+        return subprocess.run(
+            [PWSH, "-NoProfile", "-NonInteractive", "-File", str(hook)],
+            input=json.dumps({"tool_name": "Agent",
+                              "session_id": self.spec.session_id,
+                              "tool_input": {}}),
+            capture_output=True, text=True, timeout=180, env=env)
+
+    @unittest.skipUnless(PWSH, "pwsh is not installed")
+    def test_installed_gate_returns_a_decision(self):
+        """The INSTALLED hook + loopctl must decide, not die on an import.
+
+        Before Plan 1 T4 the installer shipped neither, and a loopctl copied
+        flat could not import its siblings; with a loop bound that read as
+        'could not produce an advancement decision'. A real stop reason
+        ('stops_unresolved') proves loopctl actually ran.
+        """
+        spec = importlib.util.spec_from_file_location(
+            "_install_for_loop_test", ROOT / "scripts" / "install.py")
+        install = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(install)
+        tool, skills = self.tmp / "tool", self.tmp / "skills"
+        self.assertEqual(install.main(["--tool-dir", str(tool),
+                                       "--skills-dir", str(skills)]), 0)
+        self.job0(WIRE_DIR / "65f71599.jsonl", cwd_boundary=str(self.workspace))
+        run = self._run_hook_at(tool / "loop" / "proctor_advancement_gate.ps1",
+                                self._hook_env())
+        self.assertEqual(run.returncode, 2, run.stdout + run.stderr)
+        self.assertIn("stops_unresolved", run.stderr)
+        self.assertNotIn("could not produce", run.stderr)
+        self.assertNotIn("ModuleNotFoundError", run.stderr)
+
+    @unittest.skipUnless(PWSH, "pwsh is not installed")
+    def test_owner_escape_allows_with_notice(self):
+        self.job0(WIRE_DIR / "65f71599.jsonl", cwd_boundary=str(self.workspace))
+        for var, value in (("KIMI_HOOKS_OFF", "1"),
+                           ("MODEL_PROCTOR_ADVANCEMENT_GATE", "off")):
+            with self.subTest(var=var):
+                run = self._run_hook_at(HOOK, self._hook_env(**{var: value}))
+                self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+                self.assertIn(f"NOTICE: bypassed by {var}", run.stderr)
+
+    @unittest.skipUnless(PWSH, "pwsh is not installed")
+    def test_missing_loopctl_still_blocks_when_bound(self):
+        run = self._run_hook_at(
+            HOOK, self._hook_env(MODEL_PROCTOR_LOOPCTL=str(self.tmp / "nope.py")))
+        self.assertEqual(run.returncode, 2, run.stdout + run.stderr)
 
     def test_hook_source_is_ascii_and_registers_nothing(self):
         source = HOOK.read_text("utf-8")

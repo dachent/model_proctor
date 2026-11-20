@@ -34,6 +34,12 @@
     spawn gate is exactly the "instruction, not enforcement" failure it was
     built to remove. With no bound loop state the hook is inert and allows.
 
+    KNOWN LIMIT: an unreadable or deleted installed.json carries no session_id,
+    so it cannot be matched to a session and the hook allows (binding such a file
+    would block every session). Protecting the loop root is an ACL task, not
+    this hook's. Owner escapes (KIMI_HOOKS_OFF, MODEL_PROCTOR_ADVANCEMENT_GATE)
+    allow but print a NOTICE to stderr.
+
 .REGISTRATION (NOT performed by this file)
     Registering a hook edits ~/.kimi-code/config.toml, which is in the G5
     protected set (see qe-write-guard.ps1). That is a decision-seat step with a
@@ -81,11 +87,19 @@ function Read-JsonFile {
     } catch { return $null }
 }
 
+$bound = $false
 try {
     $ErrorActionPreference = 'Stop'
 
-    if ($env:KIMI_HOOKS_OFF -eq '1') { exit 0 }
-    if ($env:MODEL_PROCTOR_ADVANCEMENT_GATE -eq 'off') { exit 0 }
+    # Owner escapes still allow, but never silently.
+    if ($env:KIMI_HOOKS_OFF -eq '1') {
+        [Console]::Error.WriteLine('[proctor-advancement-gate] NOTICE: bypassed by KIMI_HOOKS_OFF')
+        exit 0
+    }
+    if ($env:MODEL_PROCTOR_ADVANCEMENT_GATE -eq 'off') {
+        [Console]::Error.WriteLine('[proctor-advancement-gate] NOTICE: bypassed by MODEL_PROCTOR_ADVANCEMENT_GATE')
+        exit 0
+    }
 
     $rawPayload = [Console]::In.ReadToEnd()
     if ([string]::IsNullOrWhiteSpace($rawPayload)) { exit 0 }
@@ -119,6 +133,7 @@ try {
         $candidates += [pscustomobject]@{ Dir = $dir.FullName; Installed = $installed }
     }
     if ($candidates.Count -eq 0) { exit 0 }   # this session has no bound loop
+    $bound = $true
 
     # ---- resolve loopctl.py and the interpreter ---------------------------
     $loopctl = $env:MODEL_PROCTOR_LOOPCTL
@@ -156,7 +171,10 @@ try {
 
     exit 0
 } catch {
-    # A defect inside the hook itself is not a loop decision.
+    # shortcut: the post-bind catch is untested (almost nothing reaches it after the
+    # candidate loop); covered by review, not a test. Upgrade when a seam is worth adding.
+    if ($bound) { Block-Spawn 'internal error in the gate after a loop was bound; fail closed.' }
+    # Before bind there is no loop decision to protect: a defect here is not one.
     [Console]::Error.WriteLine('[proctor-advancement-gate] warning: internal error; allowing (no loop decision was consulted).')
     exit 0
 }

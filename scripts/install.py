@@ -58,11 +58,20 @@ RUNNER_FILES = [(KIMI, "runner", "runner.py"), (KIMI, "runner", "pilot.py"),
                 (ROOT, "core", "task_schema.py"),
                 (ROOT, "core", "timeout_stack.py"),
                 (ROOT, "evals", "pricing.yaml")]
+# The advancement gate and the eight files its loopctl needs, installed flat
+# into <tool-dir>/loop/ (the layout the hook and loopctl resolve beside
+# themselves). Sources are scattered: hooks/, loop/, wirewatch/, core/, scripts/.
+LOOP_FILES = [(KIMI, "hooks", "proctor_advancement_gate.ps1"),
+              (KIMI, "loop", "loopctl.py"), (KIMI, "loop", "loop_spec.py"),
+              (KIMI, "loop", "template.md"), (KIMI, "wirewatch", "evaluator.py"),
+              (ROOT, "scripts", "extract_log.py"),
+              (ROOT, "core", "wire_triggers.py"), (ROOT, "core", "decisions.py")]
 SKILLS = ("model-proctor",)
 # Everything the installed SKILL.md tells a leader to invoke or pass.
 REQUIRED_AFTER_INSTALL = ["runner.py", "delegate.py", "killauthority.py", "catalog.py",
                           "seat_override.py", "task_schema.py", "timeout_stack.py",
-                          "pricing.yaml", "heartbeat.py", "stall_guard.py"]
+                          "pricing.yaml", "heartbeat.py", "stall_guard.py"
+                          ] + [f"loop/{name}" for _b, _s, name in LOOP_FILES]
 MANIFEST_NAME = "install-manifest.json"
 # Distinct from 1 (incomplete install) so a caller can tell a refusal from a
 # failure without parsing stdout.
@@ -83,6 +92,7 @@ def _targets():
     """
     targets = [(name, KIMI / "delegate" / name) for name in DELEGATE_FILES]
     targets += [(name, base / subdir / name) for base, subdir, name in RUNNER_FILES]
+    targets += [(f"loop/{name}", base / subdir / name) for base, subdir, name in LOOP_FILES]
     return targets
 
 
@@ -249,6 +259,9 @@ def main(argv=()):
         shutil.copy2(KIMI / "delegate" / name, tool_dir / name)
     for base, subdir, name in RUNNER_FILES:
         shutil.copy2(base / subdir / name, tool_dir / name)
+    (tool_dir / "loop").mkdir(exist_ok=True)
+    for base, subdir, name in LOOP_FILES:
+        shutil.copy2(base / subdir / name, tool_dir / "loop" / name)
     # Written from what is actually on disk after the copies, so the next run
     # can tell "a previous install wrote this" from "somebody patched it".
     write_manifest(tool_dir, [name for name, _src in targets])
