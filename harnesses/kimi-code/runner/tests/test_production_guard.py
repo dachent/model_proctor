@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Production-runner guard + preflight-receipt mandate (runner/runner.py).
 
-Incident class: fsn_rpt_wk_finops week-run 2026-08-25 — a production pipeline
+Incident class: example-repo week-run 2026-08-25 — a production pipeline
 task was feature-declared bounded and dispatched to the flash lane; worker #1
 burned its budget discovering statically-readable prerequisites, and worker #2's
 exit killed the freshly launched pipeline (no breakaway).

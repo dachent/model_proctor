@@ -20,7 +20,7 @@ Python 3.10, standard library only (AGENTS.md:115-116). stdlib `unittest`, one d
 
 - GitHub issue **dachent/model_proctor#108** — `[TOOL-037] Timeout coherence: order the timeout stack (sub-stage < supervisor < breaker) with one sizing authority` (fetched live 2026-09-26; open, no labels). Acceptance: (1) preflight refuses a configuration where an outer breaker is tighter than the inner self-abort it guards; (2) a wedged inner job yields a named error from the inner layer, not a tree-kill. Related: TOOL-035.
 - Inventory doc: `mp_inventory_103-110.md` §3 (knob tables), §3e (nesting order), #108 plan-feeding notes. Every load-bearing reference was re-verified against the worktree; see "Inventory corrections" at the end.
-- **Scope note:** the issue body's measured case is the *fsn weekly pipeline* (bridge `subprocess.run` with no timeout, 3h `whole_job_seconds`, 30min HardQuiet breaker). That bridge lives in the other repo and is out of scope here; the invariant it violates is the same rule this plan encodes for the model_proctor stack. The frozen `cascade.py` (AGENTS.md:24-30) is explicitly NOT touched.
+- **Scope note:** the issue body's measured case is the *weekly pipeline* (bridge `subprocess.run` with no timeout, 3h `whole_job_seconds`, 30min HardQuiet breaker). That bridge lives in the other repo and is out of scope here; the invariant it violates is the same rule this plan encodes for the model_proctor stack. The frozen `cascade.py` (AGENTS.md:24-30) is explicitly NOT touched.
 
 ### Verified knob chain (the nesting this plan preserves and proves)
 
@@ -1160,7 +1160,7 @@ All 8 CI suites green on Windows. Then `git log --oneline -6` shows the six `TOO
 
 ## Inventory corrections found while surveying
 
-1. **Issue body vs inventory scope (clarification, not error):** #108's measured case is the fsn weekly pipeline's bridge (no-timeout `subprocess.run`, 3h runtime, 30min breaker), fetched live from GitHub. The inventory's §3e correctly scopes the mp-side chain; the fsn bridge is out of this repo's scope and noted as such in Spec.
+1. **Issue body vs inventory scope (clarification, not error):** #108's measured case is the weekly pipeline's bridge (no-timeout `subprocess.run`, 3h runtime, 30min breaker), fetched live from GitHub. The inventory's §3e correctly scopes the mp-side chain; the bridge is out of this repo's scope and noted as such in Spec.
 2. **Inventory missed a test collision:** `test_m1_lite.py:104-108` (`A01VerifierTimeout.test_timeout_writes_refused_receipt_and_blocks_stale_green`) relies on the coupled knob — it sets `budget.timeout_s: 2` to time out the VERIFIER. After the split this test would hang ~30s and then go green. Task 3 step 1 fixes it in place; without that fix the suite goes red for a non-obvious reason.
 3. **Inventory §3b incomplete on verifier-scope `timeout_s`:** besides `runner.py:1000` (dispatch) and `:1126` (verifier subprocess), the verifier-timeout receipt and error emit also carry the key `"timeout_s"` at `runner.py:1142` and `:1154` — both must be renamed to `verify_timeout_s` in Task 3 or the receipt lies about which budget fired.
 4. **Installer coupling not in the inventory:** a new core module silently breaks the flat install at `C:\Tools\model-proctor` unless `scripts/install.py:40-42,45` is updated — the CI smoke (`ci.yml:42-47`) checks only that required names exist in source dirs, not that `RUNNER_FILES` copies them. Task 5 step 4 covers it.
