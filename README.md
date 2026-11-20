@@ -433,12 +433,12 @@ input / 3K output turn, Fireworks list prices):
 | **DS-Flash via stateless delegate** | **$0.009 — wins regardless (~10–25×)** |
 
 Hence the inverted default: **Flash is the default executor**, Pro is escalation-only, K3 plans,
-GLM-5.2 orchestrates and QCs, Codex/Claude CLI subscriptions sit at the apex as flat-rate read-only
+GLM-5.2 orchestrates and QCs, flat-rate advisor CLI subscriptions sit at the apex as read-only
 advisors. Allocation is decided once at plan time and **controller-enforced** — GLM decides within
 legal transitions; the controller rejects illegal ones. GLM is a decision component, not the control
 plane.
 
-The spec went through two expert advisor reviews (Codex + Claude); v3 incorporated 15 findings and
+The spec went through two expert advisor reviews; v3 incorporated 15 findings and
 rejected/deferred 2 with reasons recorded (spec §11). Current version: v3.1.
 
 ### Phase 4 — Production dogfooding on a real financial-controls codebase (2026-08)
@@ -502,7 +502,7 @@ tasks the arms are quality-indistinguishable, so cost decides.
 | Substantial second (equal quality, faster wall) | GLM-5.3 (`substantial-worker`) | Moved to 5.3 on 2026-08-28; re-measured 2026-09-09 (#91: $0.074/hidden-pass) and again **2026-10-26** (interleaved with the new flash arm): **30/30 hidden on v3, $0.0547/hidden-pass** |
 | Marathon / open-ended | Kimi K3.1 Pro (`expert-worker`) | Model swap **2026-10-30** (owner-directed): `ember-1` → `kimi-k3p1-pro`. **UNMEASURED** — see Open gaps below; neither this id nor ember-1 was ever measured on a marathon-shaped corpus, and the retired kimi-k3's marathon basis was never measured either. Unlike ember-1 it does **not** inherit kimi-k3's price row: $2.00/$0.20/$10.00 vs $3.00/$0.30/$15.00 per 1M |
 | Cheap scout (vision, misc.) | Kimi K2.7 (`k27-scout`) | Carried from the frozen roster; live |
-| Advisors (read-only, closed triggers) | Codex CLI / Claude CLI | Flat-rate; trigger set in issue #8 — **not yet wired into the runner** (see Open gaps) |
+| Advisors (read-only, closed triggers) | Advisor CLIs (flat-rate) | Flat-rate; trigger set in issue #8 — **not yet wired into the runner** (see Open gaps) |
 
 Seat ids name the **role the owner buys, not the model sitting in it**, and they were renamed to
 role names on **2026-10-26** (owner-directed — its own decision, taken separately from the model

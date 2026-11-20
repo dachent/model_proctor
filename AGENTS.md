@@ -170,19 +170,15 @@ never through the harness root.
   either get committed, get filed into issues, or are treated as disposable.
 - Python 3.10, standard library only for control-plane logic. Harness *adapters*
   may use the harness's native runtime where measured startup cost requires it,
-  and must contain no policy (see `policy/HARNESS_CONTRACT.md`; ZCode's shims are
-  Node because ZCode spawns a hook per tool call — Python measured 4.7-6.4s cold,
-  0.67-1.16s warm, against Node's 0.25-0.38s).
+  and must contain no policy (see `policy/HARNESS_CONTRACT.md`).
 - No git mutations without explicit user confirmation. Repository creation on this workstation must
   use `New-CentralGitRepo.ps1` (centralized Git policy); never raw `git init`.
-- Durable installs follow workstation policy: tools to `C:\Tools\model-proctor\`, Kimi skills to
-  `%USERPROFILE%\.kimi-code\skills\`, and Codex skills to `%USERPROFILE%\.codex\skills\`, each with explicit
-  user confirmation.
+- Durable installs follow workstation policy: tools to `C:\Tools\model-proctor\`, the Kimi skill to
+  `%USERPROFILE%\.kimi-code\skills\`, each with explicit user confirmation.
 - Eval fixture runs live outside cloud-synced folders (default: `C:\Dev\bootstrap-state\model-proctor\evals\runs\`;
   historical metered rows keep their original `kimi-router` paths — the evidence record is immutable).
 - Live Kimi orchestration authority is `harnesses/kimi-code/runner/` plus
-  `harnesses/kimi-code/skill/model-proctor/SKILL.md`. The separate Codex skill
-  only delegates an explicitly chosen transport. Do not use
+  `harnesses/kimi-code/skill/model-proctor/SKILL.md`. Do not use
   `policy/delegation-policy.md` as live routing policy; it is a superseded research artifact.
 - All work on this tool is managed via the GitHub Issues backlog at
   `dachent/model_proctor` (owner directive 2026-08-14; repo renamed from

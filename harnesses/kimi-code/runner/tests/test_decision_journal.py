@@ -203,7 +203,7 @@ class RecordRequiresWire(_Base):
         self.assertIsNone(row["api_cost_usd"], row)
 
     def test_flat_rate_record_needs_no_wire(self):
-        """Neither flag = a flat-rate record (the Codex bridge: a subscription
+        """Neither flag = a flat-rate record (a subscription
         worker emits no per-token usage, so $0 is the truth, not blindness)."""
         sdir = self.init()
         self.dispatch()
