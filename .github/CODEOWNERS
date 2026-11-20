@@ -1,0 +1,6 @@
+# The gate's own files: changing what CI enforces needs the owner's review.
+# Branch protection must require code-owner review before this binds (owner action).
+/.github/                       @dachent
+/scripts/check_baseline.py      @dachent
+/scripts/tests/test_check_baseline.py @dachent
+/docs/baseline/                 @dachent

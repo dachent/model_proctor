@@ -36,15 +36,43 @@ jobs:
             "harnesses/zcode/tests"
           )
           $failed = 0
+          $current = [ordered]@{}
           foreach ($s in $suites) {
             Write-Host "=== $s ==="
             python -m unittest discover -s $s 2>&1 | Tee-Object -Variable out
-            if ($LASTEXITCODE -ne 0) { $failed = 1; Write-Host "SUITE FAILED: $s" }
+            $code = $LASTEXITCODE
+            $text = $out | Out-String
+            $ran = [regex]::Match($text, '(?m)^Ran (\d+) tests? in')
+            $skip = [regex]::Match($text, 'skipped=(\d+)')
+            $bad = 0
+            foreach ($m in [regex]::Matches($text, '(?:failures|errors)=(\d+)')) { $bad += [int]$m.Groups[1].Value }
+            if ($code -ne 0 -and $bad -eq 0) { $bad = 1 }
+            $current[$s] = [ordered]@{
+              ran = $(if ($ran.Success) { [int]$ran.Groups[1].Value } else { 0 })
+              skipped = $(if ($skip.Success) { [int]$skip.Groups[1].Value } else { 0 })
+              failed = $bad
+            }
+            if ($code -ne 0) { $failed = 1; Write-Host "SUITE FAILED: $s" }
           }
+          $current | ConvertTo-Json | Set-Content current-counts.json -Encoding utf8
           if ($failed -eq 1) { exit 1 }
-      - name: Required tools present after a flat install into a temp dir
+      - name: Test counts must not fall below the committed baseline
         shell: pwsh
         run: |
-          # Smoke the installer's own contract without touching C:\Tools:
-          # every REQUIRED_AFTER_INSTALL file must exist in the copy set.
-          python -c "import sys; sys.path.insert(0, 'scripts'); import install; missing = [n for n in install.REQUIRED_AFTER_INSTALL if not (install.KIMI / 'delegate' / n).is_file() and not (install.KIMI / 'runner' / n).is_file() and not (install.ROOT / 'core' / n).is_file() and not (install.ROOT / 'evals' / n).is_file()]; print('missing:', missing); sys.exit(1 if missing else 0)"
+          # A suite that loses tests, gains skips or runs nothing fails here
+          # even though every remaining test passes. docs/baseline/baseline.json
+          # changes only by a reviewed commit (CODEOWNERS).
+          python scripts/check_baseline.py --baseline docs/baseline/baseline.json --current current-counts.json
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: Real install into temp dirs, then required files must exist there
+        shell: pwsh
+        run: |
+          # Installs through install.py itself, into temp dirs, so nothing under
+          # C:\Tools or the runner's real profile is touched.
+          $tools = Join-Path $env:RUNNER_TEMP "tools"
+          $skills = Join-Path $env:RUNNER_TEMP "skills"
+          python scripts/install.py --tool-dir $tools --skills-dir $skills
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          python -c "import sys, pathlib; sys.path.insert(0, 'scripts'); import install; t = pathlib.Path(sys.argv[1]); missing = [n for n in install.REQUIRED_AFTER_INSTALL if not (t / n).is_file()]; print('missing:', missing); sys.exit(1 if missing else 0)" $tools
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if (-not (Test-Path (Join-Path $skills "model-proctor/SKILL.md"))) { Write-Host "skill not installed"; exit 1 }

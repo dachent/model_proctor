@@ -137,6 +137,34 @@ class InstallCompletenessTest(unittest.TestCase):
                             f"which install.py does not install")
 
 
+class InstallExplicitDirsTest(unittest.TestCase):
+    """--tool-dir/--skills-dir install only where told (Plan 1 T3): CI and
+    smoke runs must never touch C:\\Tools or the real %USERPROFILE%."""
+
+    def test_install_respects_tool_dir_and_skills_dir(self):
+        with tempfile.TemporaryDirectory(prefix="install-dirs-") as tmp:
+            mod = load_install()
+            # Poison every default: if main() falls back to any of them the
+            # sentinel appears (or USERPROFILE gets a .kimi-code tree).
+            sentinel = Path(tmp) / "default-tool-dir"
+            mod.TOOL_DIR = sentinel
+            home = Path(tmp) / "home"
+            old_home = os.environ.get("USERPROFILE")
+            os.environ["USERPROFILE"] = str(home)
+            try:
+                tool, skills = Path(tmp) / "t", Path(tmp) / "s"
+                rc = mod.main(["--tool-dir", str(tool), "--skills-dir", str(skills)])
+            finally:
+                if old_home is not None:
+                    os.environ["USERPROFILE"] = old_home
+            self.assertEqual(rc, 0)
+            for name in mod.REQUIRED_AFTER_INSTALL:
+                self.assertTrue((tool / name).is_file(), name)
+            self.assertTrue((skills / "model-proctor" / "SKILL.md").is_file())
+            self.assertFalse(sentinel.exists(), "wrote to the default tool dir")
+            self.assertFalse(home.exists(), "wrote under USERPROFILE")
+
+
 class InstallRerunTest(unittest.TestCase):
     """The second run must succeed as the same non-elevated user."""
 
