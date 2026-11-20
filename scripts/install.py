@@ -211,11 +211,20 @@ def main(argv=()):
         "--force", action="store_true",
         help="overwrite installed files that differ from both the repo source and "
              f"{MANIFEST_NAME}, destroying uncommitted local patches")
+    parser.add_argument(
+        "--tool-dir", type=Path, default=None,
+        help="install the tools here instead of C:\\Tools\\model-proctor "
+             "(CI and smoke runs; nothing is written to the default)")
+    parser.add_argument(
+        "--skills-dir", type=Path, default=None,
+        help="install skills here instead of %%USERPROFILE%%\\.kimi-code\\skills")
     args = parser.parse_args(list(argv))
+    tool_dir = args.tool_dir or TOOL_DIR
+    skills_dir = args.skills_dir or (Path(os.environ["USERPROFILE"]) / ".kimi-code" / "skills")
 
     targets = _targets()
-    manifest = read_manifest(TOOL_DIR)
-    patches = local_patches(TOOL_DIR, targets, manifest)
+    manifest = read_manifest(tool_dir)
+    patches = local_patches(tool_dir, targets, manifest)
     if patches and not args.force:
         print("REFUSED: these installed files differ from both the repo source and "
               f"{MANIFEST_NAME}, so they hold content that exists in no commit. "
@@ -235,18 +244,18 @@ def main(argv=()):
               "overwriting loses nothing: install.py --force")
         return REFUSED_LOCAL_PATCH
 
-    TOOL_DIR.mkdir(parents=True, exist_ok=True)
+    tool_dir.mkdir(parents=True, exist_ok=True)
     for name in DELEGATE_FILES:
-        shutil.copy2(KIMI / "delegate" / name, TOOL_DIR / name)
+        shutil.copy2(KIMI / "delegate" / name, tool_dir / name)
     for base, subdir, name in RUNNER_FILES:
-        shutil.copy2(base / subdir / name, TOOL_DIR / name)
+        shutil.copy2(base / subdir / name, tool_dir / name)
     # Written from what is actually on disk after the copies, so the next run
     # can tell "a previous install wrote this" from "somebody patched it".
-    write_manifest(TOOL_DIR, [name for name, _src in targets])
-    print(f"copied delegate + runner files to {TOOL_DIR} "
+    write_manifest(tool_dir, [name for name, _src in targets])
+    print(f"copied delegate + runner files to {tool_dir} "
           f"(recorded in {MANIFEST_NAME})")
 
-    agents_dst = TOOL_DIR / "agents.json"
+    agents_dst = tool_dir / "agents.json"
     agents_src = KIMI / "delegate" / "agents.json"
     if agents_src.is_file():
         domain = os.environ.get("USERDOMAIN", "")
@@ -268,14 +277,14 @@ def main(argv=()):
               "regenerate from agents.example.json per delegate/README.md")
 
     for skill in SKILLS:
-        skill_dir = Path(os.environ["USERPROFILE"]) / ".kimi-code" / "skills" / skill
+        skill_dir = skills_dir / skill
         skill_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(KIMI / "skill" / skill / "SKILL.md", skill_dir / "SKILL.md")
         print(f"skill installed to {skill_dir}")
 
-    missing = [n for n in REQUIRED_AFTER_INSTALL if not (TOOL_DIR / n).is_file()]
+    missing = [n for n in REQUIRED_AFTER_INSTALL if not (tool_dir / n).is_file()]
     if missing:
-        print(f"ERROR: install incomplete, missing from {TOOL_DIR}: {missing}")
+        print(f"ERROR: install incomplete, missing from {tool_dir}: {missing}")
         return 1
 
     print("done")
