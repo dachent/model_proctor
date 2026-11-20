@@ -116,7 +116,7 @@ def session_65f71599():
     # preambles; the incident's identity is the failure, so the fixture keeps
     # the exact (command, error-tail) pair the trigger defines.
     stop_cmd = ('pwsh -NoProfile -NonInteractive -File C:/Dev/bin/bb.ps1 api '
-                '-Method POST -Path "/repositories/fsnetwork1/fsn_rpt_wk_finops'
+                '-Method POST -Path "/repositories/example-org/example-repo'
                 '/pipelines/1431/stop"')
     stop_tail = ("Exception: C:\\Dev\\bin\\bb.ps1:114\r\n"
                  "  bb: HTTP 404 on POST\r\n"
@@ -146,7 +146,7 @@ def session_65f71599():
     receipt = json.dumps({
         "accepted": True, "agents_used": ["glm-flash-worker"], "dispatches": 1,
         "failures": 0, "lane": "flash", "recorded_at": "2026-10-29T01:45:12",
-        "tamper_detected": False, "task_id": "fsn-week-run-20261020",
+        "tamper_detected": False, "task_id": "run-20261020",
         "verifier_nondiscriminating": True, "wall_time_seconds": 94.282},
         sort_keys=True)
     ev += [turn_started(t2, 2),
@@ -167,7 +167,7 @@ def session_6a97dd66():
     """Named incidents reproduced:
     S2-j  five owner "Why did you stop?" prompts (T14) — fired on the pair
           at 10-28 23:19
-    S2-d  generations: 4 branches on WKFINOPS-684, one of them rebased 3x
+    S2-d  generations: 4 branches on PROJ-684, one of them rebased 3x
           (T8) at 10-29 06:20
     S2-k  the 4-hour turn 31 and the 60-minute turn 198 (T9)
     S2-l  82 h wall against 4x 1 h authorized dispatch budgets (T10, needs
@@ -203,10 +203,10 @@ def session_6a97dd66():
     t2 = base + 1400000
     ev += [turn_started(t2, 2), llm(t2 + 1000)]
     for i, name in enumerate([
-            "feat/wkfinops-684-on-int",
-            "feat/wkfinops-684-on-int-2",
-            "feat/wkfinops-684-boolean-pin-test-on-int",
-            "feat/wkfinops-684-metric-surface-on-int"]):
+            "feat/proj-684-on-int",
+            "feat/proj-684-on-int-2",
+            "feat/proj-684-boolean-pin-test-on-int",
+            "feat/proj-684-metric-surface-on-int"]):
         cid = f"c-br-{i}"
         ev += [call(t2 + 10000 + i * 30000, "Bash",
                     {"command": f"git checkout -b {name}"}, cid, 2),
@@ -216,7 +216,7 @@ def session_6a97dd66():
         cid = f"c-rb-{i}"
         ev += [call(t2 + 200000 + i * 60000, "Bash",
                     {"command": "git rebase origin/integration/2026-10-27 "
-                                "feat/wkfinops-684-on-int-2"}, cid, 2),
+                                "feat/proj-684-on-int-2"}, cid, 2),
                result(t2 + 200050 + i * 60000, cid,
                       "Successfully rebased.\n", False, 2)]
     ev += [turn_ended(t2 + 900000, 2, 900000)]
@@ -423,7 +423,7 @@ def journal_6a97dd66():
     for i in range(4):
         rows.append({
             "journal_seq": i, "at": "2026-10-28T23:00:00",
-            "event": "dispatch_open", "task_id": "fsn-ticket-684",
+            "event": "dispatch_open", "task_id": "run-684",
             "dispatch_id": f"d-{i}", "dispatch_seq": i,
             "agent": "glm-flash-worker", "timeout_s": 1800, "runner_pid": 1,
         })

@@ -413,10 +413,10 @@ def lane_for(features):
 
 
 # ── production-runner guard ─────────────────────────────────────────────
-# Incident class (fsn_rpt_wk_finops week-run 2026-08-25): a task driving a
+# Incident class (example-repo week-run 2026-08-25): a task driving a
 # production pipeline orchestrator was feature-declared "bounded +
 # known_location" and dispatched to the flash lane; worker #1 burned its whole
-# budget discovering environment prerequisites (the WKFINOPS-231 durable
+# budget discovering environment prerequisites (the PROJ-231 durable
 # checkout) that live statically in the orchestrator's own preflight surface.
 # Deterministic rule: tasks that drive production runners are never flash —
 # regardless of declared features — and their leader must attach preflight

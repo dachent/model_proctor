@@ -261,10 +261,10 @@ class CrossWireTestCase(unittest.TestCase):
         return path
 
     def test_session_aggregation_is_what_fires_t8(self):
-        first = self._wire("a.jsonl", ["feat/WKFINOPS-77-one",
-                                       "feat/WKFINOPS-77-two"])
-        second = self._wire("b.jsonl", ["feat/WKFINOPS-77-three",
-                                        "feat/WKFINOPS-77-four"])
+        first = self._wire("a.jsonl", ["feat/PROJ-77-one",
+                                       "feat/PROJ-77-two"])
+        second = self._wire("b.jsonl", ["feat/PROJ-77-three",
+                                        "feat/PROJ-77-four"])
         # Per wire, two branches on the ticket: below the fire line.
         out = self.tmp / "one"
         run = run_cli(first, "--out", out, cwd=self.workspace)
@@ -281,7 +281,7 @@ class CrossWireTestCase(unittest.TestCase):
         rows = [json.loads(line) for line in
                 (out / "escalations.jsonl").read_text("utf-8").splitlines()]
         t8 = [r for r in rows if r["trigger"] == "T8"][0]
-        self.assertEqual(t8["evidence"]["ticket"], "WKFINOPS-77")
+        self.assertEqual(t8["evidence"]["ticket"], "PROJ-77")
         self.assertEqual(t8["evidence"]["branches"], 4)
         self.assertEqual(t8["wire"], "<session>")
 
