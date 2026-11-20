@@ -640,3 +640,5 @@ Parked items stay parked until their trigger fires — that is the governance wo
 | **Provider-billing reconciliation** | Residual — wire-metered costs are the estimate of record | First provider invoice day, or Fireworks billing-API access: reconcile `evals/meter.py` output against the bill within the PREREG tolerance (2–5%) |
 | **Decision-grade evaluation** | Screens only (v2/v3 are n=10–30, hidden checks run in-workspace albeit sealed) | Any claim intended to justify production adoption for a *third party*; until then, all results here are single-operator screens |
 | **Learned routing (#7)** | Parked | Measured oracle headroom: fixed arms must show systematic per-task-class quality splits large enough to pay for a classifier — v2/v3 show the opposite |
+
+scope-gate demo: mentions hermes here
