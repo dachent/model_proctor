@@ -165,6 +165,27 @@ class InstallExplicitDirsTest(unittest.TestCase):
             self.assertFalse(home.exists(), "wrote under USERPROFILE")
 
 
+class InstallLoopSetTest(unittest.TestCase):
+    """The loop gate needs its whole file set installed under <tool-dir>/loop/
+    (Plan 1 T4): the live install had them, the installer shipped none."""
+
+    LOOP_SET = ["proctor_advancement_gate.ps1", "loopctl.py", "loop_spec.py",
+                "evaluator.py", "template.md", "extract_log.py",
+                "wire_triggers.py", "decisions.py"]
+
+    def test_install_ships_loop_subdir_files(self):
+        with tempfile.TemporaryDirectory(prefix="install-loop-") as tmp:
+            mod = load_install()
+            tool, skills = Path(tmp) / "t", Path(tmp) / "s"
+            self.assertEqual(mod.main(["--tool-dir", str(tool),
+                                       "--skills-dir", str(skills)]), 0)
+            for name in self.LOOP_SET:
+                self.assertTrue((tool / "loop" / name).is_file(), name)
+            # ...and a missing one must fail the install, not pass silently.
+            self.assertTrue(set(self.LOOP_SET) <= {
+                Path(n).name for n in mod.REQUIRED_AFTER_INSTALL})
+
+
 class InstallRerunTest(unittest.TestCase):
     """The second run must succeed as the same non-elevated user."""
 

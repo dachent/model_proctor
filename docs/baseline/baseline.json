@@ -4,10 +4,10 @@
   "harnesses/codex/delegate/tests": {"ran": 78, "skipped": 0, "failed": 0},
   "harnesses/codex/skill/model-proctor/tests": {"ran": 9, "skipped": 0, "failed": 0},
   "harnesses/kimi-code/delegate/tests": {"ran": 238, "skipped": 0, "failed": 0},
-  "harnesses/kimi-code/loop/tests": {"ran": 50, "skipped": 0, "failed": 0},
+  "harnesses/kimi-code/loop/tests": {"ran": 53, "skipped": 0, "failed": 0},
   "harnesses/kimi-code/replay/tests": {"ran": 54, "skipped": 1, "failed": 0},
   "harnesses/kimi-code/runner/tests": {"ran": 154, "skipped": 0, "failed": 0},
   "harnesses/kimi-code/wirewatch/tests": {"ran": 15, "skipped": 0, "failed": 0},
   "harnesses/zcode/tests": {"ran": 37, "skipped": 0, "failed": 0},
-  "scripts/tests": {"ran": 113, "skipped": 2, "failed": 0}
+  "scripts/tests": {"ran": 122, "skipped": 2, "failed": 0}
 }
